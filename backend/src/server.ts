@@ -10,6 +10,7 @@ import * as searchController from './controllers/searchController';
 import * as imageController from './controllers/imageController';
 import * as discogsController from './controllers/discogsController';
 import * as coverArtController from './controllers/coverArtController';
+import backupRoutes from './routes/backup';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -55,6 +56,8 @@ app.post('/api/image/confirm', imageController.confirmAlbum);
 // Discogs import routes
 app.get('/api/discogs/config', discogsController.checkDiscogsConfig);
 app.get('/api/discogs/import', discogsController.importCollection);
+// Backup routes
+app.use('/api/backup', backupRoutes);
 
 // Cover art routes
 app.get('/api/cover-art/:id', coverArtController.getCoverArt);
