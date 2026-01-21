@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vinyl_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-vinyl_collector}
+      POSTGRES_USER: ${POSTGRES_USER:-vinyl_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vinyl_password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - vinyl_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vinyl_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: vinyl_redis
+    command: redis-server --appendonly yes
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - vinyl_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: vinyl_backend
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 5001
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-vinyl_collector}
+      POSTGRES_USER: ${POSTGRES_USER:-vinyl_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vinyl_password}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      DISCOGS_TOKEN: ${DISCOGS_TOKEN}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    ports:
+      - "5001:5001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    command: sh -c "bun run migrate && bun run dev"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:5000}
+    container_name: vinyl_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  vinyl_db_data:
+    name: vinyl_db_data
+  vinyl_redis_data:
+    name: vinyl_redis_data
