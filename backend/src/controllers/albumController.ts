@@ -2,6 +2,74 @@ import { Request, Response } from 'express';
 import pool from '../config/database';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import { AlbumWithArtist } from '../types';
+import musicbrainzService from '../services/musicbrainz';
+import storageService from '../services/storage';
+
+/**
+ * Background task to fetch MusicBrainz official cover art
+ */
+async function fetchMusicBrainzCoverArt(
+  albumId: number,
+  artist: string,
+  album: string,
+  existingCoverUrl?: string
+): Promise<void> {
+  try {
+    console.log(`Fetching MusicBrainz cover art for: ${artist} - ${album}`);
+
+    // Search MusicBrainz and get cover art
+    const mbAlbum = await musicbrainzService.searchAndGetCoverArt(artist, album);
+
+    if (mbAlbum && mbAlbum.coverArtUrl) {
+      // Found official cover art from MusicBrainz
+      console.log(`✓ Found MusicBrainz cover art for ${artist} - ${album}`);
+
+      await pool.query(
+        `UPDATE albums
+         SET musicbrainz_id = $1, cover_image_url = $2, cover_art_fetched = TRUE
+         WHERE id = $3`,
+        [mbAlbum.mbid, mbAlbum.coverArtUrl, albumId]
+      );
+    } else {
+      // No official cover art found - cache existing cover from Discogs/other source
+      console.log(`No MusicBrainz cover art for ${artist} - ${album}, caching fallback`);
+
+      if (mbAlbum?.mbid) {
+        // We found the album but no cover art
+        await pool.query(
+          'UPDATE albums SET musicbrainz_id = $1, cover_art_fetched = TRUE WHERE id = $2',
+          [mbAlbum.mbid, albumId]
+        );
+      } else {
+        // Couldn't find the album in MusicBrainz at all
+        await pool.query(
+          'UPDATE albums SET cover_art_fetched = TRUE WHERE id = $1',
+          [albumId]
+        );
+      }
+
+      // Cache the existing Discogs/other cover art locally
+      if (existingCoverUrl) {
+        try {
+          const imageBuffer = await musicbrainzService.downloadCoverArt(existingCoverUrl);
+          const localPath = await storageService.saveCoverArt(imageBuffer, albumId, existingCoverUrl);
+
+          await pool.query(
+            'UPDATE albums SET local_cover_path = $1 WHERE id = $2',
+            [localPath, albumId]
+          );
+
+          console.log(`✓ Cached fallback cover art locally for ${artist} - ${album}`);
+        } catch (error) {
+          console.error(`Failed to cache fallback cover art for album ${albumId}:`, error);
+        }
+      }
+    }
+  } catch (error) {
+    console.error(`Error fetching MusicBrainz cover art for album ${albumId}:`, error);
+    throw error;
+  }
+}
 
 export const getAllAlbums = asyncHandler(async (req: Request, res: Response) => {
   const result = await pool.query<AlbumWithArtist>(`
@@ -112,6 +180,12 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
     }
 
     await client.query('COMMIT');
+
+    // Try to fetch MusicBrainz official cover art in the background
+    // This runs asynchronously and doesn't block the response
+    fetchMusicBrainzCoverArt(albumId, artist, album, coverImageUrl).catch(err => {
+      console.error(`Failed to fetch MusicBrainz cover art for album ${albumId}:`, err);
+    });
 
     // Fetch the complete album with artist info
     const finalResult = await client.query<AlbumWithArtist>(`

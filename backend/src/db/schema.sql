@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS albums (
     year INTEGER,
     cover_image_url TEXT,
     discogs_id INTEGER UNIQUE,
+    musicbrainz_id UUID,
+    local_cover_path TEXT,
+    cover_art_fetched BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
     UNIQUE(artist_id, title)
@@ -44,6 +47,7 @@ CREATE TABLE IF NOT EXISTS barcodes (
 CREATE INDEX IF NOT EXISTS idx_artists_name ON artists(name);
 CREATE INDEX IF NOT EXISTS idx_albums_artist ON albums(artist_id);
 CREATE INDEX IF NOT EXISTS idx_albums_discogs ON albums(discogs_id);
+CREATE INDEX IF NOT EXISTS idx_albums_musicbrainz ON albums(musicbrainz_id);
 CREATE INDEX IF NOT EXISTS idx_barcodes_code ON barcodes(barcode);
 CREATE INDEX IF NOT EXISTS idx_collections_album ON collections(album_id);
 

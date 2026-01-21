@@ -1,5 +1,16 @@
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
+/**
+ * Get cover art URL for an album
+ * This uses the backend endpoint which serves either:
+ * 1. Locally cached official MusicBrainz cover art
+ * 2. Redirect to MusicBrainz Cover Art Archive
+ * 3. Redirect to Discogs or other source
+ */
+export function getCoverArtUrl(albumId: number): string {
+  return `${API_URL}/api/cover-art/${albumId}`;
+}
+
 export interface Album {
   id: number;
   title: string;

@@ -56,8 +56,11 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       VISION_PROVIDER: ${VISION_PROVIDER:-openai}
       VISION_MIN_CONFIDENCE: ${VISION_MIN_CONFIDENCE:-90}
+      COVER_ART_STORAGE_PATH: /app/data/cover-art
     ports:
       - "5001:5001"
+    volumes:
+      - vinyl_cover_art:/app/data/cover-art
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,3 +87,5 @@ volumes:
     name: vinyl_db_data
   vinyl_redis_data:
     name: vinyl_redis_data
+  vinyl_cover_art:
+    name: vinyl_cover_art

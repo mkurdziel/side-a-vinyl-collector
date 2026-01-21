@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Toaster, toast } from 'react-hot-toast';
-import api, { type Album, type DiscogsAlbum } from './services/api';
+import api, { type Album, type DiscogsAlbum, getCoverArtUrl } from './services/api';
 import { AddMenu } from './components/AddMenu';
 import { BarcodeScanner } from './components/BarcodeScanner';
 import { ImageUploader } from './components/ImageUploader';
@@ -219,17 +219,17 @@ function App() {
                 displayAlbums.map((album) => (
                   <div key={album.id} className="glass-card-hover group relative overflow-hidden">
                     <div className="aspect-square bg-gray-50 flex items-center justify-center overflow-hidden rounded-t-xl">
-                      {album.cover_image_url ? (
-                        <img
-                          src={album.cover_image_url}
-                          alt={album.title}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                        />
-                      ) : (
-                        <svg className="w-12 h-12 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                        </svg>
-                      )}
+                      <img
+                        src={getCoverArtUrl(album.id)}
+                        alt={album.title}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                        onError={(e) => {
+                          // If cover art fails to load, show placeholder icon
+                          const target = e.target as HTMLImageElement;
+                          target.style.display = 'none';
+                          target.parentElement!.innerHTML = '<svg class="w-12 h-12 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>';
+                        }}
+                      />
                     </div>
                     <div className="p-3">
                       <h3 className="font-medium text-sm mb-0.5 truncate text-gray-900">{album.title}</h3>
