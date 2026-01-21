@@ -40,6 +40,14 @@ export interface DiscogsAlbum {
   confidence?: number;
 }
 
+export interface SearchCoverArtResult {
+  source: 'MusicBrainz' | 'Discogs';
+  url: string;
+  title: string;
+  year?: number;
+  id: string | number;
+}
+
 class ApiService {
   private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
     const response = await fetch(`${API_URL}${endpoint}`, {
@@ -140,6 +148,17 @@ class ApiService {
     count: number;
   }> {
     return this.request('/api/discogs/import');
+  }
+
+  async searchCoverArt(id: number): Promise<{ results: SearchCoverArtResult[] }> {
+    return this.request(`/api/cover-art/${id}/search`);
+  }
+
+  async updateCoverArt(id: number, url: string, source: string): Promise<{ message: string; album: Album }> {
+    return this.request(`/api/cover-art/${id}/update`, {
+      method: 'POST',
+      body: JSON.stringify({ url, source }),
+    });
   }
 }
 

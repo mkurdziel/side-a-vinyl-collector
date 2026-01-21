@@ -59,6 +59,8 @@ app.get('/api/discogs/import', discogsController.importCollection);
 // Cover art routes
 app.get('/api/cover-art/:id', coverArtController.getCoverArt);
 app.post('/api/cover-art/:id/fetch', coverArtController.fetchOfficialCoverArt);
+app.get('/api/cover-art/:id/search', coverArtController.searchCoverArt);
+app.post('/api/cover-art/:id/update', coverArtController.updateCoverArt);
 
 // Error handling
 app.use(errorHandler);

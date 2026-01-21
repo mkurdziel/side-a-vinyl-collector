@@ -146,3 +146,103 @@ export const fetchOfficialCoverArt = asyncHandler(async (req: Request, res: Resp
     coverArtUrl: `/api/cover-art/${id}`
   });
 });
+/**
+ * Search for cover art candidates from MusicBrainz and Discogs
+ */
+export const searchCoverArt = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  const result = await pool.query(
+    `SELECT a.id, a.title, ar.name as artist 
+     FROM albums a
+     JOIN artists ar ON a.artist_id = ar.id
+     WHERE a.id = $1`,
+    [id]
+  );
+
+  if (result.rows.length === 0) {
+    throw new AppError('Album not found', 404);
+  }
+
+  const { artist, title } = result.rows[0];
+
+  console.log(`Searching cover art for: ${artist} - ${title}`);
+
+  // Fetch from MusicBrainz and Discogs in parallel
+  const [mbResults, discogsResults] = await Promise.all([
+    musicbrainzService.searchReleasesWithCoverArt(artist, title),
+    discogsService.searchByQuery(`${artist} - ${title}`, 5)
+  ]);
+
+  // Format MusicBrainz results
+  const mbCandidates = mbResults.map(r => ({
+    source: 'MusicBrainz',
+    url: r.coverArtUrl,
+    title: r.album,
+    year: r.year,
+    id: r.mbid
+  }));
+
+  // Format Discogs results
+  const discogsCandidates = discogsResults
+    .filter(r => r.coverImageUrl) // Only those with cover art
+    .slice(0, 5)
+    .map(r => ({
+      source: 'Discogs',
+      url: r.coverImageUrl,
+      title: r.album,
+      year: r.year,
+      id: r.discogsId
+    }));
+
+  res.json({
+    results: [...mbCandidates, ...discogsCandidates]
+  });
+});
+
+/**
+ * Update album cover art with selected image
+ */
+export const updateCoverArt = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { url, source } = req.body;
+
+  if (!url) {
+    throw new AppError('Image URL is required', 400);
+  }
+
+  // If from Discogs or other external, we should cache it locally
+  // If from MusicBrainz (Archive), we can link directly or cache. Caching is safer.
+  
+  let localPath;
+  try {
+    const imageBuffer = await musicbrainzService.downloadCoverArt(url as string);
+    localPath = await storageService.saveCoverArt(imageBuffer, parseInt(id), url as string);
+  } catch (error) {
+    console.error('Failed to download/cache image:', error);
+    // Be lenient? No, if we can't download it, we probably shouldn't set it if we rely on local serving.
+    // However, we can fall back to setting the URL if download fails (but our frontend prefers local).
+    throw new AppError('Failed to download and save image', 502);
+  }
+
+  await pool.query(
+    `UPDATE albums 
+     SET cover_image_url = $1, local_cover_path = $2, cover_art_fetched = TRUE 
+     WHERE id = $3`,
+    [url, localPath, id]
+  );
+
+  // Return updated album
+  const updatedResult = await pool.query(
+    `SELECT a.*, ar.name as artist_name 
+     FROM albums a
+     JOIN artists ar ON a.artist_id = ar.id
+     WHERE a.id = $1`,
+    [id]
+  );
+  
+  res.json({
+    message: 'Cover art updated successfully',
+    album: updatedResult.rows[0]
+  });
+});

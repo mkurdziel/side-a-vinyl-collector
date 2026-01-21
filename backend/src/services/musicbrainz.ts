@@ -1,4 +1,4 @@
-import axios, { AxiosInstance } from 'axios';
+import axios, { type AxiosInstance } from 'axios';
 import redis from '../config/redis';
 import { RateLimiter } from '../utils/rateLimit';
 
@@ -75,8 +75,8 @@ class MusicBrainzService {
       timeout: 15000,
     });
 
-    // MusicBrainz rate limit: 1 request per second
-    this.rateLimiter = new RateLimiter(1, 1000);
+    // MusicBrainz rate limit: 1 request per second (~60/min)
+    this.rateLimiter = new RateLimiter(60);
 
     if (this.enabled) {
       console.log('✓ MusicBrainz service initialized');
@@ -141,7 +141,8 @@ class MusicBrainzService {
       });
 
       if (result.releases && result.releases.length > 0) {
-        const release = result.releases[0];
+        const release = result.releases[0]; // Logic check: releases is array, length > 0 checked. 
+        if (!release) return null; // Logic safety
         const mbAlbum = await this.parseRelease(release);
         await this.setCache(cacheKey, mbAlbum);
         return mbAlbum;
@@ -246,6 +247,60 @@ class MusicBrainzService {
     } catch (error) {
       console.error('Failed to download cover art:', error);
       throw new Error('Failed to download cover art image');
+    }
+  }
+  /**
+   * Search for multiple releases and check for cover art
+   */
+  async searchReleasesWithCoverArt(artist: string, album: string, limit: number = 5): Promise<MusicBrainzAlbum[]> {
+    if (!this.enabled) {
+      return [];
+    }
+
+    try {
+      const query = `artist:"${artist}" AND release:"${album}"`;
+
+      // 1. Search for releases
+      const searchResult = await this.rateLimiter.execute(async () => {
+        const response = await this.mbClient.get<MusicBrainzSearchResult>('/release', {
+          params: {
+            query,
+            limit: limit * 2, // Fetch more to filter
+            fmt: 'json'
+          }
+        });
+        return response.data;
+      });
+
+      if (!searchResult.releases || searchResult.releases.length === 0) {
+        return [];
+      }
+
+      // 2. Parse releases
+      const candidates = await Promise.all(
+        searchResult.releases.slice(0, limit * 2).map(r => this.parseRelease(r))
+      );
+
+      // 3. Check for cover art in parallel (with some concurrency limit ideally, but simple parallel for now)
+      // Note: We're not using rate limiter for Cover Art Archive as it's separate and high capacity
+      const updates = await Promise.all(
+        candidates.map(async (candidate) => {
+          const coverUrl = await this.getCoverArt(candidate.mbid);
+          if (coverUrl) {
+            return { ...candidate, coverArtUrl: coverUrl, hasCoverArt: true };
+          }
+          return null;
+        })
+      );
+
+      // Filter out those without cover art and limit results
+      return updates
+        .filter((c): c is MusicBrainzAlbum & { coverArtUrl: string } => c !== null)
+        .slice(0, limit);
+
+    } catch (error) {
+      console.error('MusicBrainz multi-search error:', error);
+      return [];
     }
   }
 }
