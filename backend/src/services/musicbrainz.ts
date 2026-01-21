@@ -50,8 +50,12 @@ class MusicBrainzService {
   private rateLimiter: RateLimiter;
   private cachePrefix = 'musicbrainz';
   private cacheTTL = 60 * 60 * 24 * 30; // 30 days in seconds
+  private enabled: boolean;
 
   constructor() {
+    // Check if MusicBrainz is enabled (default: true)
+    this.enabled = process.env.MUSICBRAINZ_ENABLED !== 'false';
+
     // MusicBrainz API client
     this.mbClient = axios.create({
       baseURL: 'https://musicbrainz.org/ws/2',
@@ -74,7 +78,18 @@ class MusicBrainzService {
     // MusicBrainz rate limit: 1 request per second
     this.rateLimiter = new RateLimiter(1, 1000);
 
-    console.log('✓ MusicBrainz service initialized');
+    if (this.enabled) {
+      console.log('✓ MusicBrainz service initialized');
+    } else {
+      console.log('✓ MusicBrainz service disabled (MUSICBRAINZ_ENABLED=false)');
+    }
+  }
+
+  /**
+   * Check if MusicBrainz lookups are enabled
+   */
+  isEnabled(): boolean {
+    return this.enabled;
   }
 
   private async getCached<T>(key: string): Promise<T | null> {
@@ -103,6 +118,10 @@ class MusicBrainzService {
    * Search for a release by artist and album name
    */
   async searchRelease(artist: string, album: string): Promise<MusicBrainzAlbum | null> {
+    if (!this.enabled) {
+      return null;
+    }
+
     const cacheKey = `search:${artist}:${album}`;
     const cached = await this.getCached<MusicBrainzAlbum>(cacheKey);
     if (cached) return cached;
@@ -139,6 +158,10 @@ class MusicBrainzService {
    * Get cover art for a MusicBrainz release ID
    */
   async getCoverArt(mbid: string): Promise<string | null> {
+    if (!this.enabled) {
+      return null;
+    }
+
     const cacheKey = `coverart:${mbid}`;
     const cached = await this.getCached<string>(cacheKey);
     if (cached) return cached;
@@ -172,6 +195,11 @@ class MusicBrainzService {
    * Search for release and get cover art in one call
    */
   async searchAndGetCoverArt(artist: string, album: string): Promise<MusicBrainzAlbum | null> {
+    if (!this.enabled) {
+      console.log('MusicBrainz disabled, skipping lookup');
+      return null;
+    }
+
     const release = await this.searchRelease(artist, album);
 
     if (!release) {

@@ -13,8 +13,15 @@ A modern web application for managing your vinyl record collection with AI-power
 - **Discogs Integration**: Import your entire Discogs collection
   - Automatic deduplication
   - Bulk import with progress tracking
+- **MusicBrainz Integration**: Official cover art from Cover Art Archive
+  - Automatic fallback to Discogs artwork
+  - Local caching for fast loading
+  - Optional - can be disabled to use only Discogs
 - **Smart Search**: Search your collection and Discogs database with debouncing
-- **Cover Art**: Automatic cover image fetching from Discogs
+- **Cover Art Management**:
+  - Priority: Local cache → MusicBrainz → Discogs
+  - Persistent storage with Docker volumes
+  - Automatic format detection and optimization
 
 ## Tech Stack
 
@@ -48,7 +55,7 @@ cp .env.example .env
 
 3. Configure your API keys in `.env`:
 ```bash
-# Required for Discogs import
+# Required for Discogs import and fallback cover art
 DISCOGS_TOKEN=your_discogs_token
 
 # Vision providers (configure at least one, both recommended)
@@ -58,6 +65,9 @@ ANTHROPIC_API_KEY=your_anthropic_key
 # Vision configuration
 VISION_PROVIDER=openai          # Primary provider
 VISION_MIN_CONFIDENCE=90        # Fallback threshold
+
+# MusicBrainz configuration (optional)
+MUSICBRAINZ_ENABLED=true        # Set to 'false' to use only Discogs artwork
 ```
 
 4. Start the application:
@@ -96,6 +106,34 @@ OPENAI_API_KEY=sk-xxxxx
 ```
 
 See [VISION_PROVIDERS.md](VISION_PROVIDERS.md) for detailed configuration guide.
+
+## Cover Art Configuration
+
+The app fetches official cover art from MusicBrainz Cover Art Archive with automatic Discogs fallback:
+
+### Default Behavior (MUSICBRAINZ_ENABLED=true)
+1. When you add an album, MusicBrainz is searched for official cover art
+2. If found, high-quality official art is used
+3. If not found, Discogs cover art is downloaded and cached locally
+4. All cover art is served through `/api/cover-art/:id` endpoint
+
+### Discogs-Only Mode (MUSICBRAINZ_ENABLED=false)
+```bash
+MUSICBRAINZ_ENABLED=false
+```
+
+**Benefits:**
+- Faster album addition (no MusicBrainz lookup)
+- Simpler setup (only need Discogs token)
+- All cover art cached locally immediately
+- No external API dependencies beyond Discogs
+
+**Use this mode if:**
+- You want 100% Discogs artwork
+- You want to avoid MusicBrainz API calls
+- You prefer faster, simpler operation
+
+See [MUSICBRAINZ.md](MUSICBRAINZ.md) for detailed cover art architecture.
 
 ## Development
 

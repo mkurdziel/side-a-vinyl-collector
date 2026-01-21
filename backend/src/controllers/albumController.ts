@@ -181,11 +181,28 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
 
     await client.query('COMMIT');
 
-    // Try to fetch MusicBrainz official cover art in the background
-    // This runs asynchronously and doesn't block the response
-    fetchMusicBrainzCoverArt(albumId, artist, album, coverImageUrl).catch(err => {
-      console.error(`Failed to fetch MusicBrainz cover art for album ${albumId}:`, err);
-    });
+    // Handle cover art based on MusicBrainz configuration
+    if (!musicbrainzService.isEnabled() && coverImageUrl) {
+      // MusicBrainz disabled - immediately cache Discogs art locally
+      console.log(`MusicBrainz disabled, caching Discogs art immediately for: ${artist} - ${album}`);
+      try {
+        const imageBuffer = await musicbrainzService.downloadCoverArt(coverImageUrl);
+        const localPath = await storageService.saveCoverArt(imageBuffer, albumId, coverImageUrl);
+
+        await pool.query(
+          'UPDATE albums SET local_cover_path = $1, cover_art_fetched = TRUE WHERE id = $2',
+          [localPath, albumId]
+        );
+      } catch (error) {
+        console.error(`Failed to cache Discogs cover art for album ${albumId}:`, error);
+      }
+    } else {
+      // Try to fetch MusicBrainz official cover art in the background
+      // This runs asynchronously and doesn't block the response
+      fetchMusicBrainzCoverArt(albumId, artist, album, coverImageUrl).catch(err => {
+        console.error(`Failed to fetch MusicBrainz cover art for album ${albumId}:`, err);
+      });
+    }
 
     // Fetch the complete album with artist info
     const finalResult = await client.query<AlbumWithArtist>(`

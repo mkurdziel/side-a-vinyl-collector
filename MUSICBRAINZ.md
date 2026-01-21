@@ -194,14 +194,40 @@ WHERE cover_art_fetched = FALSE;
 
 ## Environment Variables
 
-No additional configuration required! MusicBrainz integration works out of the box.
-
-Optional configuration:
+### MusicBrainz Configuration
 
 ```bash
+# Enable/disable MusicBrainz lookups (default: true)
+# Set to 'false' to use only Discogs artwork
+MUSICBRAINZ_ENABLED=true
+
 # Override default storage path (default: /app/data/cover-art)
 COVER_ART_STORAGE_PATH=/custom/path
 ```
+
+### When to Disable MusicBrainz
+
+Set `MUSICBRAINZ_ENABLED=false` if you want to:
+
+- **Use only Discogs artwork** - All cover art will come from Discogs
+- **Avoid external API calls** - No MusicBrainz or Cover Art Archive lookups
+- **Faster album addition** - Skip the MusicBrainz search step
+- **Simpler setup** - Only need Discogs token, no MusicBrainz dependency
+
+**With MusicBrainz disabled:**
+1. Albums are added with Discogs cover art URLs
+2. Cover art is downloaded and cached locally immediately
+3. All images served from local storage (fastest)
+4. No background MusicBrainz lookups happen
+
+**Example:**
+```bash
+# .env file
+MUSICBRAINZ_ENABLED=false
+DISCOGS_TOKEN=your_token_here
+```
+
+Now all cover art will be sourced from Discogs and cached locally.
 
 ## Troubleshooting
 
