@@ -4,6 +4,7 @@ import api, { type Album, type DiscogsAlbum } from './services/api';
 import { AddMenu } from './components/AddMenu';
 import { BarcodeScanner } from './components/BarcodeScanner';
 import { ImageUploader } from './components/ImageUploader';
+import { DiscogsImporter } from './components/DiscogsImporter';
 import './App.css';
 
 function App() {
@@ -14,10 +15,22 @@ function App() {
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [showBarcodeScanner, setShowBarcodeScanner] = useState(false);
   const [showImageUploader, setShowImageUploader] = useState(false);
+  const [showDiscogsImporter, setShowDiscogsImporter] = useState(false);
+  const [discogsConfigured, setDiscogsConfigured] = useState(false);
 
   useEffect(() => {
     loadAlbums();
+    checkDiscogsConfig();
   }, []);
+
+  const checkDiscogsConfig = async () => {
+    try {
+      const config = await api.checkDiscogsConfig();
+      setDiscogsConfigured(config.configured);
+    } catch (error) {
+      console.error('Failed to check Discogs config:', error);
+    }
+  };
 
   const loadAlbums = async () => {
     try {
@@ -82,14 +95,14 @@ function App() {
       <Toaster position="top-right" />
 
       <header className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-8 py-8">
+        <div className="max-w-7xl mx-auto" style={{ padding: '2rem 1.5rem' }}>
           <h1 className="text-2xl font-bold text-gray-900 mb-1">Vinyl Collector</h1>
           <p className="text-sm text-gray-600">Manage your vinyl record collection</p>
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-8 py-10">
-        <div className="flex flex-col md:flex-row gap-3 mb-8">
+      <div className="max-w-7xl mx-auto" style={{ padding: '2rem 1.5rem' }}>
+        <div className="flex flex-col md:flex-row gap-3" style={{ marginBottom: '3rem' }}>
           <div className="relative flex-1">
             <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -146,8 +159,14 @@ function App() {
             }}
             onSearchClick={() => {
               setShowAddMenu(false);
-              document.querySelector<HTMLInputElement>('.search-input')?.focus();
+              document.querySelector<HTMLInputElement>('.input-search')?.focus();
             }}
+            onImportClick={() => {
+              setShowDiscogsImporter(true);
+              setShowAddMenu(false);
+            }}
+            onClose={() => setShowAddMenu(false)}
+            discogsConfigured={discogsConfigured}
           />
         )}
 
@@ -261,6 +280,15 @@ function App() {
           onSuccess={() => {
             loadAlbums();
             setShowImageUploader(false);
+          }}
+        />
+      )}
+
+      {showDiscogsImporter && (
+        <DiscogsImporter
+          onClose={() => setShowDiscogsImporter(false)}
+          onSuccess={() => {
+            loadAlbums();
           }}
         />
       )}

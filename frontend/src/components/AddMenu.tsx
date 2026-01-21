@@ -2,11 +2,27 @@ interface AddMenuProps {
   onBarcodeClick: () => void;
   onImageClick: () => void;
   onSearchClick: () => void;
+  onImportClick: () => void;
+  onClose: () => void;
+  discogsConfigured: boolean;
 }
 
-export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick }: AddMenuProps) => {
+export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick, onImportClick, onClose, discogsConfigured }: AddMenuProps) => {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full mx-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-gray-200" style={{ padding: '1.5rem' }}>
+          <h2 className="text-xl font-bold text-gray-900">Add Album</h2>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 transition-colors"
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4" style={{ padding: '2rem' }}>
       <button
         className="glass-card-hover p-6 text-left group flex items-start gap-4"
         onClick={onBarcodeClick}
@@ -51,6 +67,26 @@ export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick }: AddMenu
           <span className="block text-sm text-gray-600">Search Discogs database</span>
         </div>
       </button>
+
+      <button
+        className={`glass-card-hover p-6 text-left group flex items-start gap-4 ${!discogsConfigured ? 'opacity-50 cursor-not-allowed' : ''}`}
+        onClick={discogsConfigured ? onImportClick : undefined}
+        disabled={!discogsConfigured}
+      >
+        <div className={`p-3 rounded-lg transition-colors ${discogsConfigured ? 'bg-green-50 group-hover:bg-green-100' : 'bg-gray-50'}`}>
+          <svg className={`w-6 h-6 ${discogsConfigured ? 'text-green-600' : 'text-gray-400'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+          </svg>
+        </div>
+        <div>
+          <span className="block text-base font-semibold text-gray-900 mb-1">Import from Discogs</span>
+          <span className="block text-sm text-gray-600">
+            {discogsConfigured ? 'Import your Discogs collection' : 'Discogs token not configured'}
+          </span>
+        </div>
+      </button>
+        </div>
+      </div>
     </div>
   );
 };

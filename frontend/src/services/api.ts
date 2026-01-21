@@ -89,13 +89,27 @@ class ApiService {
   }
 
   async analyzeImage(image: string): Promise<{
-    extractedText: { artist?: string; album?: string; year?: number };
+    extractedText: { artist?: string; album?: string; year?: number; confidence?: number };
     discogsMatches: DiscogsAlbum[];
   }> {
     return this.request('/api/image/analyze', {
       method: 'POST',
       body: JSON.stringify({ image }),
     });
+  }
+
+  async checkDiscogsConfig(): Promise<{
+    configured: boolean;
+    username?: string;
+  }> {
+    return this.request('/api/discogs/config');
+  }
+
+  async importDiscogsCollection(): Promise<{
+    albums: DiscogsAlbum[];
+    count: number;
+  }> {
+    return this.request('/api/discogs/import');
   }
 }
 

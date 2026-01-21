@@ -8,6 +8,7 @@ import * as albumController from './controllers/albumController';
 import * as barcodeController from './controllers/barcodeController';
 import * as searchController from './controllers/searchController';
 import * as imageController from './controllers/imageController';
+import * as discogsController from './controllers/discogsController';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -49,6 +50,10 @@ app.post('/api/barcode/scan', barcodeController.scanBarcode);
 // Image recognition routes
 app.post('/api/image/analyze', imageController.analyzeImage);
 app.post('/api/image/confirm', imageController.confirmAlbum);
+
+// Discogs import routes
+app.get('/api/discogs/config', discogsController.checkDiscogsConfig);
+app.get('/api/discogs/import', discogsController.importCollection);
 
 // Error handling
 app.use(errorHandler);

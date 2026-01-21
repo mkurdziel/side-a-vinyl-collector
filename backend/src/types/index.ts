@@ -63,4 +63,5 @@ export interface VisionExtractionResult {
   artist?: string;
   album?: string;
   year?: number;
+  confidence?: number;
 }

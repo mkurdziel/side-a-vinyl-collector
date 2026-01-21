@@ -61,10 +61,17 @@ class VisionService {
                 type: 'text',
                 text: `What album is this? Look at the album cover and identify the artist name, album title, and year if visible.
 
-Return ONLY JSON:
-{"artist":"Artist Name","album":"Album Title","year":1994}
+Also provide a confidence score (0-100) indicating how certain you are about the identification.
 
-Use null for any field you cannot determine.`
+Return ONLY JSON:
+{"artist":"Artist Name","album":"Album Title","year":1994,"confidence":85}
+
+Use null for any field you cannot determine. Confidence scoring guide:
+- 90-100: Very certain, clear text and recognizable album
+- 70-89: Confident, most details visible
+- 50-69: Moderate confidence, some details unclear
+- 30-49: Low confidence, image quality or partial visibility issues
+- 0-29: Very uncertain, guessing based on limited information`
               }
             ]
           }
@@ -92,6 +99,7 @@ Use null for any field you cannot determine.`
         artist: extracted.artist || undefined,
         album: extracted.album || undefined,
         year: extracted.year || undefined,
+        confidence: extracted.confidence || 0,
       };
     } catch (error) {
       console.error('Vision extraction error:', error);

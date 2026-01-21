@@ -119,6 +119,58 @@ class DiscogsService {
     }
   }
 
+  isConfigured(): boolean {
+    return !!process.env.DISCOGS_TOKEN;
+  }
+
+  async getUserIdentity(): Promise<{ username: string } | null> {
+    if (!this.isConfigured()) {
+      return null;
+    }
+
+    try {
+      const result = await this.rateLimiter.execute(async () => {
+        const response = await this.client.get('/oauth/identity');
+        return response.data;
+      });
+      return { username: result.username };
+    } catch (error) {
+      console.error('Failed to get Discogs user identity:', error);
+      return null;
+    }
+  }
+
+  async getUserCollection(username: string, page: number = 1, perPage: number = 100): Promise<DiscogsAlbum[]> {
+    if (!this.isConfigured()) {
+      throw new Error('Discogs token not configured');
+    }
+
+    try {
+      const result = await this.rateLimiter.execute(async () => {
+        const response = await this.client.get(`/users/${username}/collection/folders/0/releases`, {
+          params: { page, per_page: perPage }
+        });
+        return response.data;
+      });
+
+      const albums = result.releases.map((item: any) => this.parseDiscogsRelease(item.basic_information));
+
+      // Deduplicate based on artist + album (case-insensitive)
+      const seen = new Map<string, DiscogsAlbum>();
+      for (const album of albums) {
+        const key = `${album.artist.toLowerCase()}||${album.album.toLowerCase()}`;
+        if (!seen.has(key)) {
+          seen.set(key, album);
+        }
+      }
+
+      return Array.from(seen.values());
+    } catch (error) {
+      console.error('Failed to get Discogs collection:', error);
+      throw new Error('Failed to fetch Discogs collection');
+    }
+  }
+
   private parseDiscogsRelease(release: any): DiscogsAlbum {
     // Extract artist and album from title
     // Discogs search results format: "Artist Name - Album Title"

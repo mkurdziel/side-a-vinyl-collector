@@ -11,6 +11,8 @@ export const ImageUploader = ({ onClose, onSuccess }: ImageUploaderProps) => {
   const [analyzing, setAnalyzing] = useState(false);
   const [matches, setMatches] = useState<DiscogsAlbum[]>([]);
   const [imagePreview, setImagePreview] = useState<string>('');
+  const [confidence, setConfidence] = useState<number>(0);
+  const [extractedInfo, setExtractedInfo] = useState<{ artist?: string; album?: string; year?: number } | null>(null);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -37,9 +39,20 @@ export const ImageUploader = ({ onClose, onSuccess }: ImageUploaderProps) => {
       // Analyze image
       setAnalyzing(true);
       try {
-        toast.loading('Analyzing image...', { id: 'analyze' });
+        toast.loading('Analyzing image with AI...', { id: 'analyze' });
         const result = await api.analyzeImage(base64);
-        toast.success('Image analyzed!', { id: 'analyze' });
+
+        const aiConfidence = result.extractedText.confidence || 0;
+        setConfidence(aiConfidence);
+        setExtractedInfo(result.extractedText);
+
+        if (aiConfidence >= 70) {
+          toast.success(`Image analyzed! (${aiConfidence}% confident)`, { id: 'analyze' });
+        } else if (aiConfidence >= 50) {
+          toast('Image analyzed with moderate confidence', { id: 'analyze', icon: '⚠️' });
+        } else {
+          toast('Low confidence - results may not be accurate', { id: 'analyze', icon: '⚠️' });
+        }
 
         if (result.discogsMatches.length === 0) {
           toast.error('No matches found. Try a clearer image.');
@@ -126,7 +139,42 @@ export const ImageUploader = ({ onClose, onSuccess }: ImageUploaderProps) => {
 
         {matches.length > 0 && (
           <div className="mb-6">
-            <h3 className="text-xl font-bold text-gray-800 mb-4">Select the correct album:</h3>
+            <div className="mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-xl font-bold text-gray-800">AI Detection Results</h3>
+                {confidence > 0 && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-gray-600">Confidence:</span>
+                    <div className="flex items-center gap-2">
+                      <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full transition-all ${
+                            confidence >= 70 ? 'bg-green-500' :
+                            confidence >= 50 ? 'bg-yellow-500' :
+                            'bg-red-500'
+                          }`}
+                          style={{ width: `${confidence}%` }}
+                        />
+                      </div>
+                      <span className={`text-sm font-bold ${
+                        confidence >= 70 ? 'text-green-600' :
+                        confidence >= 50 ? 'text-yellow-600' :
+                        'text-red-600'
+                      }`}>
+                        {confidence}%
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+              {extractedInfo && (
+                <div className="text-sm text-gray-600 mb-3">
+                  Detected: <span className="font-medium">{extractedInfo.artist || 'Unknown'}</span> - <span className="font-medium">{extractedInfo.album || 'Unknown'}</span>
+                  {extractedInfo.year && ` (${extractedInfo.year})`}
+                </div>
+              )}
+            </div>
+            <h4 className="text-lg font-semibold text-gray-700 mb-3">Select the correct album:</h4>
             <div className="space-y-3">
               {matches.map((match) => (
                 <div
