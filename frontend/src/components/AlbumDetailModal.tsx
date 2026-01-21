@@ -14,6 +14,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
 
   const [showSelectionModal, setShowSelectionModal] = useState(false);
   const [candidates, setCandidates] = useState<SearchCoverArtResult[]>([]);
+  const [imageDimensions, setImageDimensions] = useState<Record<string, string>>({});
 
   // Sync state with prop if it changes externally
   useEffect(() => {
@@ -27,6 +28,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
       
       if (data.results && data.results.length > 0) {
         setCandidates(data.results);
+        setImageDimensions({});
         setShowSelectionModal(true);
       } else {
         toast.error('No cover art found');
@@ -251,12 +253,27 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
                     className="group cursor-pointer relative"
                     onClick={() => handleSelectArtwork(candidate)}
                   >
-                    <div className="aspect-square rounded-lg overflow-hidden bg-gray-100 border-2 border-transparent group-hover:border-purple-500 transition-all">
+                    <div className="relative aspect-square rounded-lg overflow-hidden bg-gray-100 border-2 border-transparent group-hover:border-purple-500 transition-all">
                       <img 
                         src={candidate.url} 
                         alt={candidate.title}
                         className="w-full h-full object-cover"
+                        onLoad={(e) => {
+                          const img = e.currentTarget;
+                          const key = `${candidate.source}-${candidate.id}-${index}`;
+                          if (!imageDimensions[key]) {
+                            setImageDimensions(prev => ({
+                              ...prev,
+                              [key]: `${img.naturalWidth} x ${img.naturalHeight}`
+                            }));
+                          }
+                        }}
                       />
+                      <div className="absolute inset-x-0 bottom-0 bg-black/60 p-1 text-center">
+                         <span className="text-[10px] text-white font-medium">
+                           {imageDimensions[`${candidate.source}-${candidate.id}-${index}`] || 'Loading...'}
+                         </span>
+                      </div>
                       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
                         <span className="opacity-0 group-hover:opacity-100 bg-purple-600 text-white px-3 py-1 rounded-full text-sm font-medium transform translate-y-2 group-hover:translate-y-0 transition-all">
                           Select
