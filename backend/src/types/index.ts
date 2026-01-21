@@ -13,6 +13,9 @@ export interface Album {
   year?: number;
   cover_image_url?: string;
   discogs_id?: number;
+  musicbrainz_id?: string;
+  local_cover_path?: string;
+  cover_art_fetched?: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -33,6 +36,8 @@ export interface Barcode {
 
 export interface AlbumWithArtist extends Album {
   artist_name: string;
+  notes?: string;
+  added_at?: Date;
 }
 
 export interface SearchResult {

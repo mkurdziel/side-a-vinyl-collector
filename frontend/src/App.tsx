@@ -5,6 +5,7 @@ import { AddMenu } from './components/AddMenu';
 import { BarcodeScanner } from './components/BarcodeScanner';
 import { ImageUploader } from './components/ImageUploader';
 import { DiscogsImporter } from './components/DiscogsImporter';
+import { AlbumDetailModal } from './components/AlbumDetailModal';
 import './App.css';
 
 function App() {
@@ -16,6 +17,7 @@ function App() {
   const [showBarcodeScanner, setShowBarcodeScanner] = useState(false);
   const [showImageUploader, setShowImageUploader] = useState(false);
   const [showDiscogsImporter, setShowDiscogsImporter] = useState(false);
+  const [selectedAlbum, setSelectedAlbum] = useState<Album | null>(null);
   const [discogsConfigured, setDiscogsConfigured] = useState(false);
   const searchTimeoutRef = useRef<number | null>(null);
 
@@ -217,7 +219,11 @@ function App() {
                 </div>
               ) : (
                 displayAlbums.map((album) => (
-                  <div key={album.id} className="glass-card-hover group relative overflow-hidden">
+                  <div
+                    key={album.id}
+                    className="glass-card-hover group relative overflow-hidden cursor-pointer"
+                    onClick={() => setSelectedAlbum(album)}
+                  >
                     <div className="aspect-square bg-gray-50 flex items-center justify-center overflow-hidden rounded-t-xl">
                       <img
                         src={getCoverArtUrl(album.id)}
@@ -238,7 +244,10 @@ function App() {
                     </div>
                     <button
                       className="absolute top-2 right-2 bg-white/95 hover:bg-red-50 hover:text-red-600 text-gray-600 rounded-lg p-2 transition-all duration-200 shadow-sm opacity-0 group-hover:opacity-100"
-                      onClick={() => handleDelete(album.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(album.id);
+                      }}
                       title="Remove from collection"
                     >
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -317,6 +326,16 @@ function App() {
         <DiscogsImporter
           onClose={() => setShowDiscogsImporter(false)}
           onSuccess={() => {
+            loadAlbums();
+          }}
+        />
+      )}
+
+      {selectedAlbum && (
+        <AlbumDetailModal
+          album={selectedAlbum}
+          onClose={() => setSelectedAlbum(null)}
+          onRefresh={() => {
             loadAlbums();
           }}
         />

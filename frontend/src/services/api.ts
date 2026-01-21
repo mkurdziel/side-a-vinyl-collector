@@ -17,6 +17,9 @@ export interface Album {
   artist_name: string;
   year?: number;
   cover_image_url?: string;
+  musicbrainz_id?: string;
+  local_cover_path?: string;
+  cover_art_fetched?: boolean;
   notes?: string;
   added_at: string;
 }
