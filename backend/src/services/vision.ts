@@ -63,6 +63,8 @@ class VisionService {
     // Try primary provider
     try {
       const result = await this.extractWithProvider(this.primaryProvider, base64Image);
+      result.provider = this.primaryProvider;
+      result.usedFallback = false;
 
       // Check if confidence meets threshold
       if (result.confidence && result.confidence >= this.minConfidence) {
@@ -74,6 +76,17 @@ class VisionService {
       if (this.fallbackProvider) {
         console.log(`⚠ ${this.primaryProvider} confidence ${result.confidence}% below threshold ${this.minConfidence}%, trying ${this.fallbackProvider}`);
         const fallbackResult = await this.extractWithProvider(this.fallbackProvider, base64Image);
+        fallbackResult.provider = this.fallbackProvider;
+        fallbackResult.usedFallback = true;
+
+        // Store primary result for comparison
+        fallbackResult.primaryResult = {
+          artist: result.artist,
+          album: result.album,
+          year: result.year,
+          confidence: result.confidence,
+          provider: this.primaryProvider
+        };
 
         // Return whichever result has higher confidence
         if (fallbackResult.confidence && fallbackResult.confidence > (result.confidence || 0)) {
@@ -82,6 +95,14 @@ class VisionService {
         }
 
         console.log(`✓ ${this.primaryProvider} confidence ${result.confidence}% is still better, using primary result`);
+        // Even though primary is better, include fallback for comparison
+        result.primaryResult = {
+          artist: fallbackResult.artist,
+          album: fallbackResult.album,
+          year: fallbackResult.year,
+          confidence: fallbackResult.confidence,
+          provider: this.fallbackProvider
+        };
       }
 
       return result;
@@ -89,7 +110,10 @@ class VisionService {
       // If primary provider fails and we have a fallback, try it
       if (this.fallbackProvider) {
         console.warn(`✗ ${this.primaryProvider} failed, trying ${this.fallbackProvider}:`, error);
-        return this.extractWithProvider(this.fallbackProvider, base64Image);
+        const fallbackResult = await this.extractWithProvider(this.fallbackProvider, base64Image);
+        fallbackResult.provider = this.fallbackProvider;
+        fallbackResult.usedFallback = true;
+        return fallbackResult;
       }
       throw error;
     }

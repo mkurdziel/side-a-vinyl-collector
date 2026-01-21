@@ -49,7 +49,7 @@ export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick, onImportC
         </div>
         <div>
           <span className="block text-base font-semibold text-gray-900 mb-1">Upload Image</span>
-          <span className="block text-sm text-gray-600">AI recognition with Claude</span>
+          <span className="block text-sm text-gray-600">AI vision recognition</span>
         </div>
       </button>
 

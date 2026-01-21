@@ -64,4 +64,13 @@ export interface VisionExtractionResult {
   album?: string;
   year?: number;
   confidence?: number;
+  provider?: string;
+  usedFallback?: boolean;
+  primaryResult?: {
+    artist?: string;
+    album?: string;
+    year?: number;
+    confidence?: number;
+    provider?: string;
+  };
 }

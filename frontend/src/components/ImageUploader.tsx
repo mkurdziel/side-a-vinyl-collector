@@ -12,7 +12,7 @@ export const ImageUploader = ({ onClose, onSuccess }: ImageUploaderProps) => {
   const [matches, setMatches] = useState<DiscogsAlbum[]>([]);
   const [imagePreview, setImagePreview] = useState<string>('');
   const [confidence, setConfidence] = useState<number>(0);
-  const [extractedInfo, setExtractedInfo] = useState<{ artist?: string; album?: string; year?: number } | null>(null);
+  const [extractedInfo, setExtractedInfo] = useState<{ artist?: string; album?: string; year?: number; provider?: string; usedFallback?: boolean } | null>(null);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -133,7 +133,7 @@ export const ImageUploader = ({ onClose, onSuccess }: ImageUploaderProps) => {
         {analyzing && (
           <div className="text-center py-8">
             <div className="inline-block w-12 h-12 border-4 border-[--color-vinyl-600]/30 border-t-[--color-vinyl-600] rounded-full animate-spin mb-4"></div>
-            <p className="text-lg font-medium text-gray-700">Analyzing with Claude Vision...</p>
+            <p className="text-lg font-medium text-gray-700">Analyzing with AI Vision...</p>
           </div>
         )}
 
@@ -169,8 +169,23 @@ export const ImageUploader = ({ onClose, onSuccess }: ImageUploaderProps) => {
               </div>
               {extractedInfo && (
                 <div className="text-sm text-gray-600 mb-3">
-                  Detected: <span className="font-medium">{extractedInfo.artist || 'Unknown'}</span> - <span className="font-medium">{extractedInfo.album || 'Unknown'}</span>
-                  {extractedInfo.year && ` (${extractedInfo.year})`}
+                  <div>
+                    Detected: <span className="font-medium">{extractedInfo.artist || 'Unknown'}</span> - <span className="font-medium">{extractedInfo.album || 'Unknown'}</span>
+                    {extractedInfo.year && ` (${extractedInfo.year})`}
+                  </div>
+                  {extractedInfo.provider && (
+                    <div className="text-xs text-gray-500 mt-1">
+                      {extractedInfo.usedFallback ? (
+                        <>
+                          Provider: <span className="font-medium capitalize">{extractedInfo.provider}</span> <span className="text-yellow-600">(fallback)</span>
+                        </>
+                      ) : (
+                        <>
+                          Provider: <span className="font-medium capitalize">{extractedInfo.provider}</span>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -192,7 +207,14 @@ export const ImageUploader = ({ onClose, onSuccess }: ImageUploaderProps) => {
                   <div className="flex-1 min-w-0">
                     <h4 className="font-bold text-gray-800 truncate">{match.album}</h4>
                     <p className="text-gray-600 truncate">{match.artist}</p>
-                    {match.year && <span className="text-sm text-gray-500">{match.year}</span>}
+                    <div className="flex items-center gap-2 mt-1">
+                      {match.year && <span className="text-sm text-gray-500">{match.year}</span>}
+                      {match.fromProvider && match.confidence !== undefined && (
+                        <span className="text-xs text-gray-500">
+                          • <span className="capitalize">{match.fromProvider}</span> ({match.confidence}%)
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}

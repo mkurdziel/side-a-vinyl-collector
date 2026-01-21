@@ -22,6 +22,8 @@ export interface DiscogsAlbum {
   year?: number;
   coverImageUrl?: string;
   discogsId: number;
+  fromProvider?: string;
+  confidence?: number;
 }
 
 class ApiService {
@@ -89,7 +91,21 @@ class ApiService {
   }
 
   async analyzeImage(image: string): Promise<{
-    extractedText: { artist?: string; album?: string; year?: number; confidence?: number };
+    extractedText: {
+      artist?: string;
+      album?: string;
+      year?: number;
+      confidence?: number;
+      provider?: string;
+      usedFallback?: boolean;
+      primaryResult?: {
+        artist?: string;
+        album?: string;
+        year?: number;
+        confidence?: number;
+        provider?: string;
+      };
+    };
     discogsMatches: DiscogsAlbum[];
   }> {
     return this.request('/api/image/analyze', {
