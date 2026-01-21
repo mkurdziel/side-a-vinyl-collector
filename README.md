@@ -1,75 +1,129 @@
 # Vinyl Collector
 
-A self-hosted web application for tracking your vinyl record collection with Discogs API integration, barcode scanning, image recognition, and unified search.
+A modern web application for managing your vinyl record collection with AI-powered album recognition.
 
 ## Features
 
-- **3 Ways to Add Records:**
-  1. 📷 **Barcode Scanning** - Use your device camera to scan vinyl barcodes
-  2. 🖼️ **Image Recognition** - Upload a photo of the album cover and let Claude Vision extract the details
-  3. 🔍 **Unified Search** - Search by artist or album name across your collection and Discogs
-
-- **Automatic Album Covers** - All album artwork fetched automatically from Discogs
-- **Smart Search** - Single search field with fuzzy matching across artist and album fields
-- **No Duplicates** - Built-in duplicate prevention
-- **Notes** - Add personal notes to each album
-- **Self-Hosted** - Run entirely on your own infrastructure with Docker
+- **Album Management**: Add, view, and organize your vinyl collection
+- **AI Vision Recognition**: Upload photos of album covers for automatic identification
+  - Dual-provider fallback system (OpenAI GPT-4 + Anthropic Claude)
+  - Configurable confidence thresholds
+  - Automatic fallback for maximum accuracy
+- **Barcode Scanning**: Scan barcodes to quickly add albums
+- **Discogs Integration**: Import your entire Discogs collection
+  - Automatic deduplication
+  - Bulk import with progress tracking
+- **Smart Search**: Search your collection and Discogs database with debouncing
+- **Cover Art**: Automatic cover image fetching from Discogs
 
 ## Tech Stack
 
-- **Frontend**: React + TypeScript + Vite
-- **Backend**: Bun + Express + TypeScript
-- **Database**: PostgreSQL (with trigram search)
-- **Cache**: Redis
-- **APIs**: Discogs API, Claude Vision API
-- **Deployment**: Docker Compose
+### Frontend
+- React 19 with TypeScript
+- Vite for build tooling
+- Tailwind CSS for styling
+- React Hot Toast for notifications
+
+### Backend
+- Bun runtime
+- Express.js
+- PostgreSQL database
+- Redis caching
+- OpenAI GPT-4 Vision API
+- Anthropic Claude Vision API
+- Discogs API integration
 
 ## Quick Start
 
-### Prerequisites
+1. Clone the repository:
+```bash
+git clone https://github.com/mkurdziel/side-a-vinyl-collector.git
+cd side-a-vinyl-collector
+```
 
-- Docker and Docker Compose
-- Discogs API token ([Get one here](https://www.discogs.com/settings/developers))
-- Claude API key ([Get one here](https://console.anthropic.com/))
-
-### Setup
-
-1. Clone the repository and navigate to the project directory
-
-2. Copy the environment example file:
+2. Copy environment template:
 ```bash
 cp .env.example .env
 ```
 
-3. Edit `.env` and add your API keys:
+3. Configure your API keys in `.env`:
 ```bash
-DISCOGS_TOKEN=your_discogs_token_here
-ANTHROPIC_API_KEY=your_anthropic_api_key_here
-POSTGRES_PASSWORD=change_this_to_something_secure
+# Required for Discogs import
+DISCOGS_TOKEN=your_discogs_token
+
+# Vision providers (configure at least one, both recommended)
+OPENAI_API_KEY=your_openai_key
+ANTHROPIC_API_KEY=your_anthropic_key
+
+# Vision configuration
+VISION_PROVIDER=openai          # Primary provider
+VISION_MIN_CONFIDENCE=90        # Fallback threshold
 ```
 
-4. Start the application with Docker Compose:
+4. Start the application:
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
-5. Access the application:
-   - Frontend: http://localhost:3000
-   - Backend API: http://localhost:5000
-   - Health Check: http://localhost:5000/health
+5. Access the app:
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:5001
+
+## Vision AI Configuration
+
+The app supports intelligent dual-provider fallback for album cover recognition:
+
+### How It Works
+1. Primary provider (OpenAI or Anthropic) analyzes the image
+2. If confidence < threshold (default 90%), fallback provider is tried
+3. Result with highest confidence is returned
+
+### Configuration Options
+
+**Best Accuracy (Recommended)**:
+```bash
+VISION_PROVIDER=openai
+VISION_MIN_CONFIDENCE=90
+OPENAI_API_KEY=sk-xxxxx
+ANTHROPIC_API_KEY=sk-ant-xxxxx
+```
+
+**Cost Optimized**:
+```bash
+VISION_PROVIDER=openai
+VISION_MIN_CONFIDENCE=70
+OPENAI_API_KEY=sk-xxxxx
+```
+
+See [VISION_PROVIDERS.md](VISION_PROVIDERS.md) for detailed configuration guide.
 
 ## Development
 
-### Backend Development
+### Project Structure
+```
+.
+├── backend/           # Express API server
+│   ├── src/
+│   │   ├── controllers/
+│   │   ├── services/
+│   │   └── db/
+├── frontend/          # React application
+│   ├── src/
+│   │   ├── components/
+│   │   └── services/
+└── docker-compose.yml
+```
 
+### Running Locally
+
+Backend:
 ```bash
 cd backend
 bun install
 bun run dev
 ```
 
-### Frontend Development
-
+Frontend:
 ```bash
 cd frontend
 bun install
@@ -78,94 +132,38 @@ bun run dev
 
 ### Database Migrations
 
-Run migrations manually:
+Migrations run automatically on container start. To run manually:
 ```bash
-cd backend
-bun run migrate
+docker exec vinyl_backend bun run migrate
 ```
 
 ## API Endpoints
 
-### Albums
-- `GET /api/albums` - List all albums in collection
-- `GET /api/albums/:id` - Get album details
+- `GET /api/albums` - Get all albums in collection
 - `POST /api/albums` - Add album to collection
-- `DELETE /api/albums/:id` - Remove from collection
-- `PATCH /api/albums/:id/notes` - Update notes
-
-### Search
-- `GET /api/search?q={query}` - Unified search across artist and album
-
-### Barcode
-- `POST /api/barcode/scan` - Scan barcode and get album info
-
-### Image Recognition
-- `POST /api/image/analyze` - Analyze album image with Claude Vision
-- `POST /api/image/confirm` - Confirm and add album from Discogs
-
-## Architecture
-
-```
-┌─────────────────┐
-│  React Frontend │ (Port 3000)
-│  - Camera UI    │
-│  - Collection   │
-└────────┬────────┘
-         │ HTTP/REST
-┌────────▼────────┐
-│  Express API    │ (Port 5000)
-│  - Auth         │
-│  - Collection   │
-│  - Discogs      │
-└─┬──────┬───────┬┘
-  │      │       │
-  │      │       └──────┐
-  │      │              │
-┌─▼──────▼───┐    ┌────▼─────┐
-│ PostgreSQL │    │  Redis   │
-│  (Port     │    │  (Cache) │
-│   5432)    │    └──────────┘
-└────────────┘
-```
-
-## Database Schema
-
-- **artists** - Artist information
-- **albums** - Album metadata with cover URLs
-- **collections** - User's collection (many-to-many)
-- **barcodes** - Barcode to album mappings
+- `DELETE /api/albums/:id` - Remove album from collection
+- `GET /api/search?q=query` - Search local + Discogs
+- `POST /api/barcode/scan` - Lookup album by barcode
+- `POST /api/image/analyze` - Analyze album cover with AI
+- `GET /api/discogs/import` - Import Discogs collection
 
 ## Environment Variables
 
-See `.env.example` for all available configuration options.
+See `.env.example` for all configuration options:
 
-## Cost Estimates
-
-### API Costs (Monthly for moderate use)
-- **Discogs API**: Free (rate limited to 60/min)
-- **Claude Vision**: ~$5-10 (assuming 100-200 image scans/month)
-
-### Infrastructure (Self-Hosted)
-- **Docker resources**: 2 CPU cores, 4GB RAM recommended
-- **Storage**: 10GB minimum (for database + images)
-
-## Features Roadmap
-
-- [x] Barcode scanning
-- [x] Image recognition
-- [x] Unified search
-- [x] Album covers
-- [x] Duplicate prevention
-- [ ] Multi-user support
-- [ ] Export to CSV/JSON
-- [ ] Statistics dashboard
-- [ ] Wishlist feature
-- [ ] Album condition tracking
+- Database: PostgreSQL connection settings
+- Redis: Cache configuration
+- Discogs: API token for imports and search
+- Vision AI: OpenAI and Anthropic API keys
+- Vision Config: Provider selection and confidence threshold
 
 ## License
 
 MIT
 
-## Support
+## Contributing
 
-For issues and questions, please create an issue in the repository.
+Pull requests welcome! Please ensure:
+- Code follows existing style
+- Tests pass (when implemented)
+- Documentation is updated
