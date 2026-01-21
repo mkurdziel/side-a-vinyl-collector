@@ -53,7 +53,7 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
       onClick={onClose}
     >
       <div
-        className="glass-card max-w-2xl w-full p-6"
+        className="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex justify-between items-center mb-6">
@@ -76,8 +76,8 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
             <>
               <div ref={scannerRef} className="w-full" style={{ minHeight: '400px' }} />
               <div className="absolute inset-0 pointer-events-none">
-                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4/5 h-1/3 border-2 border-[--color-vinyl-400] rounded-lg shadow-lg">
-                  <div className="absolute top-0 left-0 right-0 h-0.5 bg-[--color-vinyl-400] animate-pulse" />
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4/5 h-1/3 border-2 border-purple-400 rounded-lg shadow-lg">
+                  <div className="absolute top-0 left-0 right-0 h-0.5 bg-purple-400 animate-pulse" />
                 </div>
               </div>
               <p className="absolute bottom-4 left-0 right-0 text-center text-white text-lg font-medium bg-black/50 py-2">
@@ -87,7 +87,7 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
           )}
         </div>
 
-        <button className="w-full btn-danger" onClick={onClose}>
+        <button className="w-full px-4 py-2 text-white bg-red-500 hover:bg-red-600 rounded-lg font-medium transition-colors" onClick={onClose}>
           Cancel
         </button>
       </div>

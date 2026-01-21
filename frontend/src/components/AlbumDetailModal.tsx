@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { toast } from 'react-hot-toast';
 import { type Album, getCoverArtUrl } from '../services/api';
 
@@ -10,12 +10,18 @@ interface AlbumDetailModalProps {
 
 export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModalProps) => {
   const [refetching, setRefetching] = useState(false);
+  const [currentAlbum, setCurrentAlbum] = useState<Album>(album);
+
+  // Sync state with prop if it changes externally
+  useEffect(() => {
+    setCurrentAlbum(album);
+  }, [album]);
 
   const handleRefetchArtwork = async () => {
     setRefetching(true);
     try {
       const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
-      const response = await fetch(`${API_URL}/api/cover-art/${album.id}/fetch`, {
+      const response = await fetch(`${API_URL}/api/cover-art/${currentAlbum.id}/fetch`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -26,13 +32,16 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
 
       if (response.ok) {
         toast.success(data.message || 'Artwork refreshed successfully');
+        if (data.album) {
+          setCurrentAlbum(data.album);
+        }
         onRefresh();
         // Force reload the image by updating the timestamp
         setTimeout(() => {
-          const images = document.querySelectorAll(`img[alt="${album.title}"]`);
+          const images = document.querySelectorAll(`img[alt="${currentAlbum.title}"]`);
           images.forEach((img) => {
             const imgElement = img as HTMLImageElement;
-            imgElement.src = getCoverArtUrl(album.id) + '?t=' + Date.now();
+            imgElement.src = getCoverArtUrl(currentAlbum.id) + '?t=' + Date.now();
           });
         }, 500);
       } else {
@@ -58,17 +67,17 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
 
   const getArtworkSource = () => {
     // Priority: local_cover_path > cover_image_url source detection
-    if (album.local_cover_path) {
+    if (currentAlbum.local_cover_path) {
       // Has locally cached cover art
-      if (album.cover_image_url?.includes('coverartarchive.org')) {
+      if (currentAlbum.cover_image_url?.includes('coverartarchive.org')) {
         return { source: 'MusicBrainz (Cached Locally)', color: 'text-green-600', icon: '🎵' };
       } else {
         return { source: 'Discogs (Cached Locally)', color: 'text-blue-600', icon: '💿' };
       }
-    } else if (album.cover_image_url) {
-      if (album.cover_image_url.includes('coverartarchive.org')) {
+    } else if (currentAlbum.cover_image_url) {
+      if (currentAlbum.cover_image_url.includes('coverartarchive.org')) {
         return { source: 'MusicBrainz Cover Art Archive', color: 'text-green-600', icon: '🎵' };
-      } else if (album.cover_image_url.includes('discogs.com')) {
+      } else if (currentAlbum.cover_image_url.includes('discogs.com')) {
         return { source: 'Discogs', color: 'text-blue-600', icon: '💿' };
       } else {
         return { source: 'External URL', color: 'text-gray-600', icon: '🌐' };
@@ -107,8 +116,8 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
           <div className="flex flex-col items-center">
             <div className="w-full max-w-md aspect-square bg-gray-50 rounded-xl overflow-hidden shadow-lg">
               <img
-                src={getCoverArtUrl(album.id)}
-                alt={album.title}
+                src={getCoverArtUrl(currentAlbum.id)}
+                alt={currentAlbum.title}
                 className="w-full h-full object-cover"
                 onError={(e) => {
                   const target = e.target as HTMLImageElement;
@@ -122,10 +131,10 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
           {/* Album Info */}
           <div className="space-y-4">
             <div>
-              <h3 className="text-2xl font-bold text-gray-900">{album.title}</h3>
-              <p className="text-lg text-gray-600 mt-1">{album.artist_name}</p>
-              {album.year && (
-                <p className="text-sm text-gray-500 mt-1">{album.year}</p>
+              <h3 className="text-2xl font-bold text-gray-900">{currentAlbum.title}</h3>
+              <p className="text-lg text-gray-600 mt-1">{currentAlbum.artist_name}</p>
+              {currentAlbum.year && (
+                <p className="text-sm text-gray-500 mt-1">{currentAlbum.year}</p>
               )}
             </div>
 
@@ -136,7 +145,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
                 <span className="text-2xl">📅</span>
                 <div className="flex-1">
                   <p className="text-sm font-medium text-gray-700">Added to Collection</p>
-                  <p className="text-sm text-gray-600">{formatDate(album.added_at)}</p>
+                  <p className="text-sm text-gray-600">{formatDate(currentAlbum.added_at)}</p>
                 </div>
               </div>
 
@@ -148,21 +157,21 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
                   <p className={`text-sm font-medium ${artworkInfo.color}`}>
                     {artworkInfo.source}
                   </p>
-                  {album.cover_image_url && (
+                  {currentAlbum.cover_image_url && (
                     <p className="text-xs text-gray-400 mt-1 truncate max-w-md">
-                      {album.cover_image_url}
+                      {currentAlbum.cover_image_url}
                     </p>
                   )}
                 </div>
               </div>
 
               {/* Notes */}
-              {album.notes && (
+              {currentAlbum.notes && (
                 <div className="flex items-start gap-3">
                   <span className="text-2xl">📝</span>
                   <div className="flex-1">
                     <p className="text-sm font-medium text-gray-700">Notes</p>
-                    <p className="text-sm text-gray-600 mt-1 whitespace-pre-wrap">{album.notes}</p>
+                    <p className="text-sm text-gray-600 mt-1 whitespace-pre-wrap">{currentAlbum.notes}</p>
                   </div>
                 </div>
               )}
@@ -174,7 +183,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
             <button
               onClick={handleRefetchArtwork}
               disabled={refetching}
-              className="w-full btn-primary flex items-center justify-center gap-2"
+              className="w-full px-5 py-2.5 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {refetching ? (
                 <>

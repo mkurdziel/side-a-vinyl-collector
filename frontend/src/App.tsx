@@ -6,7 +6,7 @@ import { BarcodeScanner } from './components/BarcodeScanner';
 import { ImageUploader } from './components/ImageUploader';
 import { DiscogsImporter } from './components/DiscogsImporter';
 import { AlbumDetailModal } from './components/AlbumDetailModal';
-import './App.css';
+
 
 function App() {
   const [albums, setAlbums] = useState<Album[]>([]);
@@ -126,21 +126,21 @@ function App() {
       <Toaster position="top-right" />
 
       <header className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto" style={{ padding: '2rem 1.5rem' }}>
+        <div className="max-w-7xl mx-auto px-6 py-8">
           <h1 className="text-2xl font-bold text-gray-900 mb-1">Vinyl Collector</h1>
           <p className="text-sm text-gray-600">Manage your vinyl record collection</p>
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto" style={{ padding: '2rem 1.5rem' }}>
-        <div className="flex flex-col md:flex-row gap-3" style={{ marginBottom: '3rem' }}>
+      <div className="max-w-7xl mx-auto px-6 py-8">
+        <div className="flex flex-col md:flex-row gap-3 mb-12">
           <div className="relative flex-1">
             <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
             <input
               type="text"
-              className="input-search pl-10"
+              className="w-full pl-10 pr-10 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
               placeholder="Search albums..."
               value={searchQuery}
               onChange={(e) => handleSearch(e.target.value)}
@@ -159,7 +159,7 @@ function App() {
               </button>
             )}
           </div>
-          <button className="btn-primary md:w-auto w-full flex items-center justify-center gap-2" onClick={() => setShowAddMenu(!showAddMenu)}>
+          <button className="px-5 py-2.5 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors md:w-auto w-full flex items-center justify-center gap-2" onClick={() => setShowAddMenu(!showAddMenu)}>
             {showAddMenu ? (
               <>
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -190,7 +190,7 @@ function App() {
             }}
             onSearchClick={() => {
               setShowAddMenu(false);
-              document.querySelector<HTMLInputElement>('.input-search')?.focus();
+              document.querySelector<HTMLInputElement>('input[type="text"]')?.focus();
             }}
             onImportClick={() => {
               setShowDiscogsImporter(true);
@@ -221,7 +221,7 @@ function App() {
                 displayAlbums.map((album) => (
                   <div
                     key={album.id}
-                    className="glass-card-hover group relative overflow-hidden cursor-pointer"
+                    className="bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow group relative overflow-hidden cursor-pointer"
                     onClick={() => setSelectedAlbum(album)}
                   >
                     <div className="aspect-square bg-gray-50 flex items-center justify-center overflow-hidden rounded-t-xl">
@@ -264,7 +264,7 @@ function App() {
                 <h2 className="text-lg font-semibold text-gray-900 mb-4">Search Results</h2>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
                   {searchResults.discogs.map((album) => (
-                    <div key={album.discogsId} className="glass-card-hover group relative overflow-hidden">
+                    <div key={album.discogsId} className="bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow group relative overflow-hidden">
                       <div className="aspect-square bg-gray-50 flex items-center justify-center overflow-hidden rounded-t-xl">
                         {album.coverImageUrl ? (
                           <img
@@ -284,7 +284,7 @@ function App() {
                         {album.year && <p className="text-xs text-gray-400">{album.year}</p>}
                       </div>
                       <button
-                        className="absolute top-2 right-2 bg-[--color-vinyl-600] hover:bg-[--color-vinyl-700] text-white rounded-lg p-2 text-xs font-medium transition-all duration-200 shadow-sm flex items-center gap-1"
+                        className="absolute top-2 right-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg p-2 text-xs font-medium transition-all duration-200 shadow-sm flex items-center gap-1"
                         onClick={() => handleAddFromDiscogs(album)}
                         title="Add to collection"
                       >

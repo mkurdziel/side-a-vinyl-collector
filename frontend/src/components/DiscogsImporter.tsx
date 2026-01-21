@@ -97,14 +97,13 @@ export const DiscogsImporter = ({ onClose, onSuccess }: DiscogsImporterProps) =>
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose} style={{ margin: 0, padding: 0 }}>
-      <div className="bg-white rounded-xl shadow-2xl max-w-6xl w-full max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()} style={{ margin: '0 1rem' }}>
-        <div className="flex items-center justify-between border-b border-gray-200" style={{ padding: '1.5rem', margin: 0 }}>
-          <h2 className="text-xl font-bold text-gray-900" style={{ margin: 0 }}>Import from Discogs</h2>
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl max-w-6xl w-full max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-gray-200 p-6">
+          <h2 className="text-xl font-bold text-gray-900">Import from Discogs</h2>
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-gray-600 transition-colors"
-            style={{ padding: 0, margin: 0 }}
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -112,34 +111,32 @@ export const DiscogsImporter = ({ onClose, onSuccess }: DiscogsImporterProps) =>
           </button>
         </div>
 
-        <div className="flex-1 overflow-auto" style={{ padding: '2rem', margin: 0 }}>
+        <div className="flex-1 overflow-auto p-8">
           {albums.length === 0 ? (
-            <div className="text-center" style={{ padding: '4rem 0' }}>
-              <svg className="mx-auto w-16 h-16 text-gray-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ margin: '0 auto 1rem auto' }}>
+            <div className="text-center py-16">
+              <svg className="mx-auto w-16 h-16 text-gray-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
               </svg>
-              <p className="text-lg font-medium text-gray-900 mb-2" style={{ margin: '0 0 0.5rem 0' }}>Ready to import</p>
-              <p className="text-sm text-gray-500 mb-6" style={{ margin: '0 0 1.5rem 0' }}>Click the button below to fetch your Discogs collection</p>
+              <p className="text-lg font-medium text-gray-900 mb-2">Ready to import</p>
+              <p className="text-sm text-gray-500 mb-6">Click the button below to fetch your Discogs collection</p>
               <button
-                className="btn-primary"
+                className="px-5 py-2.5 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 onClick={handleFetchCollection}
                 disabled={loading}
-                style={{ margin: 0 }}
               >
                 {loading ? 'Fetching...' : 'Fetch Collection'}
               </button>
             </div>
           ) : (
             <>
-              <div className="flex items-center justify-between" style={{ marginBottom: '1.5rem' }}>
-                <p className="text-sm text-gray-600" style={{ margin: 0 }}>
+              <div className="flex items-center justify-between mb-6">
+                <p className="text-sm text-gray-600">
                   {albums.length} albums found • {imported.size} imported • {skipped.size} skipped
                 </p>
                 <button
-                  className="btn-primary"
+                  className="px-5 py-2.5 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   onClick={handleImportAll}
                   disabled={loading || imported.size + skipped.size === albums.length}
-                  style={{ margin: 0 }}
                 >
                   {loading ? 'Importing...' : 'Import All'}
                 </button>
@@ -151,7 +148,7 @@ export const DiscogsImporter = ({ onClose, onSuccess }: DiscogsImporterProps) =>
                   const isSkipped = skipped.has(album.discogsId);
 
                   return (
-                    <div key={album.discogsId} className={`glass-card overflow-hidden ${isImported || isSkipped ? 'opacity-50' : ''}`}>
+                    <div key={album.discogsId} className={`bg-white rounded-xl border border-gray-200 overflow-hidden ${isImported || isSkipped ? 'opacity-50' : ''}`}>
                       <div className="aspect-square bg-gray-50 flex items-center justify-center overflow-hidden">
                         {album.coverImageUrl ? (
                           <img
@@ -173,8 +170,7 @@ export const DiscogsImporter = ({ onClose, onSuccess }: DiscogsImporterProps) =>
                       {!isImported && !isSkipped && (
                         <div style={{ padding: '0.75rem' }}>
                           <button
-                            className="w-full btn-primary text-sm"
-                            style={{ padding: '0.5rem' }}
+                            className="w-full px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors"
                             onClick={() => handleImportAlbum(album)}
                           >
                             Import

@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import pool from '../config/database';
 import storageService from '../services/storage';
@@ -106,42 +106,43 @@ export const fetchOfficialCoverArt = asyncHandler(async (req: Request, res: Resp
       [mbAlbum.mbid, mbAlbum.coverArtUrl, id]
     );
 
-    return res.json({
-      message: 'Official cover art found and cached',
-      source: 'musicbrainz',
-      coverArtUrl: `/api/cover-art/${id}`
-    });
-  }
+  } else {
+    // No official cover art found - mark as attempted
+    await pool.query(
+      'UPDATE albums SET cover_art_fetched = TRUE WHERE id = $1',
+      [id]
+    );
 
-  // No official cover art found - mark as attempted
-  await pool.query(
-    'UPDATE albums SET cover_art_fetched = TRUE WHERE id = $1',
-    [id]
-  );
+    // Try to cache from Discogs if available
+    if (album.cover_image_url && !album.local_cover_path) {
+      try {
+        const imageBuffer = await musicbrainzService.downloadCoverArt(album.cover_image_url);
+        const localPath = await storageService.saveCoverArt(imageBuffer, album.id, album.cover_image_url);
 
-  // Try to cache from Discogs if available
-  if (album.cover_image_url && !album.local_cover_path) {
-    try {
-      const imageBuffer = await musicbrainzService.downloadCoverArt(album.cover_image_url);
-      const localPath = await storageService.saveCoverArt(imageBuffer, album.id, album.cover_image_url);
-
-      await pool.query(
-        'UPDATE albums SET local_cover_path = $1 WHERE id = $2',
-        [localPath, id]
-      );
-
-      return res.json({
-        message: 'No official cover art, but cached Discogs image locally',
-        source: 'discogs-cached',
-        coverArtUrl: `/api/cover-art/${id}`
-      });
-    } catch (error) {
-      console.error('Failed to cache Discogs cover art:', error);
+        await pool.query(
+          'UPDATE albums SET local_cover_path = $1 WHERE id = $2',
+          [localPath, id]
+        );
+      } catch (error) {
+        console.error('Failed to cache Discogs cover art:', error);
+      }
     }
   }
 
+  // Fetch the fully updated album to return to the frontend
+  const updatedResult = await pool.query(
+    `SELECT a.*, ar.name as artist_name 
+     FROM albums a
+     JOIN artists ar ON a.artist_id = ar.id
+     WHERE a.id = $1`,
+    [id]
+  );
+  
+  const updatedAlbum = updatedResult.rows[0];
+
   res.json({
-    message: 'No official cover art available for this album',
-    source: 'none'
+    message: 'Artwork refresh process completed',
+    album: updatedAlbum,
+    coverArtUrl: `/api/cover-art/${id}`
   });
 });

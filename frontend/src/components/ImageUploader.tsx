@@ -95,7 +95,7 @@ export const ImageUploader = ({ onClose, onSuccess }: ImageUploaderProps) => {
       onClick={onClose}
     >
       <div
-        className="glass-card max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto"
+        className="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex justify-between items-center mb-6">
@@ -110,7 +110,7 @@ export const ImageUploader = ({ onClose, onSuccess }: ImageUploaderProps) => {
 
         <div className="mb-6">
           {!imagePreview ? (
-            <label className="block glass-card-hover p-12 text-center cursor-pointer">
+            <label className="block bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow p-12 text-center cursor-pointer">
               <input
                 type="file"
                 accept="image/*"
@@ -124,7 +124,7 @@ export const ImageUploader = ({ onClose, onSuccess }: ImageUploaderProps) => {
               </div>
             </label>
           ) : (
-            <div className="glass-card p-4">
+            <div className="bg-white rounded-xl border border-gray-200 p-4">
               <img src={imagePreview} alt="Album cover" className="w-full rounded-lg" />
             </div>
           )}
@@ -132,7 +132,7 @@ export const ImageUploader = ({ onClose, onSuccess }: ImageUploaderProps) => {
 
         {analyzing && (
           <div className="text-center py-8">
-            <div className="inline-block w-12 h-12 border-4 border-[--color-vinyl-600]/30 border-t-[--color-vinyl-600] rounded-full animate-spin mb-4"></div>
+            <div className="inline-block w-12 h-12 border-4 border-purple-600/30 border-t-purple-600 rounded-full animate-spin mb-4"></div>
             <p className="text-lg font-medium text-gray-700">Analyzing with AI Vision...</p>
           </div>
         )}
@@ -194,7 +194,7 @@ export const ImageUploader = ({ onClose, onSuccess }: ImageUploaderProps) => {
               {matches.map((match) => (
                 <div
                   key={match.discogsId}
-                  className="glass-card-hover p-4 flex gap-4 cursor-pointer"
+                  className="bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow p-4 flex gap-4 cursor-pointer"
                   onClick={() => handleSelectMatch(match)}
                 >
                   {match.coverImageUrl && (
@@ -222,7 +222,7 @@ export const ImageUploader = ({ onClose, onSuccess }: ImageUploaderProps) => {
           </div>
         )}
 
-        <button className="w-full btn-danger" onClick={onClose}>
+        <button className="w-full px-4 py-2 text-white bg-red-500 hover:bg-red-600 rounded-lg font-medium transition-colors" onClick={onClose}>
           Cancel
         </button>
       </div>

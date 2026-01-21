@@ -11,7 +11,7 @@ export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick, onImportC
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full mx-4" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-gray-200" style={{ padding: '1.5rem' }}>
+        <div className="flex items-center justify-between border-b border-gray-200 p-6">
           <h2 className="text-xl font-bold text-gray-900">Add Album</h2>
           <button
             onClick={onClose}
@@ -22,9 +22,9 @@ export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick, onImportC
             </svg>
           </button>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4" style={{ padding: '2rem' }}>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-8">
       <button
-        className="glass-card-hover p-6 text-left group flex items-start gap-4"
+        className="bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow p-6 text-left group flex items-start gap-4"
         onClick={onBarcodeClick}
       >
         <div className="p-3 bg-violet-50 rounded-lg group-hover:bg-violet-100 transition-colors">
@@ -39,7 +39,7 @@ export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick, onImportC
       </button>
 
       <button
-        className="glass-card-hover p-6 text-left group flex items-start gap-4"
+        className="bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow p-6 text-left group flex items-start gap-4"
         onClick={onImageClick}
       >
         <div className="p-3 bg-pink-50 rounded-lg group-hover:bg-pink-100 transition-colors">
@@ -54,7 +54,7 @@ export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick, onImportC
       </button>
 
       <button
-        className="glass-card-hover p-6 text-left group flex items-start gap-4"
+        className="bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow p-6 text-left group flex items-start gap-4"
         onClick={onSearchClick}
       >
         <div className="p-3 bg-blue-50 rounded-lg group-hover:bg-blue-100 transition-colors">
@@ -69,7 +69,7 @@ export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick, onImportC
       </button>
 
       <button
-        className={`glass-card-hover p-6 text-left group flex items-start gap-4 ${!discogsConfigured ? 'opacity-50 cursor-not-allowed' : ''}`}
+        className={`bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow p-6 text-left group flex items-start gap-4 ${!discogsConfigured ? 'opacity-50 cursor-not-allowed' : ''}`}
         onClick={discogsConfigured ? onImportClick : undefined}
         disabled={!discogsConfigured}
       >
