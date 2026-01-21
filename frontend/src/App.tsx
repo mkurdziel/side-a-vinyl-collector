@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Toaster, toast } from 'react-hot-toast';
 import api, { type Album, type DiscogsAlbum } from './services/api';
 import { AddMenu } from './components/AddMenu';
@@ -17,10 +17,20 @@ function App() {
   const [showImageUploader, setShowImageUploader] = useState(false);
   const [showDiscogsImporter, setShowDiscogsImporter] = useState(false);
   const [discogsConfigured, setDiscogsConfigured] = useState(false);
+  const searchTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     loadAlbums();
     checkDiscogsConfig();
+  }, []);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+    };
   }, []);
 
   const checkDiscogsConfig = async () => {
@@ -43,8 +53,7 @@ function App() {
     }
   };
 
-  const handleSearch = async (query: string) => {
-    setSearchQuery(query);
+  const performSearch = async (query: string) => {
     if (query.trim().length < 2) {
       setSearchResults(null);
       return;
@@ -56,6 +65,26 @@ function App() {
     } catch (error) {
       toast.error('Search failed');
     }
+  };
+
+  const handleSearch = (query: string) => {
+    setSearchQuery(query);
+
+    // Clear existing timeout
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+
+    // If query is empty or too short, clear results immediately
+    if (query.trim().length < 2) {
+      setSearchResults(null);
+      return;
+    }
+
+    // Debounce the actual search API call
+    searchTimeoutRef.current = setTimeout(() => {
+      performSearch(query);
+    }, 500); // 500ms delay
   };
 
   const handleAddFromDiscogs = async (album: DiscogsAlbum) => {

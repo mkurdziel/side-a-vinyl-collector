@@ -37,6 +37,7 @@ export const DiscogsImporter = ({ onClose, onSuccess }: DiscogsImporterProps) =>
       });
       setImported(prev => new Set(prev).add(album.discogsId));
       toast.success(`Added ${album.album}`);
+      onSuccess(); // Refresh the main vinyl list
     } catch (error: any) {
       if (error.message.includes('already in collection')) {
         setSkipped(prev => new Set(prev).add(album.discogsId));
