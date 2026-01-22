@@ -8,14 +8,22 @@ export const useBarcodeScanner = (onDetected: (barcode: string) => void, isActiv
   useEffect(() => {
     if (!isActive || !scannerRef.current) return;
 
-    const config: any = {
+    const config: QuaggaJSConfigObject = {
       inputStream: {
         type: 'LiveStream',
         target: scannerRef.current,
         constraints: {
-          width: 640,
-          height: 480,
-          facingMode: 'environment',
+          width: { min: 640, ideal: 1280, max: 1920 },
+          height: { min: 480, ideal: 720, max: 1080 },
+          facingMode: 'environment', // Use back camera
+          aspectRatio: { ideal: 16/9 },
+        },
+        area: {
+          // Define scanning area - positioned higher for better iPhone alignment
+          top: '20%',
+          right: '10%',
+          left: '10%',
+          bottom: '50%',
         },
       },
       locator: {
