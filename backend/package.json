@@ -1,5 +1,5 @@
 {
-  "name": "vinyl-collector-backend",
+  "name": "side-a-vinyl-collector-backend",
   "version": "1.0.0",
   "module": "index.ts",
   "type": "module",
