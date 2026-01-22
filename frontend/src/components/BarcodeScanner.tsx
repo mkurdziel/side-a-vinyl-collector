@@ -9,18 +9,16 @@ interface BarcodeScannerProps {
   viewMode: 'collection' | 'wishlist';
 }
 
-export const BarcodeScanner = ({ onClose, onSuccess, viewMode }: BarcodeScannerProps) => {
+export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
   const [scanning, setScanning] = useState(true);
   const [lastBarcode, setLastBarcode] = useState<string>('');
   const [scannedResult, setScannedResult] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(false);
 
   const handleDetected = async (barcode: string) => {
     if (barcode === lastBarcode) return; // Prevent duplicate scans
 
     setLastBarcode(barcode);
     setScanning(false);
-    setIsLoading(true);
 
     try {
       toast.loading('Looking up barcode...', { id: 'barcode' });
@@ -29,12 +27,10 @@ export const BarcodeScanner = ({ onClose, onSuccess, viewMode }: BarcodeScannerP
 
       toast.success('Album found!', { id: 'barcode' });
       setScannedResult({ ...result, barcode });
-      setIsLoading(false);
     } catch (error: any) {
       toast.error(error.message || 'Failed to find album', { id: 'barcode' });
       setScanning(true);
       setLastBarcode('');
-      setIsLoading(false);
     }
   };
 
