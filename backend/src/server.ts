@@ -79,12 +79,7 @@ app.post('/api/cover-art/:id/update', coverArtController.updateCoverArt);
 
 // SPA fallback - serve index.html for all non-API routes (single-container mode)
 // This must come AFTER all API routes
-app.get('*', (req, res, next) => {
-  // Skip if this is an API route or health check
-  if (req.path.startsWith('/api/') || req.path.startsWith('/health')) {
-    return next();
-  }
-  
+app.get(/^\/(?!api\/).*/, (req, res, next) => {
   const indexPath = path.join(__dirname, '../public/index.html');
   if (existsSync(indexPath)) {
     res.sendFile(indexPath);
