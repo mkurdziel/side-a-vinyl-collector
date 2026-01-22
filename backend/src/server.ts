@@ -16,7 +16,17 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
-app.use(cors());
+// CORS - optional, only enabled if CORS_ORIGIN is set
+if (process.env.CORS_ORIGIN) {
+  console.log(`✓ CORS enabled for origin: ${process.env.CORS_ORIGIN}`);
+  app.use(cors({
+    origin: process.env.CORS_ORIGIN,
+    credentials: true
+  }));
+} else {
+  console.log('✓ CORS disabled (same-origin only)');
+}
+
 app.use(express.json({ limit: '10mb' }));
 app.use(morgan('dev'));
 
