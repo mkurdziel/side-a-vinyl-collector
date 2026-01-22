@@ -24,6 +24,15 @@ function App() {
   const [viewMode, setViewMode] = useState<'collection' | 'wishlist'>('collection');
   const [addedAlbums, setAddedAlbums] = useState<Set<string | number>>(new Set());
   const searchTimeoutRef = useRef<number | null>(null);
+  const [sortBy, setSortBy] = useState<'title' | 'artist' | 'date'>(() => {
+    const saved = localStorage.getItem('albumSortBy');
+    return (saved as 'title' | 'artist' | 'date') || 'title';
+  });
+
+  // Save sort preference to localStorage
+  useEffect(() => {
+    localStorage.setItem('albumSortBy', sortBy);
+  }, [sortBy]);
 
   useEffect(() => {
     loadAlbums();
@@ -141,7 +150,7 @@ function App() {
       case 'artist':
         return sorted.sort((a, b) => a.artist_name.localeCompare(b.artist_name));
       case 'date':
-        return sorted.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        return sorted.sort((a, b) => new Date(b.added_at).getTime() - new Date(a.added_at).getTime());
       case 'title':
       default:
         return sorted.sort((a, b) => a.title.localeCompare(b.title));
