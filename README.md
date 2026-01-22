@@ -5,6 +5,11 @@ A modern web application for managing your vinyl record collection with AI-power
 ## Features
 
 - **Album Management**: Add, view, and organize your vinyl collection
+- **Wishlist Management**: 
+  - Separate wishlist view for albums you want to acquire
+  - Easy toggle between Collection and Wishlist
+  - Move albums between collection and wishlist
+  - Search and add directly to wishlist
 - **AI Vision Recognition**: Upload photos of album covers for automatic identification
   - Dual-provider fallback system (OpenAI GPT-4 + Anthropic Claude)
   - Configurable confidence thresholds
@@ -13,15 +18,22 @@ A modern web application for managing your vinyl record collection with AI-power
 - **Discogs Integration**: Import your entire Discogs collection
   - Automatic deduplication
   - Bulk import with progress tracking
-- **MusicBrainz Integration**: Official cover art from Cover Art Archive
+- **MusicBrainz Integration**: 
+  - Official cover art from Cover Art Archive
+  - Artist and album discovery with prioritized results
   - Automatic fallback to Discogs artwork
   - Local caching for fast loading
   - Optional - can be disabled to use only Discogs
-- **Smart Search**: Search your collection and Discogs database with debouncing
+- **Smart Search**: 
+  - Search your collection and external databases (MusicBrainz + Discogs)
+  - Visual indicators for items already in collection/wishlist
+  - Seamless multi-add workflow without page reloads
+  - Debounced search for performance
 - **Cover Art Management**:
   - Priority: Local cache → MusicBrainz → Discogs
   - Persistent storage with Docker volumes
   - Automatic format detection and optimization
+- **Data Backup/Restore**: Export and import your entire collection with cover art
 
 ## Tech Stack
 
@@ -195,9 +207,19 @@ See `.env.example` for all configuration options:
 - Vision AI: OpenAI and Anthropic API keys
 - Vision Config: Provider selection and confidence threshold
 
+## CI/CD
+
+This project uses GitHub Actions for continuous integration and release management:
+
+- **CI**: Automatically builds and tests on every push/PR to `main`
+- **Release**: Tag with `v*` (e.g., `v1.0.0`) to trigger Docker image builds
+- **Registry**: Images published to GitHub Container Registry (GHCR)
+  - `ghcr.io/mkurdziel/side-a-vinyl-collector-backend`
+  - `ghcr.io/mkurdziel/side-a-vinyl-collector-frontend`
+
 ## License
 
-MIT
+GPL-3.0 - see [LICENSE](LICENSE) file for details
 
 ## Contributing
 
