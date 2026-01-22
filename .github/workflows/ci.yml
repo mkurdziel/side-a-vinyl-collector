@@ -9,9 +9,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        service: [backend, frontend]
 
     steps:
     - uses: actions/checkout@v4
@@ -19,12 +16,12 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Build ${{ matrix.service }}
+    - name: Build combined image
       uses: docker/build-push-action@v5
       with:
-        context: ./${{ matrix.service }}
-        file: ./${{ matrix.service }}/Dockerfile
+        context: .
+        file: ./Dockerfile.combined
         push: false
-        tags: side-a-vinyl-collector-${{ matrix.service }}:test
+        tags: side-a-vinyl-collector:test
         cache-from: type=gha
         cache-to: type=gha,mode=max

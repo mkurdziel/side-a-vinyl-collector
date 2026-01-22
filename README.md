@@ -240,10 +240,16 @@ See `.env.example` for all configuration options:
 This project uses GitHub Actions for continuous integration and release management:
 
 - **CI**: Automatically builds and tests on every push/PR to `main`
-- **Release**: Tag with `v*` (e.g., `v1.0.0`) to trigger Docker image builds
+- **Release**: Tag with `v*` (e.g., `v1.0.0`) to trigger Docker image build
 - **Registry**: Images published to GitHub Container Registry (GHCR)
-  - `ghcr.io/mkurdziel/side-a-vinyl-collector-backend`
-  - `ghcr.io/mkurdziel/side-a-vinyl-collector-frontend`
+  - `ghcr.io/mkurdziel/side-a-vinyl-collector:latest`
+  - `ghcr.io/mkurdziel/side-a-vinyl-collector:v1.0.0`
+
+### Pulling the Image
+
+```bash
+docker pull ghcr.io/mkurdziel/side-a-vinyl-collector:latest
+```
 
 ## License
 
