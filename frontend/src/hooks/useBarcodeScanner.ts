@@ -13,17 +13,16 @@ export const useBarcodeScanner = (onDetected: (barcode: string) => void, isActiv
         type: 'LiveStream',
         target: scannerRef.current,
         constraints: {
-          width: { min: 640, ideal: 1280, max: 1920 },
-          height: { min: 480, ideal: 720, max: 1080 },
+          width: { min: 640 },
+          height: { min: 480 },
           facingMode: 'environment', // Use back camera
-          aspectRatio: { ideal: 16/9 },
         },
         area: {
-          // Define scanning area - positioned higher for better iPhone alignment
-          top: '20%',
-          right: '10%',
-          left: '10%',
-          bottom: '50%',
+          // Define scanning area - centered
+          top: '25%',
+          right: '15%',
+          left: '15%',
+          bottom: '25%',
         },
       },
       locator: {

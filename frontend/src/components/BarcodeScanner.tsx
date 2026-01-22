@@ -92,7 +92,7 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
           </button>
         </div>
 
-        <div className="relative bg-black rounded-xl overflow-hidden mb-6 shadow-md border border-gray-200">
+        <div className="relative bg-black rounded-xl overflow-hidden mb-6 shadow-md border border-gray-200 aspect-[3/4] md:aspect-video">
           {error ? (
             <div className="text-center py-16 px-4">
               <div className="inline-block p-4 bg-red-50 rounded-full mb-4">
@@ -105,16 +105,16 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
             </div>
           ) : (
             <>
-              <div ref={scannerRef} className="w-full" style={{ minHeight: '400px' }} />
+              <div ref={scannerRef} className="w-full h-full [&>video]:w-full [&>video]:h-full [&>video]:object-cover [&>canvas]:hidden" />
               <div className="absolute inset-0 pointer-events-none">
-                {/* Scanning frame - positioned to match actual scan area (20-50% from top) */}
-                <div className="absolute left-1/2 -translate-x-1/2 w-3/4 max-w-xs h-40 border-2 border-purple-500 rounded-xl shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]" style={{ top: '25%' }}>
+                {/* Scanning frame - centered */}
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-3/4 max-w-xs h-40 border-2 border-purple-500 rounded-xl shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]">
                   <div className="absolute top-0 left-0 right-0 h-0.5 bg-purple-500 animate-scan" style={{ top: '50%', boxShadow: '0 0 8px 2px rgba(168, 85, 247, 0.6)' }} />
                 </div>
               </div>
               
-              {/* Mobile close button overlay */}
-              <div className="absolute top-4 right-4 md:hidden pointer-events-auto">
+              {/* Mobile close button overlay - high z-index */}
+              <div className="absolute top-4 right-4 md:hidden pointer-events-auto z-50">
                 <button
                   onClick={onClose}
                   className="bg-white/90 backdrop-blur-sm text-gray-900 p-3 rounded-full shadow-lg hover:bg-white transition-colors"
@@ -126,7 +126,7 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
                 </button>
               </div>
 
-              <div className="absolute bottom-6 left-0 right-0 text-center pointer-events-none">
+              <div className="absolute bottom-6 left-0 right-0 text-center pointer-events-none z-10">
                    <span className="inline-block bg-black/60 backdrop-blur-sm text-white px-4 py-2 rounded-full text-sm font-medium border border-white/10">
                     Position barcode within the frame
                    </span>
