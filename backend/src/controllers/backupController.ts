@@ -96,7 +96,7 @@ export const importBackup = asyncHandler(async (req: Request, res: Response) => 
     await disableConstraints(client);
 
     // 3. Truncate tables
-    await client.query('TRUNCATE TABLE collections, albums, artists CASCADE');
+    await client.query('TRUNCATE TABLE collection, albums, artists CASCADE');
 
     // 4. Restore Artists
     if (data.artists && data.artists.length > 0) {
