@@ -8,7 +8,7 @@ export const useBarcodeScanner = (onDetected: (barcode: string) => void, isActiv
   useEffect(() => {
     if (!isActive || !scannerRef.current) return;
 
-    const config: QuaggaJSConfigObject = {
+    const config: any = {
       inputStream: {
         type: 'LiveStream',
         target: scannerRef.current,
