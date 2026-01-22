@@ -20,6 +20,17 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(morgan('dev'));
 
+// Serve static files from frontend build (for single-container deployment)
+// This will be a no-op if the 'public' directory doesn't exist (multi-container mode)
+import path from 'path';
+import { existsSync } from 'fs';
+
+const publicPath = path.join(__dirname, '../public');
+if (existsSync(publicPath)) {
+  console.log('✓ Serving frontend static files from /public');
+  app.use(express.static(publicPath));
+}
+
 // Health check endpoint
 app.get('/health', async (req, res) => {
   try {
@@ -65,6 +76,22 @@ app.get('/api/cover-art/:id', coverArtController.getCoverArt);
 app.post('/api/cover-art/:id/fetch', coverArtController.fetchOfficialCoverArt);
 app.get('/api/cover-art/:id/search', coverArtController.searchCoverArt);
 app.post('/api/cover-art/:id/update', coverArtController.updateCoverArt);
+
+// SPA fallback - serve index.html for all non-API routes (single-container mode)
+// This must come AFTER all API routes
+app.get('*', (req, res, next) => {
+  // Skip if this is an API route or health check
+  if (req.path.startsWith('/api/') || req.path.startsWith('/health')) {
+    return next();
+  }
+  
+  const indexPath = path.join(__dirname, '../public/index.html');
+  if (existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    next();
+  }
+});
 
 // Error handling
 app.use(errorHandler);

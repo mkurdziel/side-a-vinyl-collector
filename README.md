@@ -54,6 +54,10 @@ A modern web application for managing your vinyl record collection with AI-power
 
 ## Quick Start
 
+### Option 1: Single Container (Recommended for Simple Deployments)
+
+The easiest way to run Vinyl Collector - everything in one container:
+
 1. Clone the repository:
 ```bash
 git clone https://github.com/mkurdziel/side-a-vinyl-collector.git
@@ -65,7 +69,31 @@ cd side-a-vinyl-collector
 cp .env.example .env
 ```
 
-3. Configure your API keys in `.env`:
+3. Configure your API keys in `.env` (see Configuration section below)
+
+4. Start the application:
+```bash
+docker compose -f docker-compose.single.yml up -d
+```
+
+5. Access the app at http://localhost:5001
+
+### Option 2: Multi-Container (For Development/Advanced Use)
+
+Separate frontend and backend containers for independent scaling:
+
+1-3. Same as Option 1
+
+4. Start the application:
+```bash
+docker compose up -d
+```
+
+5. Access the app:
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:5001
+
+## Configuration
 ```bash
 # Required for Discogs import and fallback cover art
 DISCOGS_TOKEN=your_discogs_token
