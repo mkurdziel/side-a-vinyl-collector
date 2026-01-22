@@ -12,12 +12,15 @@ interface BarcodeScannerProps {
 export const BarcodeScanner = ({ onClose, onSuccess, viewMode }: BarcodeScannerProps) => {
   const [scanning, setScanning] = useState(true);
   const [lastBarcode, setLastBarcode] = useState<string>('');
+  const [scannedResult, setScannedResult] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleDetected = async (barcode: string) => {
     if (barcode === lastBarcode) return; // Prevent duplicate scans
 
     setLastBarcode(barcode);
     setScanning(false);
+    setIsLoading(true);
 
     try {
       toast.loading('Looking up barcode...', { id: 'barcode' });
@@ -25,26 +28,42 @@ export const BarcodeScanner = ({ onClose, onSuccess, viewMode }: BarcodeScannerP
       const result = await api.scanBarcode(barcode);
 
       toast.success('Album found!', { id: 'barcode' });
-
-      // Add to collection
-      await api.addAlbum({
-        artist: result.artist,
-        album: result.album,
-        year: result.year,
-        coverImageUrl: result.coverImageUrl,
-        discogsId: result.discogsId,
-        barcode,
-        status: viewMode,
-      });
-
-      toast.success(`Added "${result.album}" by ${result.artist} to ${viewMode}`);
-      onSuccess();
-      onClose();
+      setScannedResult({ ...result, barcode });
+      setIsLoading(false);
     } catch (error: any) {
       toast.error(error.message || 'Failed to find album', { id: 'barcode' });
       setScanning(true);
       setLastBarcode('');
+      setIsLoading(false);
     }
+  };
+
+  const handleAddToCollection = async (status: 'collection' | 'wishlist') => {
+    if (!scannedResult) return;
+
+    try {
+      await api.addAlbum({
+        artist: scannedResult.artist,
+        album: scannedResult.album,
+        year: scannedResult.year,
+        coverImageUrl: scannedResult.coverImageUrl,
+        discogsId: scannedResult.discogsId,
+        barcode: scannedResult.barcode,
+        status,
+      });
+
+      toast.success(`Added "${scannedResult.album}" by ${scannedResult.artist} to ${status}`);
+      onSuccess();
+      onClose();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to add album');
+    }
+  };
+
+  const handleScanAnother = () => {
+    setScannedResult(null);
+    setLastBarcode('');
+    setScanning(true);
   };
 
   const { scannerRef, error } = useBarcodeScanner(handleDetected, scanning);
@@ -119,6 +138,49 @@ export const BarcodeScanner = ({ onClose, onSuccess, viewMode }: BarcodeScannerP
             </>
           )}
         </div>
+
+        {/* Confirmation Dialog */}
+        {scannedResult && (
+          <div className="mb-6 bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl p-6 border border-purple-200">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Album Found!</h3>
+            <div className="flex gap-4 mb-4">
+              {scannedResult.coverImageUrl && (
+                <img 
+                  src={scannedResult.coverImageUrl} 
+                  alt={scannedResult.album}
+                  className="w-24 h-24 rounded-lg object-cover shadow-md"
+                />
+              )}
+              <div className="flex-1">
+                <p className="font-semibold text-gray-900">{scannedResult.album}</p>
+                <p className="text-sm text-gray-600">{scannedResult.artist}</p>
+                {scannedResult.year && <p className="text-sm text-gray-500">{scannedResult.year}</p>}
+                <p className="text-xs text-gray-400 mt-1">Barcode: {scannedResult.barcode}</p>
+              </div>
+            </div>
+            
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => handleAddToCollection('collection')}
+                className="w-full px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition-colors"
+              >
+                Add to Collection
+              </button>
+              <button
+                onClick={() => handleAddToCollection('wishlist')}
+                className="w-full px-4 py-2.5 bg-pink-600 hover:bg-pink-700 text-white rounded-lg font-medium transition-colors"
+              >
+                Add to Wishlist
+              </button>
+              <button
+                onClick={handleScanAnother}
+                className="w-full px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
+              >
+                Scan Another
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="flex justify-end pt-2">
             <button 
