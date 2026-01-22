@@ -37,6 +37,8 @@ export interface DiscogsAlbum {
   year?: number;
   coverImageUrl?: string;
   discogsId: number;
+  inCollection?: boolean;
+  inWishlist?: boolean;
   fromProvider?: string;
   confidence?: number;
 }

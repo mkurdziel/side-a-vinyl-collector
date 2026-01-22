@@ -22,6 +22,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [discogsConfigured, setDiscogsConfigured] = useState(false);
   const [viewMode, setViewMode] = useState<'collection' | 'wishlist'>('collection');
+  const [addedAlbums, setAddedAlbums] = useState<Set<string | number>>(new Set());
   const searchTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -92,7 +93,7 @@ function App() {
     }, 500); // 500ms delay
   };
 
-  const handleAddFromDiscogs = async (album: DiscogsAlbum) => {
+  const handleAddFromDiscogs = async (album: DiscogsAlbum, targetStatus: 'collection' | 'wishlist') => {
     try {
       await api.addAlbum({
         artist: album.artist,
@@ -100,12 +101,20 @@ function App() {
         year: album.year,
         coverImageUrl: album.coverImageUrl,
         discogsId: album.discogsId,
-        status: viewMode,
+        status: targetStatus,
       });
-      toast.success(`Album added to ${viewMode}`);
-      loadAlbums();
-      setSearchResults(null);
-      setSearchQuery('');
+      
+      toast.success(`Album added to ${targetStatus}`);
+      
+      // Update local state to show "Added" in UI without reload
+      setAddedAlbums(prev => {
+        const next = new Set(prev);
+        next.add(album.coverImageUrl || album.discogsId);
+        return next;
+      });
+      
+      // Silently refresh main list in background
+      loadAlbums(); 
     } catch (error: any) {
       toast.error(error.message || 'Failed to add album');
     }
@@ -266,14 +275,31 @@ function App() {
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-              {displayAlbums.length === 0 ? (
-                <div className="col-span-full text-center py-16 px-4">
-                  <svg className="mx-auto w-16 h-16 text-gray-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                  </svg>
-                  <p className="text-lg font-medium text-gray-900 mb-1">No albums yet</p>
-                  <p className="text-sm text-gray-500">Add your first vinyl record to get started</p>
+            {(!searchQuery || viewMode === 'collection') ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+                {displayAlbums.length === 0 ? (
+                  <div className="col-span-full text-center py-16 px-4">
+                    <div className="bg-gray-100 rounded-full w-20 h-20 flex items-center justify-center mx-auto mb-4">
+                      {searchQuery ? (
+                         <svg className="w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                         </svg>
+                      ) : (
+                         <svg className="mx-auto w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                         </svg>
+                      )}
+                    </div>
+                    <h3 className="text-lg font-medium text-gray-900">
+                      {searchQuery ? 'No matching albums found' : (viewMode === 'wishlist' ? 'Your wishlist is empty' : 'No albums yet')}
+                    </h3>
+                    {!searchQuery && (
+                      <p className="mt-1 text-gray-500">
+                        {viewMode === 'wishlist' 
+                          ? 'Search for albums above to add them to your wishlist.'
+                          : 'Start building your collection by adding an album.'}
+                      </p>
+                    )}
                 </div>
               ) : (
                 displayAlbums.map((album) => (
@@ -323,6 +349,12 @@ function App() {
                 ))
               )}
             </div>
+            ) : searchQuery && viewMode === 'wishlist' && (!searchResults || !searchResults.discogs || searchResults.discogs.length === 0) ? (
+               <div className="text-center py-16">
+                 <p className="text-gray-500 mb-2">No matching albums found.</p>
+                 <p className="text-sm text-gray-400">Try checking your spelling or searching for a different artist.</p>
+               </div>
+            ) : null}
 
             {searchResults && searchResults.discogs.length > 0 && (
               <div className="mt-12 pt-8 border-t border-gray-200">
@@ -348,16 +380,57 @@ function App() {
                         <p className="text-xs text-gray-600 truncate mb-0.5">{album.artist}</p>
                         {album.year && <p className="text-xs text-gray-400">{album.year}</p>}
                       </div>
-                      <button
-                        className="absolute top-2 right-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg p-2 text-xs font-medium transition-all duration-200 shadow-sm flex items-center gap-1"
-                        onClick={() => handleAddFromDiscogs(album)}
-                        title="Add to collection"
-                      >
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                        </svg>
-                        Add to {viewMode}
-                      </button>
+                      <div className={`absolute top-2 right-2 flex flex-col gap-1 transition-opacity duration-200 ${
+                        album.inCollection || album.inWishlist || addedAlbums.has(album.coverImageUrl || album.discogsId)
+                          ? 'opacity-100'
+                          : 'opacity-0 group-hover:opacity-100'
+                      }`}>
+                        {album.inCollection ? (
+                           <div className="bg-green-600 text-white rounded-lg p-2 text-xs font-medium shadow-sm flex items-center justify-center gap-1 w-32 cursor-default">
+                             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                             </svg>
+                             In Collection
+                          </div>
+                        ) : album.inWishlist ? (
+                           <div className="bg-purple-600 text-white rounded-lg p-2 text-xs font-medium shadow-sm flex items-center justify-center gap-1 w-32 cursor-default">
+                             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                             </svg>
+                             In Wishlist
+                          </div>
+                        ) : addedAlbums.has(album.coverImageUrl || album.discogsId) ? (
+                          <div className="bg-green-600 text-white rounded-lg p-2 text-xs font-medium shadow-sm flex items-center justify-center gap-1 w-32">
+                             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                             </svg>
+                             Added
+                          </div>
+                        ) : (
+                          <>
+                            <button
+                              className="bg-purple-600 hover:bg-purple-700 text-white rounded-lg p-2 text-xs font-medium shadow-sm flex items-center justify-center gap-1 w-32"
+                              onClick={() => handleAddFromDiscogs(album, 'collection')}
+                              title="Add to Collection"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                              </svg>
+                              Collection
+                            </button>
+                            <button
+                              className="bg-white hover:bg-gray-100 text-purple-600 border border-purple-200 rounded-lg p-2 text-xs font-medium shadow-sm flex items-center justify-center gap-1 w-32"
+                              onClick={() => handleAddFromDiscogs(album, 'wishlist')}
+                              title="Add to Wishlist"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                              </svg>
+                              Wishlist
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>

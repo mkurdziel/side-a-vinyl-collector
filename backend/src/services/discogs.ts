@@ -140,6 +140,89 @@ class DiscogsService {
     }
   }
 
+  async searchArtist(query: string): Promise<{ id: number; title: string } | null> {
+    const cacheKey = `artist_search:${query}`;
+    const cached = await this.getCached<{ id: number; title: string }>(cacheKey);
+    if (cached) return cached;
+
+    try {
+      const result = await this.rateLimiter.execute(async () => {
+        const response = await this.client.get<DiscogsSearchResponse>('/database/search', {
+          params: { q: query, type: 'artist', per_page: 1 }
+        });
+        return response.data;
+      });
+
+      if (result.results && result.results.length > 0) {
+        const artist = {
+          id: result.results[0].id,
+          title: result.results[0].title
+        };
+        await this.setCache(cacheKey, artist);
+        return artist;
+      }
+      return null;
+    } catch (error) {
+      console.error('Discogs artist search error:', error);
+      return null;
+    }
+  }
+
+  async getArtistReleases(artistId: number, limit: number = 20): Promise<DiscogsAlbum[]> {
+    const cacheKey = `artist_releases:${artistId}:${limit}`;
+    const cached = await this.getCached<DiscogsAlbum[]>(cacheKey);
+    if (cached) return cached;
+
+    try {
+      const result = await this.rateLimiter.execute(async () => {
+        // Fetch releases sorted by year or popularity (Discogs API defaults)
+        const response = await this.client.get(`/artists/${artistId}/releases`, {
+          params: { sort: 'year', sort_order: 'desc', per_page: limit * 2 } // Fetch more to filter
+        });
+        return response.data;
+      });
+
+      // Filter main releases (masters or main releases)
+      const albums: DiscogsAlbum[] = [];
+      const seen = new Set<string>();
+
+      for (const release of result.releases) {
+        // Simple deduplication by title
+        const titleKey = release.title.toLowerCase().trim();
+        if (seen.has(titleKey)) continue;
+        
+        // Skip singles/EPs if possible, though Discogs structure varies. 
+        // We'll trust Discogs 'Main' releases or similar if available, otherwise take all.
+        // For 'releases' endpoint, it lists everything.
+        // Let's filter slightly by type if available, but Discogs API is loose here without deeper calls.
+        // We will just map them.
+        
+        seen.add(titleKey);
+
+        const year = release.year || undefined;
+        // Use thumb as cover image - it's usually available in list view
+        const coverImageUrl = release.thumb || undefined;
+
+        albums.push({
+          id: release.id,
+          artist: release.artist, // 'artist' field might not be present in list, logic below
+          album: release.title,
+          year,
+          coverImageUrl,
+          discogsId: release.id // This might be a master ID or release ID depending on type
+        });
+        
+        if (albums.length >= limit) break;
+      }
+
+      await this.setCache(cacheKey, albums);
+      return albums;
+    } catch (error) {
+      console.error(`Discogs artist releases error for ${artistId}:`, error);
+      return [];
+    }
+  }
+
   async getUserCollection(username: string, page: number = 1, perPage: number = 100): Promise<DiscogsAlbum[]> {
     if (!this.isConfigured()) {
       throw new Error('Discogs token not configured');

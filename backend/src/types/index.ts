@@ -37,6 +37,7 @@ export interface Barcode {
 export interface AlbumWithArtist extends Album {
   artist_name: string;
   notes?: string;
+  status: 'collection' | 'wishlist';
   added_at?: Date;
 }
 
