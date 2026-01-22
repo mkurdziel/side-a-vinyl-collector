@@ -1,13 +1,14 @@
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
+import os from 'os';
 
 class StorageService {
   private storageDir: string;
 
   constructor() {
-    // Store cover art in a persistent volume
-    this.storageDir = process.env.COVER_ART_STORAGE_PATH || '/app/data/cover-art';
+    // Store cover art in a persistent volume (Docker) or temp dir (local dev/test)
+    this.storageDir = process.env.COVER_ART_STORAGE_PATH || path.join(os.tmpdir(), 'vinyl-collector', 'cover-art');
     this.ensureStorageDir();
   }
 

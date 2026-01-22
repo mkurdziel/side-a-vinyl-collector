@@ -1,4 +1,4 @@
-import { GenericContainer, StartedTestContainer, Wait } from 'testcontainers';
+import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers';
 import { Pool } from 'pg';
 import Redis from 'ioredis';
 
@@ -16,13 +16,15 @@ export async function setupTestContainers() {
       POSTGRES_PASSWORD: 'test_pass',
     })
     .withExposedPorts(5432)
-    .withWaitStrategy(Wait.forLogMessage(/database system is ready to accept connections/))
+    .withWaitStrategy(Wait.forLogMessage(/database system is ready to accept connections/, 2))
+    .withStartupTimeout(120000)
     .start();
 
   // Start Redis container
   redisContainer = await new GenericContainer('redis:7-alpine')
     .withExposedPorts(6379)
     .withWaitStrategy(Wait.forLogMessage(/Ready to accept connections/))
+    .withStartupTimeout(60000)
     .start();
 
   // Setup database connection
@@ -35,6 +37,8 @@ export async function setupTestContainers() {
     database: 'test_vinyl',
     user: 'test_user',
     password: 'test_pass',
+    max: 10,
+    connectionTimeoutMillis: 10000,
   });
 
   // Setup Redis connection
@@ -44,9 +48,13 @@ export async function setupTestContainers() {
   testRedis = new Redis({
     host: redisHost,
     port: redisPort,
+    retryStrategy: (times) => Math.min(times * 50, 2000),
   });
 
-  // Run migrations
+  // Wait a bit for connections to stabilize
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
+  // Run migrations with retry
   await runMigrations(testPool);
 
   // Set environment variables for tests
