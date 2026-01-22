@@ -1,0 +1,87 @@
+---
+- name: VINYL - Install psycopg2 using apt
+  ansible.builtin.apt:
+    name: python3-psycopg2
+    state: present
+
+- name: VINYL - Ensure the PostgreSQL database exists
+  community.postgresql.postgresql_db:
+    name: vinyl_collector
+    state: present
+    login_user: "{{ username }}"
+    login_password: "{{ default_pass }}"
+    login_host: "{{ host_db }}"
+    login_port: 5432
+
+- name: VINYL - Ensure Redis is available
+  community.docker.docker_container:
+    name: vinyl_redis
+    image: redis:7-alpine
+    restart_policy: unless-stopped
+    state: started
+    pull: true
+    command: redis-server --appendonly yes
+    networks:
+      - name: homelab
+    volumes:
+      - "{{ docker_dir }}/vinyl/redis_data:/data"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+- name: VINYL - Ensure {{ docker_dir }}/vinyl/cover-art directory exists
+  ansible.builtin.file:
+    path: "{{ docker_dir }}/vinyl/cover-art"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+    recurse: yes
+
+- name: VINYL - Create Vinyl Collector container
+  community.docker.docker_container:
+    name: vinyl_collector
+    image: ghcr.io/mkurdziel/side-a-vinyl-collector:latest
+    restart_policy: unless-stopped
+    state: started
+    pull: true
+    ports:
+      - "9042:5001"
+    networks:
+      - name: homelab
+    volumes:
+      - "{{ docker_dir }}/vinyl/cover-art:/app/data/cover-art"
+    env:
+      NODE_ENV: "production"
+      PORT: "5001"
+      POSTGRES_HOST: "{{ host_db }}"
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: "vinyl_collector"
+      POSTGRES_USER: "{{ username }}"
+      POSTGRES_PASSWORD: "{{ default_pass }}"
+      REDIS_HOST: "{{ host_redis }}"
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      DISCOGS_TOKEN: "{{ vinyl_discogs_token }}"
+      ANTHROPIC_API_KEY: "{{ vinyl_anthropic_key }}"
+      OPENAI_API_KEY: "{{ vinyl_openai_key }}"
+      VISION_PROVIDER: "openai"
+      VISION_MIN_CONFIDENCE: "90"
+      MUSICBRAINZ_ENABLED: "true"
+      COVER_ART_STORAGE_PATH: "/app/data/cover-art"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.vinyl.entrypoints: "http"
+      traefik.http.routers.vinyl.rule: "Host(`vinyl.local.domain.com`)"
+      traefik.http.middlewares.vinyl-https-redirect.redirectscheme.scheme: "https"
+      traefik.http.routers.vinyl.middlewares: "vinyl-https-redirect"
+      traefik.http.routers.vinyl-secure.entrypoints: "https"
+      traefik.http.routers.vinyl-secure.rule: "Host(`vinyl.local.domain.com`)"
+      traefik.http.routers.vinyl-secure.tls: "true"
+      traefik.http.routers.vinyl-secure.tls.certresolver: "default"
+      traefik.http.routers.vinyl-secure.service: "vinyl"
+      traefik.http.services.vinyl.loadbalancer.server.port: "9042"
+      traefik.docker.network: "homelab"
+      kop.bind.ip: "{{ ansible_default_ipv4.address }}"
