@@ -22,6 +22,7 @@ export interface Album {
   cover_art_fetched?: boolean;
   notes?: string;
   added_at: string;
+  status: 'collection' | 'wishlist';
 }
 
 export interface SearchResult {
@@ -66,8 +67,8 @@ class ApiService {
     return response.json();
   }
 
-  async getAlbums(): Promise<{ albums: Album[] }> {
-    return this.request('/api/albums');
+  async getAlbums(status: 'collection' | 'wishlist' = 'collection'): Promise<{ albums: Album[] }> {
+    return this.request(`/api/albums?status=${status}`);
   }
 
   async addAlbum(data: {
@@ -77,6 +78,7 @@ class ApiService {
     coverImageUrl?: string;
     discogsId?: number;
     barcode?: string;
+    status?: 'collection' | 'wishlist';
   }): Promise<{ album: Album }> {
     return this.request('/api/albums', {
       method: 'POST',
@@ -92,6 +94,13 @@ class ApiService {
     return this.request(`/api/albums/${id}/notes`, {
       method: 'PATCH',
       body: JSON.stringify({ notes }),
+    });
+  }
+
+  async updateStatus(id: number, status: 'collection' | 'wishlist'): Promise<void> {
+    return this.request(`/api/albums/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
     });
   }
 

@@ -65,6 +65,17 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
     }
   };
 
+  const handleAddToCollection = async () => {
+    try {
+      await api.updateStatus(currentAlbum.id, 'collection');
+      toast.success('Moved to collection');
+      onRefresh();
+      onClose();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to move to collection');
+    }
+  };
+
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleDateString('en-US', {
@@ -192,6 +203,18 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
 
           {/* Actions */}
           <div className="pt-4 border-t border-gray-200 space-y-3">
+            {currentAlbum.status === 'wishlist' && (
+              <button
+                onClick={handleAddToCollection}
+                className="w-full px-5 py-2.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                Add to Collection
+              </button>
+            )}
+
             <button
               onClick={handleSearchArtwork}
               disabled={refetching}

@@ -5,14 +5,15 @@ interface AddMenuProps {
   onImportClick: () => void;
   onClose: () => void;
   discogsConfigured: boolean;
+  viewMode: 'collection' | 'wishlist';
 }
 
-export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick, onImportClick, onClose, discogsConfigured }: AddMenuProps) => {
+export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick, onImportClick, onClose, discogsConfigured, viewMode }: AddMenuProps) => {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full mx-4" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-gray-200 p-6">
-          <h2 className="text-xl font-bold text-gray-900">Add Album</h2>
+          <h2 className="text-xl font-bold text-gray-900">Add to {viewMode === 'collection' ? 'Collection' : 'Wishlist'}</h2>
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-gray-600 transition-colors"

@@ -5,9 +5,10 @@ import api, { type DiscogsAlbum } from '../services/api';
 interface DiscogsImporterProps {
   onClose: () => void;
   onSuccess: () => void;
+  viewMode: 'collection' | 'wishlist';
 }
 
-export const DiscogsImporter = ({ onClose, onSuccess }: DiscogsImporterProps) => {
+export const DiscogsImporter = ({ onClose, onSuccess, viewMode }: DiscogsImporterProps) => {
   const [loading, setLoading] = useState(false);
   const [albums, setAlbums] = useState<DiscogsAlbum[]>([]);
   const [imported, setImported] = useState<Set<number>>(new Set());
@@ -34,6 +35,7 @@ export const DiscogsImporter = ({ onClose, onSuccess }: DiscogsImporterProps) =>
         year: album.year,
         coverImageUrl: album.coverImageUrl,
         discogsId: album.discogsId,
+        status: viewMode,
       });
       setImported(prev => new Set(prev).add(album.discogsId));
       toast.success(`Added ${album.album}`);
@@ -64,6 +66,7 @@ export const DiscogsImporter = ({ onClose, onSuccess }: DiscogsImporterProps) =>
           year: album.year,
           coverImageUrl: album.coverImageUrl,
           discogsId: album.discogsId,
+          status: viewMode,
         });
         setImported(prev => new Set(prev).add(album.discogsId));
         successCount++;
@@ -100,7 +103,7 @@ export const DiscogsImporter = ({ onClose, onSuccess }: DiscogsImporterProps) =>
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-2xl max-w-6xl w-full max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-gray-200 p-6">
-          <h2 className="text-xl font-bold text-gray-900">Import from Discogs</h2>
+          <h2 className="text-xl font-bold text-gray-900">Import from Discogs to {viewMode === 'collection' ? 'Collection' : 'Wishlist'}</h2>
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-gray-600 transition-colors"

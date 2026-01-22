@@ -21,12 +21,14 @@ export const exportBackup = asyncHandler(async (req: Request, res: Response) => 
   // 1. Fetch data
   const artists = await pool.query('SELECT * FROM artists');
   const albums = await pool.query('SELECT * FROM albums');
+  const collections = await pool.query('SELECT * FROM collections');
 
   const data = {
-    version: '1.0',
+    version: '1.1',
     timestamp: new Date().toISOString(),
     artists: artists.rows,
     albums: albums.rows,
+    collections: collections.rows,
   };
 
   // 2. Set headers for file download
@@ -94,10 +96,10 @@ export const importBackup = asyncHandler(async (req: Request, res: Response) => 
     await disableConstraints(client);
 
     // 3. Truncate tables
-    await client.query('TRUNCATE TABLE albums, artists CASCADE');
+    await client.query('TRUNCATE TABLE collections, albums, artists CASCADE');
 
     // 4. Restore Artists
-    if (data.artists.length > 0) {
+    if (data.artists && data.artists.length > 0) {
       for (const artist of data.artists) {
         await client.query(
           'INSERT INTO artists (id, name, created_at) VALUES ($1, $2, $3)',
@@ -109,22 +111,42 @@ export const importBackup = asyncHandler(async (req: Request, res: Response) => 
     }
 
     // 5. Restore Albums
-    if (data.albums.length > 0) {
+    if (data.albums && data.albums.length > 0) {
       for (const album of data.albums) {
         await client.query(
           `INSERT INTO albums (
             id, artist_id, title, year, cover_image_url, 
-            local_cover_path, cover_art_fetched, notes, created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            local_cover_path, cover_art_fetched, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
           [
             album.id, album.artist_id, album.title, album.year, album.cover_image_url,
-            album.local_cover_path, album.cover_art_fetched, album.notes, 
+            album.local_cover_path, album.cover_art_fetched, 
             album.created_at, album.updated_at
           ]
         );
       }
       // Fix sequence
       await client.query("SELECT setval('albums_id_seq', (SELECT MAX(id) FROM albums))");
+    }
+
+    // 6. Restore Collections (Status & Notes)
+    if (data.collections && data.collections.length > 0) {
+      for (const collection of data.collections) {
+        // Handle migration from old backups that might lack 'status'
+        const status = collection.status || 'collection';
+        
+        await client.query(
+          `INSERT INTO collections (
+            id, album_id, added_at, notes, status
+          ) VALUES ($1, $2, $3, $4, $5)`,
+          [
+            collection.id, collection.album_id, collection.added_at, 
+            collection.notes, status
+          ]
+        );
+      }
+      // Fix sequence
+      await client.query("SELECT setval('collections_id_seq', (SELECT MAX(id) FROM collections))");
     }
 
     await enableConstraints(client);

@@ -77,12 +77,14 @@ export const getAllAlbums = asyncHandler(async (req: Request, res: Response) => 
       albums.*,
       artists.name as artist_name,
       collections.notes,
-      collections.added_at
+      collections.added_at,
+      collections.status
     FROM collections
     JOIN albums ON collections.album_id = albums.id
     JOIN artists ON albums.artist_id = artists.id
+    WHERE collections.status = COALESCE($1, 'collection')
     ORDER BY collections.added_at DESC
-  `);
+  `, [req.query.status || 'collection']);
 
   res.json({ albums: result.rows });
 });
@@ -95,7 +97,8 @@ export const getAlbumById = asyncHandler(async (req: Request, res: Response) => 
       albums.*,
       artists.name as artist_name,
       collections.notes,
-      collections.added_at
+      collections.added_at,
+      collections.status
     FROM collections
     JOIN albums ON collections.album_id = albums.id
     JOIN artists ON albums.artist_id = artists.id
@@ -110,7 +113,7 @@ export const getAlbumById = asyncHandler(async (req: Request, res: Response) => 
 });
 
 export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
-  const { artist, album, year, coverImageUrl, discogsId, barcode } = req.body;
+  const { artist, album, year, coverImageUrl, discogsId, barcode, status } = req.body;
 
   if (!artist || !album) {
     throw new AppError('Artist and album are required', 400);
@@ -161,12 +164,12 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
     // Add to collection (check for duplicates)
     try {
       await client.query(
-        'INSERT INTO collections (album_id) VALUES ($1)',
-        [albumId]
+        'INSERT INTO collections (album_id, status) VALUES ($1, $2)',
+        [albumId, status || 'collection']
       );
     } catch (error: any) {
       if (error.code === '23505') { // Unique violation
-        throw new AppError('Album already in collection', 409);
+        throw new AppError('Album already in collection/wishlist', 409);
       }
       throw error;
     }
@@ -252,4 +255,24 @@ export const updateAlbumNotes = asyncHandler(async (req: Request, res: Response)
   }
 
   res.json({ message: 'Notes updated', notes });
+});
+
+export const updateAlbumStatus = asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  if (!status || !['collection', 'wishlist'].includes(status)) {
+    throw new AppError('Invalid status', 400);
+  }
+
+  const result = await pool.query(
+    'UPDATE collections SET status = $1 WHERE album_id = $2 RETURNING *',
+    [status, id]
+  );
+
+  if (result.rowCount === 0) {
+    throw new AppError('Album not in collection', 404);
+  }
+
+  res.json({ message: 'Status updated', status });
 });

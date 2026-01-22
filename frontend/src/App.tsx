@@ -21,12 +21,13 @@ function App() {
   const [selectedAlbum, setSelectedAlbum] = useState<Album | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [discogsConfigured, setDiscogsConfigured] = useState(false);
+  const [viewMode, setViewMode] = useState<'collection' | 'wishlist'>('collection');
   const searchTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     loadAlbums();
     checkDiscogsConfig();
-  }, []);
+  }, [viewMode]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -48,7 +49,7 @@ function App() {
 
   const loadAlbums = async () => {
     try {
-      const data = await api.getAlbums();
+      const data = await api.getAlbums(viewMode);
       setAlbums(data.albums);
     } catch (error) {
       toast.error('Failed to load albums');
@@ -99,8 +100,9 @@ function App() {
         year: album.year,
         coverImageUrl: album.coverImageUrl,
         discogsId: album.discogsId,
+        status: viewMode,
       });
-      toast.success('Album added to collection');
+      toast.success(`Album added to ${viewMode}`);
       loadAlbums();
       setSearchResults(null);
       setSearchQuery('');
@@ -131,6 +133,35 @@ function App() {
         <div className="max-w-7xl mx-auto px-6 py-8">
           <h1 className="text-2xl font-bold text-gray-900 mb-1">Vinyl Collector</h1>
           <p className="text-sm text-gray-600">Manage your vinyl record collection</p>
+
+          <div className="flex gap-4 mt-6 border-b border-gray-200">
+            <button
+              className={`pb-3 px-1 text-sm font-medium transition-colors relative ${
+                viewMode === 'collection'
+                  ? 'text-purple-600'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+              onClick={() => setViewMode('collection')}
+            >
+              Collection
+              {viewMode === 'collection' && (
+                <div className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-600 rounded-t-full"></div>
+              )}
+            </button>
+            <button
+              className={`pb-3 px-1 text-sm font-medium transition-colors relative ${
+                viewMode === 'wishlist'
+                  ? 'text-purple-600'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+              onClick={() => setViewMode('wishlist')}
+            >
+              Wishlist
+              {viewMode === 'wishlist' && (
+                <div className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-600 rounded-t-full"></div>
+              )}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -190,6 +221,20 @@ function App() {
           </button>
         </div>
 
+        {viewMode === 'wishlist' && albums.length > 0 && !loading && (
+          <div className="mb-8 p-4 bg-purple-50 rounded-lg border border-purple-100 flex items-start gap-3">
+            <svg className="w-5 h-5 text-purple-600 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div>
+              <h3 className="text-sm font-medium text-purple-900">Wishlist Mode</h3>
+              <p className="text-sm text-purple-700 mt-1">
+                Albums you add while viewing the wishlist will be added here automatically. Click an album to move it to your collection.
+              </p>
+            </div>
+          </div>
+        )}
+
         {showAddMenu && (
           <AddMenu
             onBarcodeClick={() => {
@@ -210,6 +255,7 @@ function App() {
             }}
             onClose={() => setShowAddMenu(false)}
             discogsConfigured={discogsConfigured}
+            viewMode={viewMode}
           />
         )}
 
@@ -310,7 +356,7 @@ function App() {
                         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                         </svg>
-                        Add
+                        Add to {viewMode}
                       </button>
                     </div>
                   ))}
@@ -333,6 +379,7 @@ function App() {
             loadAlbums();
             setShowBarcodeScanner(false);
           }}
+          viewMode={viewMode}
         />
       )}
 
@@ -343,6 +390,7 @@ function App() {
             loadAlbums();
             setShowImageUploader(false);
           }}
+          viewMode={viewMode}
         />
       )}
 
@@ -352,6 +400,7 @@ function App() {
           onSuccess={() => {
             loadAlbums();
           }}
+          viewMode={viewMode}
         />
       )}
 
@@ -361,6 +410,9 @@ function App() {
           onClose={() => setSelectedAlbum(null)}
           onRefresh={() => {
             loadAlbums();
+            if (searchQuery) {
+              performSearch(searchQuery);
+            }
           }}
         />
       )}
