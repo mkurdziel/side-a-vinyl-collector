@@ -92,11 +92,26 @@ export const BarcodeScanner = ({ onClose, onSuccess, viewMode }: BarcodeScannerP
             <>
               <div ref={scannerRef} className="w-full" style={{ minHeight: '400px' }} />
               <div className="absolute inset-0 pointer-events-none">
-                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-3/4 max-w-xs h-40 border-2 border-purple-500 rounded-xl shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]">
+                {/* Scanning frame - positioned higher for mobile */}
+                <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-3/4 max-w-xs h-40 border-2 border-purple-500 rounded-xl shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]">
                   <div className="absolute top-0 left-0 right-0 h-0.5 bg-purple-500 animate-scan" style={{ top: '50%', boxShadow: '0 0 8px 2px rgba(168, 85, 247, 0.6)' }} />
                 </div>
               </div>
-              <div className="absolute bottom-6 left-0 right-0 text-center">
+              
+              {/* Mobile close button overlay */}
+              <div className="absolute top-4 right-4 md:hidden pointer-events-auto">
+                <button
+                  onClick={onClose}
+                  className="bg-white/90 backdrop-blur-sm text-gray-900 p-3 rounded-full shadow-lg hover:bg-white transition-colors"
+                  aria-label="Close scanner"
+                >
+                  <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="absolute bottom-6 left-0 right-0 text-center pointer-events-none">
                    <span className="inline-block bg-black/60 backdrop-blur-sm text-white px-4 py-2 rounded-full text-sm font-medium border border-white/10">
                     Position barcode within the frame
                    </span>
