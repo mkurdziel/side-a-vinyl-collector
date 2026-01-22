@@ -134,6 +134,22 @@ function App() {
 
   const displayAlbums = searchResults ? searchResults.local : albums;
 
+  // Sort albums based on selected criteria
+  const sortAlbums = (albumsToSort: typeof albums) => {
+    const sorted = [...albumsToSort];
+    switch (sortBy) {
+      case 'artist':
+        return sorted.sort((a, b) => a.artist_name.localeCompare(b.artist_name));
+      case 'date':
+        return sorted.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      case 'title':
+      default:
+        return sorted.sort((a, b) => a.title.localeCompare(b.title));
+    }
+  };
+
+  const sortedAlbums = sortAlbums(displayAlbums);
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Toaster position="top-right" />
@@ -170,6 +186,23 @@ function App() {
                 <div className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-600 rounded-t-full"></div>
               )}
             </button>
+          </div>
+
+          {/* Sort dropdown */}
+          <div className="mt-4 flex items-center gap-2">
+            <label htmlFor="sort-select" className="text-sm font-medium text-gray-700">
+              Sort by:
+            </label>
+            <select
+              id="sort-select"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as 'title' | 'artist' | 'date')}
+              className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white"
+            >
+              <option value="title">Album Title</option>
+              <option value="artist">Artist Name</option>
+              <option value="date">Date Added</option>
+            </select>
           </div>
         </div>
       </header>
@@ -277,7 +310,7 @@ function App() {
           <>
             {(!searchQuery || viewMode === 'collection') ? (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-                {displayAlbums.length === 0 ? (
+                {sortedAlbums.length === 0 ? (
                   <div className="col-span-full text-center py-16 px-4">
                     <div className="bg-gray-100 rounded-full w-20 h-20 flex items-center justify-center mx-auto mb-4">
                       {searchQuery ? (
