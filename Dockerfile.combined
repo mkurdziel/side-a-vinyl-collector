@@ -14,13 +14,10 @@ RUN APP_VERSION=${APP_VERSION} bun run build
 FROM oven/bun:1
 
 # Install system dependencies for Sharp with HEIC support
+# Note: Sharp v0.33.0+ includes prebuilt binaries with HEIC support
 RUN apt-get update && apt-get install -y \
-    libheif-dev \
-    libvips-dev \
-    python3 \
-    make \
-    g++ \
-    npm \
+    libheif1 \
+    libvips42 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -28,11 +25,8 @@ WORKDIR /app
 # Copy backend files
 COPY backend/package.json backend/bun.lockb* ./
 
-# Install Sharp with HEIC support by ensuring libheif is available
+# Install dependencies - Sharp should use prebuilt binary with HEIC support
 RUN bun install --frozen-lockfile
-
-# Rebuild Sharp to link against libheif
-RUN cd node_modules/sharp && npm install --build-from-source
 
 # Add build arg for cache busting BEFORE copying source
 ARG CACHEBUST=1
