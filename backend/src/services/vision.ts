@@ -63,33 +63,42 @@ class VisionService {
   /**
    * Compress and resize image to stay under API limits
    * Anthropic has a 5MB limit, so we'll target 4MB to be safe
+   * Also converts unsupported formats (HEIC, etc.) to JPEG
    */
   private async compressImage(base64Image: string): Promise<string> {
     const MAX_SIZE_BYTES = 4 * 1024 * 1024; // 4MB target
     const MAX_DIMENSION = 2048; // Max width or height
+    const SUPPORTED_FORMATS = ['jpeg', 'jpg', 'png', 'gif', 'webp'];
 
     try {
       // Convert base64 to buffer
       const imageBuffer = Buffer.from(base64Image, 'base64');
       const currentSize = imageBuffer.length;
+      const metadata = await sharp(imageBuffer).metadata();
+      const format = metadata.format?.toLowerCase();
 
-      // If already under limit and reasonable dimensions, return as-is
-      if (currentSize <= MAX_SIZE_BYTES) {
-        const metadata = await sharp(imageBuffer).metadata();
+      // Check if format is supported by vision APIs
+      const needsConversion = !format || !SUPPORTED_FORMATS.includes(format);
+
+      if (needsConversion) {
+        console.log(`Unsupported image format: ${format}, converting to JPEG`);
+      }
+
+      // If already under limit, reasonable dimensions, and supported format, return as-is
+      if (!needsConversion && currentSize <= MAX_SIZE_BYTES) {
         if (metadata.width && metadata.height &&
             metadata.width <= MAX_DIMENSION && metadata.height <= MAX_DIMENSION) {
           return base64Image;
         }
       }
 
-      console.log(`Compressing image: ${(currentSize / 1024 / 1024).toFixed(2)}MB -> target 4MB`);
+      console.log(`Processing image: ${(currentSize / 1024 / 1024).toFixed(2)}MB (${format}) -> target 4MB JPEG`);
 
-      // Resize and compress
+      // Resize and compress - always convert to JPEG for consistency
       let quality = 85;
       let resized = sharp(imageBuffer);
 
-      // First resize if needed
-      const metadata = await sharp(imageBuffer).metadata();
+      // Resize if needed
       if (metadata.width && metadata.height &&
           (metadata.width > MAX_DIMENSION || metadata.height > MAX_DIMENSION)) {
         resized = resized.resize(MAX_DIMENSION, MAX_DIMENSION, {
@@ -114,11 +123,11 @@ class VisionService {
       }
 
       const finalSize = compressed.length;
-      console.log(`Compressed image: ${(finalSize / 1024 / 1024).toFixed(2)}MB (quality: ${quality})`);
+      console.log(`Processed image: ${(finalSize / 1024 / 1024).toFixed(2)}MB JPEG (quality: ${quality})`);
 
       return compressed.toString('base64');
     } catch (error) {
-      console.warn('Failed to compress image, using original:', error);
+      console.warn('Failed to process image, using original:', error);
       return base64Image;
     }
   }
