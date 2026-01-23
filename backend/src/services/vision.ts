@@ -91,7 +91,9 @@ class VisionService {
       if (!needsConversion && currentSize <= MAX_SIZE_BYTES) {
         if (metadata.width && metadata.height &&
             metadata.width <= MAX_DIMENSION && metadata.height <= MAX_DIMENSION) {
-          return base64Image;
+          // Already in good shape, but ensure it has proper data URI prefix
+          const base64Data = base64Image.replace(/^data:image\/\w+;base64,/, '');
+          return `data:image/${format};base64,${base64Data}`;
         }
       }
 
@@ -130,8 +132,8 @@ class VisionService {
 
       return `data:image/jpeg;base64,${compressed.toString('base64')}`;
     } catch (error) {
-      console.warn('Failed to process image, using original:', error);
-      return base64Image;
+      console.error('CRITICAL: Failed to process image, cannot continue:', error);
+      throw error;
     }
   }
 
