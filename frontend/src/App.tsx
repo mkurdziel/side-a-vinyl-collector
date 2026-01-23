@@ -482,6 +482,13 @@ function App() {
         )}
       </div>
 
+      {/* Version Footer */}
+      <footer className="max-w-7xl mx-auto px-6 py-4 text-center">
+        <p className="text-xs text-gray-400">
+          v{__APP_VERSION__}
+        </p>
+      </footer>
+
       <SettingsModal
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
