@@ -35,7 +35,20 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
     const reader = new FileReader();
     reader.onload = async () => {
       const base64 = reader.result as string;
-      setImagePreview(base64);
+
+      // Check if this is a HEIC image (browsers can't display HEIC)
+      const isHEIC = file.type === 'image/heic' ||
+                     file.type === 'image/heif' ||
+                     file.name.toLowerCase().endsWith('.heic') ||
+                     file.name.toLowerCase().endsWith('.heif');
+
+      // Only set preview for displayable formats
+      if (!isHEIC) {
+        setImagePreview(base64);
+      } else {
+        // Set a placeholder for HEIC images
+        setImagePreview('HEIC');
+      }
 
       // Analyze image
       setAnalyzing(true);
@@ -142,7 +155,17 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
           ) : (
             <div className="relative group">
               <div className="bg-gray-100 rounded-xl border border-gray-200 p-2">
-                <img src={imagePreview} alt="Album cover" className="w-full h-64 object-contain rounded-lg shadow-sm" />
+                {imagePreview === 'HEIC' ? (
+                  <div className="w-full h-64 flex flex-col items-center justify-center rounded-lg bg-gray-50 border-2 border-dashed border-gray-300">
+                    <svg className="w-16 h-16 text-gray-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    <p className="text-sm font-medium text-gray-600">HEIC Image</p>
+                    <p className="text-xs text-gray-500 mt-1">Preview not available</p>
+                  </div>
+                ) : (
+                  <img src={imagePreview} alt="Album cover" className="w-full h-64 object-contain rounded-lg shadow-sm" />
+                )}
               </div>
               {!analyzing && (
                 <button 
