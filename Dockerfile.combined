@@ -13,14 +13,15 @@ RUN APP_VERSION=${APP_VERSION} bun run build
 # Backend stage
 FROM oven/bun:1
 
-# Add build arg for cache busting if needed
-ARG CACHEBUST=1
-
 WORKDIR /app
 
 # Copy backend files
 COPY backend/package.json backend/bun.lockb* ./
 RUN bun install --frozen-lockfile
+
+# Add build arg for cache busting BEFORE copying source
+ARG CACHEBUST=1
+RUN echo "Cache bust: ${CACHEBUST}"
 
 COPY backend/ ./
 
