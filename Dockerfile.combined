@@ -13,6 +13,12 @@ RUN APP_VERSION=${APP_VERSION} bun run build
 # Backend stage
 FROM oven/bun:1
 
+# Install system dependencies for Sharp with HEIC support
+RUN apt-get update && apt-get install -y \
+    libheif-dev \
+    libvips-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Copy backend files
