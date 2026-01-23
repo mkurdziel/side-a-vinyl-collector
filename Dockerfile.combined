@@ -1,12 +1,14 @@
 # Multi-stage build combining frontend and backend
 FROM oven/bun:1 AS frontend-builder
 
+ARG APP_VERSION=unknown
+
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/bun.lockb* ./
 RUN bun install --frozen-lockfile
 
 COPY frontend/ ./
-RUN bun run build
+RUN APP_VERSION=${APP_VERSION} bun run build
 
 # Backend stage
 FROM oven/bun:1
