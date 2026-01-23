@@ -20,16 +20,19 @@ RUN apt-get update && apt-get install -y \
     python3 \
     make \
     g++ \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Copy backend files
 COPY backend/package.json backend/bun.lockb* ./
+
+# Install Sharp with HEIC support by ensuring libheif is available
 RUN bun install --frozen-lockfile
 
-# Rebuild Sharp with HEIC support now that libheif is installed
-RUN cd node_modules/sharp && npm rebuild --platform=linux --arch=x64
+# Rebuild Sharp to link against libheif
+RUN cd node_modules/sharp && npm install --build-from-source
 
 # Add build arg for cache busting BEFORE copying source
 ARG CACHEBUST=1
