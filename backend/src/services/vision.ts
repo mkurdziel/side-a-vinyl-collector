@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import sharp from 'sharp';
+import convert from 'heic-convert';
 import { VisionExtractionResult } from '../types';
 
 type VisionProvider = 'anthropic' | 'openai';
@@ -75,7 +76,29 @@ class VisionService {
       const base64Data = base64Image.replace(/^data:image\/\w+;base64,/, '');
 
       // Convert base64 to buffer
-      const imageBuffer = Buffer.from(base64Data, 'base64');
+      let imageBuffer = Buffer.from(base64Data, 'base64');
+
+      // Check if this is HEIC/HEIF format by trying to detect it
+      // HEIC files often have 'ftyp' followed by 'heic' or 'mif1' in the header
+      const isHEIC = imageBuffer.length > 12 && (
+        (imageBuffer.toString('ascii', 4, 8) === 'ftyp' &&
+         (imageBuffer.toString('ascii', 8, 12) === 'heic' ||
+          imageBuffer.toString('ascii', 8, 12) === 'mif1')) ||
+        base64Image.startsWith('data:image/heic') ||
+        base64Image.startsWith('data:image/heif')
+      );
+
+      // Convert HEIC to JPEG first using heic-convert
+      if (isHEIC) {
+        console.log('Detected HEIC format, converting to JPEG with heic-convert');
+        const jpegBuffer = await convert({
+          buffer: imageBuffer,
+          format: 'JPEG',
+          quality: 0.9
+        });
+        imageBuffer = Buffer.from(jpegBuffer);
+      }
+
       const currentSize = imageBuffer.length;
       const metadata = await sharp(imageBuffer).metadata();
       const format = metadata.format?.toLowerCase();
@@ -92,8 +115,7 @@ class VisionService {
         if (metadata.width && metadata.height &&
             metadata.width <= MAX_DIMENSION && metadata.height <= MAX_DIMENSION) {
           // Already in good shape, but ensure it has proper data URI prefix
-          const base64Data = base64Image.replace(/^data:image\/\w+;base64,/, '');
-          return `data:image/${format};base64,${base64Data}`;
+          return `data:image/${format};base64,${imageBuffer.toString('base64')}`;
         }
       }
 
