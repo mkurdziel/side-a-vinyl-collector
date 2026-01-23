@@ -17,6 +17,9 @@ FROM oven/bun:1
 RUN apt-get update && apt-get install -y \
     libheif-dev \
     libvips-dev \
+    python3 \
+    make \
+    g++ \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -24,6 +27,9 @@ WORKDIR /app
 # Copy backend files
 COPY backend/package.json backend/bun.lockb* ./
 RUN bun install --frozen-lockfile
+
+# Rebuild Sharp with HEIC support now that libheif is installed
+RUN cd node_modules/sharp && npm rebuild --platform=linux --arch=x64
 
 # Add build arg for cache busting BEFORE copying source
 ARG CACHEBUST=1
