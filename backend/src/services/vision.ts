@@ -71,8 +71,11 @@ class VisionService {
     const SUPPORTED_FORMATS = ['jpeg', 'jpg', 'png', 'gif', 'webp'];
 
     try {
+      // Strip data URI prefix if present
+      const base64Data = base64Image.replace(/^data:image\/\w+;base64,/, '');
+
       // Convert base64 to buffer
-      const imageBuffer = Buffer.from(base64Image, 'base64');
+      const imageBuffer = Buffer.from(base64Data, 'base64');
       const currentSize = imageBuffer.length;
       const metadata = await sharp(imageBuffer).metadata();
       const format = metadata.format?.toLowerCase();
