@@ -128,7 +128,7 @@ class VisionService {
       const finalSize = compressed.length;
       console.log(`Processed image: ${(finalSize / 1024 / 1024).toFixed(2)}MB JPEG (quality: ${quality})`);
 
-      return compressed.toString('base64');
+      return `data:image/jpeg;base64,${compressed.toString('base64')}`;
     } catch (error) {
       console.warn('Failed to process image, using original:', error);
       return base64Image;
