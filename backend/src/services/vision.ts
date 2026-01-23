@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
+import sharp from 'sharp';
 import { VisionExtractionResult } from '../types';
 
 type VisionProvider = 'anthropic' | 'openai';
@@ -59,10 +60,75 @@ class VisionService {
     }
   }
 
+  /**
+   * Compress and resize image to stay under API limits
+   * Anthropic has a 5MB limit, so we'll target 4MB to be safe
+   */
+  private async compressImage(base64Image: string): Promise<string> {
+    const MAX_SIZE_BYTES = 4 * 1024 * 1024; // 4MB target
+    const MAX_DIMENSION = 2048; // Max width or height
+
+    try {
+      // Convert base64 to buffer
+      const imageBuffer = Buffer.from(base64Image, 'base64');
+      const currentSize = imageBuffer.length;
+
+      // If already under limit and reasonable dimensions, return as-is
+      if (currentSize <= MAX_SIZE_BYTES) {
+        const metadata = await sharp(imageBuffer).metadata();
+        if (metadata.width && metadata.height &&
+            metadata.width <= MAX_DIMENSION && metadata.height <= MAX_DIMENSION) {
+          return base64Image;
+        }
+      }
+
+      console.log(`Compressing image: ${(currentSize / 1024 / 1024).toFixed(2)}MB -> target 4MB`);
+
+      // Resize and compress
+      let quality = 85;
+      let resized = sharp(imageBuffer);
+
+      // First resize if needed
+      const metadata = await sharp(imageBuffer).metadata();
+      if (metadata.width && metadata.height &&
+          (metadata.width > MAX_DIMENSION || metadata.height > MAX_DIMENSION)) {
+        resized = resized.resize(MAX_DIMENSION, MAX_DIMENSION, {
+          fit: 'inside',
+          withoutEnlargement: true
+        });
+      }
+
+      // Convert to JPEG with quality adjustment
+      let compressed = await resized.jpeg({ quality }).toBuffer();
+
+      // If still too large, reduce quality iteratively
+      while (compressed.length > MAX_SIZE_BYTES && quality > 40) {
+        quality -= 10;
+        compressed = await sharp(imageBuffer)
+          .resize(MAX_DIMENSION, MAX_DIMENSION, {
+            fit: 'inside',
+            withoutEnlargement: true
+          })
+          .jpeg({ quality })
+          .toBuffer();
+      }
+
+      const finalSize = compressed.length;
+      console.log(`Compressed image: ${(finalSize / 1024 / 1024).toFixed(2)}MB (quality: ${quality})`);
+
+      return compressed.toString('base64');
+    } catch (error) {
+      console.warn('Failed to compress image, using original:', error);
+      return base64Image;
+    }
+  }
+
   async extractAlbumInfo(base64Image: string): Promise<VisionExtractionResult> {
+    // Compress image if needed to stay under API limits
+    const compressedImage = await this.compressImage(base64Image);
     // Try primary provider
     try {
-      const result = await this.extractWithProvider(this.primaryProvider, base64Image);
+      const result = await this.extractWithProvider(this.primaryProvider, compressedImage);
       result.provider = this.primaryProvider;
       result.usedFallback = false;
 
@@ -75,7 +141,7 @@ class VisionService {
       // If confidence is too low and we have a fallback provider, try it
       if (this.fallbackProvider) {
         console.log(`⚠ ${this.primaryProvider} confidence ${result.confidence}% below threshold ${this.minConfidence}%, trying ${this.fallbackProvider}`);
-        const fallbackResult = await this.extractWithProvider(this.fallbackProvider, base64Image);
+        const fallbackResult = await this.extractWithProvider(this.fallbackProvider, compressedImage);
         fallbackResult.provider = this.fallbackProvider;
         fallbackResult.usedFallback = true;
 
@@ -110,7 +176,7 @@ class VisionService {
       // If primary provider fails and we have a fallback, try it
       if (this.fallbackProvider) {
         console.warn(`✗ ${this.primaryProvider} failed, trying ${this.fallbackProvider}:`, error);
-        const fallbackResult = await this.extractWithProvider(this.fallbackProvider, base64Image);
+        const fallbackResult = await this.extractWithProvider(this.fallbackProvider, compressedImage);
         fallbackResult.provider = this.fallbackProvider;
         fallbackResult.usedFallback = true;
         return fallbackResult;
