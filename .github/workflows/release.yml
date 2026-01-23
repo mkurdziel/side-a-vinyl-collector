@@ -52,5 +52,4 @@ jobs:
           build-args: |
             CACHEBUST=${{ github.sha }}
             APP_VERSION=${{ github.ref_name }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          no-cache: true
