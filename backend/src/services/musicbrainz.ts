@@ -149,8 +149,12 @@ class MusicBrainzService {
       }
 
       return null;
-    } catch (error) {
-      console.error('MusicBrainz search error:', error);
+    } catch (error: any) {
+      // Log concise error info instead of full axios error
+      const errorMsg = error.code === 'ECONNRESET'
+        ? 'Connection reset by MusicBrainz (rate limited or network issue)'
+        : error.message || 'Unknown error';
+      console.error(`MusicBrainz search error for "${artist} - ${album}":`, errorMsg);
       return null;
     }
   }
@@ -298,8 +302,11 @@ class MusicBrainzService {
         .filter((c): c is MusicBrainzAlbum & { coverImageUrl: string } => c !== null)
         .slice(0, limit);
 
-    } catch (error) {
-      console.error('MusicBrainz multi-search error:', error);
+    } catch (error: any) {
+      const errorMsg = error.code === 'ECONNRESET'
+        ? 'Connection reset (rate limited or network issue)'
+        : error.message || 'Unknown error';
+      console.error(`MusicBrainz multi-search error for "${artist} - ${album}":`, errorMsg);
       return [];
     }
   }
@@ -332,8 +339,11 @@ class MusicBrainzService {
         return artist;
       }
       return null;
-    } catch (error) {
-      console.error('MusicBrainz artist search error:', error);
+    } catch (error: any) {
+      const errorMsg = error.code === 'ECONNRESET'
+        ? 'Connection reset (rate limited or network issue)'
+        : error.message || 'Unknown error';
+      console.error(`MusicBrainz artist search error for "${query}":`, errorMsg);
       return null;
     }
   }
@@ -415,8 +425,11 @@ class MusicBrainzService {
       await this.setCache(cacheKey, albums);
       return albums;
 
-    } catch (error) {
-      console.error(`MusicBrainz release groups error for ${artistId}:`, error);
+    } catch (error: any) {
+      const errorMsg = error.code === 'ECONNRESET'
+        ? 'Connection reset (rate limited or network issue)'
+        : error.message || 'Unknown error';
+      console.error(`MusicBrainz release groups error for ${artistId}:`, errorMsg);
       return [];
     }
   }
