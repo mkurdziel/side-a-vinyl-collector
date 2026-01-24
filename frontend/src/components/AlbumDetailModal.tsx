@@ -277,8 +277,8 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
                     onClick={() => handleSelectArtwork(candidate)}
                   >
                     <div className="relative aspect-square rounded-lg overflow-hidden bg-gray-100 border-2 border-transparent group-hover:border-purple-500 transition-all">
-                      <img 
-                        src={candidate.url} 
+                      <img
+                        src={candidate.url}
                         alt={candidate.title}
                         className="w-full h-full object-cover"
                         onLoad={(e) => {
@@ -289,6 +289,23 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
                               ...prev,
                               [key]: `${img.naturalWidth} x ${img.naturalHeight}`
                             }));
+                          }
+                        }}
+                        onError={(e) => {
+                          const img = e.currentTarget;
+                          const key = `${candidate.source}-${candidate.id}-${index}`;
+                          setImageDimensions(prev => ({
+                            ...prev,
+                            [key]: 'Failed to load'
+                          }));
+                          // Replace with placeholder
+                          img.style.display = 'none';
+                          const parent = img.parentElement;
+                          if (parent && !parent.querySelector('.image-error-placeholder')) {
+                            const placeholder = document.createElement('div');
+                            placeholder.className = 'image-error-placeholder w-full h-full flex flex-col items-center justify-center bg-gray-100';
+                            placeholder.innerHTML = '<svg class="w-12 h-12 text-gray-300 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg><span class="text-xs text-gray-400">Image unavailable</span>';
+                            parent.insertBefore(placeholder, parent.firstChild);
                           }
                         }}
                       />
