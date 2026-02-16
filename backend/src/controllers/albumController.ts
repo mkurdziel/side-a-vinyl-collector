@@ -20,7 +20,7 @@ async function fetchMusicBrainzCoverArt(
     // Search MusicBrainz and get cover art
     const mbAlbum = await musicbrainzService.searchAndGetCoverArt(artist, album);
 
-    if (mbAlbum && mbAlbum.coverArtUrl) {
+    if (mbAlbum && mbAlbum.coverImageUrl) {
       // Found official cover art from MusicBrainz
       console.log(`✓ Found MusicBrainz cover art for ${artist} - ${album}`);
 
@@ -28,7 +28,7 @@ async function fetchMusicBrainzCoverArt(
         `UPDATE albums
          SET musicbrainz_id = $1, cover_image_url = $2, cover_art_fetched = TRUE
          WHERE id = $3`,
-        [mbAlbum.mbid, mbAlbum.coverArtUrl, albumId]
+        [mbAlbum.mbid, mbAlbum.coverImageUrl, albumId]
       );
     } else {
       // No official cover art found - cache existing cover from Discogs/other source

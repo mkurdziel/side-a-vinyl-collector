@@ -88,7 +88,7 @@ export const fetchOfficialCoverArt = asyncHandler(async (req: Request, res: Resp
     if (coverArt) {
       mbAlbum = {
         mbid: album.musicbrainz_id,
-        coverArtUrl: coverArt,
+        coverImageUrl: coverArt,
         hasCoverArt: true
       };
     }
@@ -97,13 +97,13 @@ export const fetchOfficialCoverArt = asyncHandler(async (req: Request, res: Resp
     mbAlbum = await musicbrainzService.searchAndGetCoverArt(album.artist, album.title);
   }
 
-  if (mbAlbum && mbAlbum.coverArtUrl) {
+  if (mbAlbum && mbAlbum.coverImageUrl) {
     // Update database with MusicBrainz info
     await pool.query(
       `UPDATE albums
        SET musicbrainz_id = $1, cover_image_url = $2, cover_art_fetched = TRUE
        WHERE id = $3`,
-      [mbAlbum.mbid, mbAlbum.coverArtUrl, id]
+      [mbAlbum.mbid, mbAlbum.coverImageUrl, id]
     );
 
   } else {
@@ -175,13 +175,15 @@ export const searchCoverArt = asyncHandler(async (req: Request, res: Response) =
   ]);
 
   // Format MusicBrainz results
-  const mbCandidates = mbResults.map(r => ({
-    source: 'MusicBrainz',
-    url: r.coverArtUrl,
-    title: r.album,
-    year: r.year,
-    id: r.mbid
-  }));
+  const mbCandidates = mbResults
+    .filter(r => r.coverImageUrl)
+    .map(r => ({
+      source: 'MusicBrainz',
+      url: r.coverImageUrl,
+      title: r.album,
+      year: r.year,
+      id: r.mbid
+    }));
 
   // Format Discogs results
   const discogsCandidates = discogsResults
