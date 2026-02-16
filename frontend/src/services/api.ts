@@ -1,7 +1,7 @@
 // API URL configuration
 // - Production (single-container): Use empty string for same-origin requests
 // - Development (multi-container): Use VITE_API_URL or default to localhost:5001
-const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:5001' : '');
+export const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:5001' : '');
 
 /**
  * Get cover art URL for an album

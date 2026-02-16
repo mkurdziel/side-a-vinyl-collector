@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
 import { toast } from 'react-hot-toast';
+import { API_URL } from '../services/api';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -15,7 +16,6 @@ export const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
   const handleExport = async () => {
     try {
       toast.loading('Preparing backup...', { id: 'export' });
-      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
       
       // We can't use fetch for download easily if we want to trigger browser download behavior
       // A simple window.location.href or opening in new tab is easiest for GET downloads
@@ -73,7 +73,6 @@ export const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
       const formData = new FormData();
       formData.append('backup', file);
 
-      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
       const response = await fetch(`${API_URL}/api/backup/import`, {
         method: 'POST',
         body: formData,
