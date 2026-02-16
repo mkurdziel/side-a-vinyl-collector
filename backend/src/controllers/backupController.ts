@@ -8,13 +8,18 @@ import fs from 'fs';
 import path from 'path';
 import { AppError } from '../middleware/errorHandler';
 
-// Helper to disable foreign key constraints during import
+// Helper to disable/enable foreign key constraints during import
+// Uses ALTER TABLE instead of session_replication_role (which requires superuser)
 const disableConstraints = async (client: any) => {
-  await client.query('SET session_replication_role = "replica";');
+  await client.query('ALTER TABLE collections DISABLE TRIGGER ALL');
+  await client.query('ALTER TABLE albums DISABLE TRIGGER ALL');
+  await client.query('ALTER TABLE artists DISABLE TRIGGER ALL');
 };
 
 const enableConstraints = async (client: any) => {
-  await client.query('SET session_replication_role = "origin";');
+  await client.query('ALTER TABLE artists ENABLE TRIGGER ALL');
+  await client.query('ALTER TABLE albums ENABLE TRIGGER ALL');
+  await client.query('ALTER TABLE collections ENABLE TRIGGER ALL');
 };
 
 export const exportBackup = asyncHandler(async (req: Request, res: Response) => {
@@ -96,7 +101,7 @@ export const importBackup = asyncHandler(async (req: Request, res: Response) => 
     await disableConstraints(client);
 
     // 3. Truncate tables
-    await client.query('TRUNCATE TABLE collection, albums, artists CASCADE');
+    await client.query('TRUNCATE TABLE collections, albums, artists CASCADE');
 
     // 4. Restore Artists
     if (data.artists && data.artists.length > 0) {
