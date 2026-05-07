@@ -133,15 +133,25 @@ function App() {
     }
   };
 
-  const handleDelete = async (id: number) => {
-    if (!confirm('Remove this album from your collection?')) return;
-
-    try {
-      await api.deleteAlbum(id);
-      toast.success('Album removed');
-      loadAlbums();
-    } catch (error) {
-      toast.error('Failed to remove album');
+  const handleRemove = async (album: Album) => {
+    if (album.status === 'collection') {
+      if (!confirm('Move this album from your collection to your wishlist?')) return;
+      try {
+        await api.updateStatus(album.id, 'wishlist');
+        toast.success('Album moved to wishlist');
+        loadAlbums();
+      } catch (error) {
+        toast.error('Failed to move album');
+      }
+    } else {
+      if (!confirm('Remove this album from your wishlist entirely?')) return;
+      try {
+        await api.deleteAlbum(album.id);
+        toast.success('Album removed entirely');
+        loadAlbums();
+      } catch (error) {
+        toast.error('Failed to remove album');
+      }
     }
   };
 
@@ -407,12 +417,16 @@ function App() {
                       className="absolute top-2 right-2 bg-white/95 hover:bg-red-50 hover:text-red-600 text-gray-600 rounded-lg p-2 transition-all duration-200 shadow-sm opacity-0 group-hover:opacity-100"
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleDelete(album.id);
+                        handleRemove(album);
                       }}
-                      title="Remove from collection"
+                      title={album.status === 'collection' ? "Move to wishlist" : "Remove completely"}
                     >
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        {album.status === 'collection' ? (
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                        ) : (
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        )}
                       </svg>
                     </button>
                   </div>
