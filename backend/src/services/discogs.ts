@@ -123,6 +123,10 @@ class DiscogsService {
     return !!process.env.DISCOGS_TOKEN;
   }
 
+  isEnabled(): boolean {
+    return this.isConfigured() && process.env.DISCOGS_ENABLED !== 'false';
+  }
+
   async getUserIdentity(): Promise<{ username: string } | null> {
     if (!this.isConfigured()) {
       return null;

@@ -77,6 +77,10 @@ function App() {
     try {
       const results = await api.search(query);
       setSearchResults(results);
+      
+      if (results.errors && results.errors.length > 0) {
+        results.errors.forEach(err => toast.error(err, { duration: 4000 }));
+      }
     } catch (error) {
       toast.error('Search failed');
     }

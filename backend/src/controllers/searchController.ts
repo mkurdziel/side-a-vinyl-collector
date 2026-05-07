@@ -53,67 +53,84 @@ export const search = asyncHandler(async (req: Request, res: Response) => {
 
   // 2. Search MusicBrainz & Discogs
   let externalResults: any[] = [];
+  const errors: string[] = [];
+
+  const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, serviceName: string): Promise<T> => {
+    let timeoutId: NodeJS.Timeout;
+    const timeoutPromise = new Promise<T>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error(`${serviceName} search timed out after 5 seconds`)), timeoutMs);
+    });
+    return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
+  };
+
   try {
     const mbEnabled = musicbrainzService.isEnabled();
+    const discogsEnabled = discogsService.isEnabled();
 
-    // A. MusicBrainz Search (Primary)
+    // A. MusicBrainz Search
     let mbResults: any[] = [];
     if (mbEnabled) {
-      // Search for Artist on MB
-      const mbArtist = await musicbrainzService.searchArtist(query);
-      
-      if (mbArtist) {
-        console.log(`Found MusicBrainz artist: ${mbArtist.name} (${mbArtist.id})`);
-        const mbReleases = await musicbrainzService.getArtistReleaseGroups(mbArtist.id, mbArtist.name, 20);
-        
-        mbResults = mbReleases.map(r => ({
-          ...r,
-          isArtistMatch: true,
-          source: 'musicbrainz'
-        }));
+      try {
+        const mbSearchPromise = async () => {
+          const mbArtist = await musicbrainzService.searchArtist(query);
+          if (mbArtist) {
+            console.log(`Found MusicBrainz artist: ${mbArtist.name} (${mbArtist.id})`);
+            const mbReleases = await musicbrainzService.getArtistReleaseGroups(mbArtist.id, mbArtist.name, 20);
+            return mbReleases.map(r => ({
+              ...r,
+              isArtistMatch: true,
+              source: 'musicbrainz'
+            }));
+          }
+          return [];
+        };
+        mbResults = await withTimeout(mbSearchPromise(), 5000, 'MusicBrainz');
+      } catch (err: any) {
+        console.error(err.message);
+        errors.push(err.message);
       }
     }
 
-    // B. Discogs Search (Secondary/Fallback)
-    // We still search Discogs to fill gaps or if MB is disabled, 
-    // but if we got good MB results, we might not need to hit Discogs as hard.
-    // For now, let's keep Discogs as a supplement but prioritize MB results.
-    
+    // B. Discogs Search
     let discogsResults: any[] = [];
-    
-    // Only exhaustive Discogs search if MB didn't give us much
-    if (mbResults.length < 5) {
-        // ... Original Discogs Logic ...
-        const discogsArtist = await discogsService.searchArtist(query);
-        let artistReleases: any[] = [];
-        
-        if (discogsArtist) {
-          console.log(`Found Discogs artist: ${discogsArtist.title} (${discogsArtist.id})`);
-          artistReleases = await discogsService.getArtistReleases(discogsArtist.id, 20);
-           artistReleases.forEach(r => {
-            if (!r.artist) r.artist = discogsArtist.title;
-          });
-        }
+    if (discogsEnabled) {
+      try {
+        const discogsSearchPromise = async () => {
+          const discogsArtist = await discogsService.searchArtist(query);
+          let artistReleases: any[] = [];
+          
+          if (discogsArtist) {
+            console.log(`Found Discogs artist: ${discogsArtist.title} (${discogsArtist.id})`);
+            artistReleases = await discogsService.getArtistReleases(discogsArtist.id, 20);
+            artistReleases.forEach(r => {
+              if (!r.artist) r.artist = discogsArtist.title;
+            });
+          }
 
-        const generalResults = await discogsService.searchByQuery(query, 20);
+          const generalResults = await discogsService.searchByQuery(query, 20);
 
-        // Deduplicate Discogs
-        const seenDiscogs = new Set<string>();
-        const mergedDiscogs: any[] = [];
+          // Deduplicate Discogs
+          const seenDiscogs = new Set<string>();
+          const mergedDiscogs: any[] = [];
 
-        const addUniqueDiscogs = (item: any, isArtistMatch: boolean) => {
-             if (seenDiscogs.has(item.id)) return;
-             const key = `${normalize(item.artist)}:${normalize(item.album)}`;
-             if (seenDiscogs.has(key)) return;
-             seenDiscogs.add(item.id);
-             seenDiscogs.add(key);
-             mergedDiscogs.push({ ...item, isArtistMatch, source: 'discogs' });
+          const addUniqueDiscogs = (item: any, isArtistMatch: boolean) => {
+               if (seenDiscogs.has(item.id)) return;
+               const key = `${normalize(item.artist)}:${normalize(item.album)}`;
+               if (seenDiscogs.has(key)) return;
+               seenDiscogs.add(item.id);
+               seenDiscogs.add(key);
+               mergedDiscogs.push({ ...item, isArtistMatch, source: 'discogs' });
+          };
+
+          artistReleases.forEach(r => addUniqueDiscogs(r, true));
+          generalResults.forEach(r => addUniqueDiscogs(r, false));
+          return mergedDiscogs;
         };
-
-        artistReleases.forEach(r => addUniqueDiscogs(r, true));
-        generalResults.forEach(r => addUniqueDiscogs(r, false));
-        
-        discogsResults = mergedDiscogs;
+        discogsResults = await withTimeout(discogsSearchPromise(), 5000, 'Discogs');
+      } catch (err: any) {
+        console.error(err.message);
+        errors.push(err.message);
+      }
     }
 
     // C. Merge MB and Discogs
@@ -175,6 +192,7 @@ export const search = asyncHandler(async (req: Request, res: Response) => {
 
   res.json({
     local,
-    discogs: externalResults // Frontend expects 'discogs' key for external results currently
+    discogs: externalResults, // Frontend expects 'discogs' key for external results currently
+    errors
   });
 });

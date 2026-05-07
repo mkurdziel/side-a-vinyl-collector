@@ -31,6 +31,7 @@ export interface Album {
 export interface SearchResult {
   local: Album[];
   discogs: DiscogsAlbum[];
+  errors?: string[];
 }
 
 export interface DiscogsAlbum {
