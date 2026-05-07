@@ -103,7 +103,7 @@ function App() {
     // Debounce the actual search API call
     searchTimeoutRef.current = setTimeout(() => {
       performSearch(query);
-    }, 500); // 500ms delay
+    }, 5000); // 5000ms (5 seconds) delay
   };
 
   const handleAddFromDiscogs = async (album: DiscogsAlbum, targetStatus: 'collection' | 'wishlist') => {
@@ -246,6 +246,14 @@ function App() {
               placeholder="Search albums..."
               value={searchQuery}
               onChange={(e) => handleSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  if (searchTimeoutRef.current) {
+                    clearTimeout(searchTimeoutRef.current);
+                  }
+                  performSearch(e.currentTarget.value);
+                }
+              }}
             />
             {searchQuery && (
               <button
