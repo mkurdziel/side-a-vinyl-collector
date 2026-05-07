@@ -13,6 +13,8 @@ function App() {
   const [albums, setAlbums] = useState<Album[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [lastSearchedQuery, setLastSearchedQuery] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<{ local: Album[]; discogs: DiscogsAlbum[] } | null>(null);
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [showBarcodeScanner, setShowBarcodeScanner] = useState(false);
@@ -22,7 +24,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [discogsConfigured, setDiscogsConfigured] = useState(false);
   const [viewMode, setViewMode] = useState<'collection' | 'wishlist'>('collection');
-  const [addedAlbums, setAddedAlbums] = useState<Set<string | number>>(new Set());
+  const [addedAlbums, setAddedAlbums] = useState<Record<string | number, { status: 'collection' | 'wishlist', showAdded: boolean }>>({});
   const searchTimeoutRef = useRef<number | null>(null);
   const [sortBy, setSortBy] = useState<'title' | 'artist' | 'date'>(() => {
     const saved = localStorage.getItem('albumSortBy');
@@ -71,9 +73,12 @@ function App() {
   const performSearch = async (query: string) => {
     if (query.trim().length < 2) {
       setSearchResults(null);
+      setLastSearchedQuery(query.trim());
       return;
     }
 
+    setIsSearching(true);
+    setLastSearchedQuery(query.trim());
     try {
       const results = await api.search(query);
       setSearchResults(results);
@@ -83,6 +88,8 @@ function App() {
       }
     } catch (error) {
       toast.error('Search failed');
+    } finally {
+      setIsSearching(false);
     }
   };
 
@@ -120,11 +127,19 @@ function App() {
       toast.success(`Album added to ${targetStatus}`);
       
       // Update local state to show "Added" in UI without reload
-      setAddedAlbums(prev => {
-        const next = new Set(prev);
-        next.add(album.coverImageUrl || album.discogsId);
-        return next;
-      });
+      const addedId = album.coverImageUrl || album.discogsId;
+      setAddedAlbums(prev => ({
+        ...prev,
+        [addedId]: { status: targetStatus, showAdded: true }
+      }));
+      
+      // Transition out of the "Added" state after 2 seconds
+      setTimeout(() => {
+        setAddedAlbums(prev => ({
+          ...prev,
+          [addedId]: { status: targetStatus, showAdded: false }
+        }));
+      }, 2000);
       
       // Silently refresh main list in background
       loadAlbums(); 
@@ -259,12 +274,20 @@ function App() {
       <div className="max-w-7xl mx-auto px-6 py-8">
         <div className="flex flex-col md:flex-row gap-3 mb-12">
           <div className="relative flex-1">
-            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
+            {isSearching ? (
+              <div className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 border-2 border-purple-200 border-t-purple-600 rounded-full animate-spin"></div>
+            ) : (
+              <svg className={`absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 ${
+                searchQuery.trim() !== lastSearchedQuery && searchQuery.trim().length >= 2 ? 'text-purple-500 animate-pulse' : 'text-gray-400'
+              }`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            )}
             <input
               type="text"
-              className="w-full pl-10 pr-10 py-2.5 text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+              className={`w-full pl-10 pr-24 py-2.5 text-base border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent ${
+                searchQuery.trim() !== lastSearchedQuery && searchQuery.trim().length >= 2 ? 'border-purple-300 bg-purple-50' : 'border-gray-300'
+              }`}
               placeholder="Search albums..."
               value={searchQuery}
               onChange={(e) => handleSearch(e.target.value)}
@@ -278,17 +301,23 @@ function App() {
               }}
             />
             {searchQuery && (
-              <button
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
-                onClick={() => {
-                  setSearchQuery('');
-                  setSearchResults(null);
-                }}
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                {searchQuery.trim() !== lastSearchedQuery && searchQuery.trim().length >= 2 && !isSearching && (
+                  <span className="text-xs font-medium text-purple-600 bg-purple-100 px-2 py-1 rounded hidden sm:inline-block animate-pulse shadow-sm">Press Enter ↵</span>
+                )}
+                <button
+                  className="text-gray-400 hover:text-gray-600 transition-colors bg-white/50 rounded-full p-0.5"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setLastSearchedQuery('');
+                    setSearchResults(null);
+                  }}
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
             )}
           </div>
           <button className="px-5 py-2.5 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors md:w-auto w-full flex items-center justify-center gap-2" onClick={() => setShowAddMenu(!showAddMenu)}>
@@ -474,7 +503,7 @@ function App() {
                         {album.year && <p className="text-xs text-gray-400">{album.year}</p>}
                       </div>
                       <div className={`absolute top-2 right-2 flex flex-col gap-1 transition-opacity duration-200 ${
-                        album.inCollection || album.inWishlist || addedAlbums.has(album.coverImageUrl || album.discogsId)
+                        album.inCollection || album.inWishlist || addedAlbums[album.coverImageUrl || album.discogsId]
                           ? 'opacity-100'
                           : 'opacity-0 group-hover:opacity-100'
                       }`}>
@@ -492,12 +521,22 @@ function App() {
                              </svg>
                              In Wishlist
                           </div>
-                        ) : addedAlbums.has(album.coverImageUrl || album.discogsId) ? (
-                          <div className="bg-green-600 text-white rounded-lg p-2 text-xs font-medium shadow-sm flex items-center justify-center gap-1 w-32">
-                             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        ) : addedAlbums[album.coverImageUrl || album.discogsId] ? (
+                          <div className={`text-white rounded-lg p-2 text-xs font-medium shadow-sm flex items-center justify-center gap-1 w-32 cursor-default ${
+                            addedAlbums[album.coverImageUrl || album.discogsId].status === 'collection' ? 'bg-green-600' : 'bg-purple-600'
+                          }`}>
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              {addedAlbums[album.coverImageUrl || album.discogsId].status === 'collection' || addedAlbums[album.coverImageUrl || album.discogsId].showAdded ? (
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                             </svg>
-                             Added
+                              ) : (
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                              )}
+                            </svg>
+                            {addedAlbums[album.coverImageUrl || album.discogsId].showAdded
+                              ? 'Added'
+                              : addedAlbums[album.coverImageUrl || album.discogsId].status === 'collection'
+                                ? 'In Collection'
+                                : 'In Wishlist'}
                           </div>
                         ) : (
                           <>
