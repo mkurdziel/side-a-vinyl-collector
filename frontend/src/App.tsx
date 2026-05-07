@@ -215,21 +215,33 @@ function App() {
             </button>
           </div>
 
-          {/* Sort dropdown */}
-          <div className="mt-4 flex items-center gap-2">
-            <label htmlFor="sort-select" className="text-sm font-medium text-gray-700">
-              Sort by:
-            </label>
-            <select
-              id="sort-select"
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as 'title' | 'artist' | 'date')}
-              className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white"
-            >
-              <option value="title">Album Title</option>
-              <option value="artist">Artist Name</option>
-              <option value="date">Date Added</option>
-            </select>
+          <div className="mt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="text-sm font-medium text-gray-600">
+              {loading ? (
+                <span>Loading...</span>
+              ) : (
+                <span>
+                  {albums.length} {albums.length === 1 ? 'item' : 'items'} in {viewMode === 'collection' ? 'Collection' : 'Wishlist'}
+                </span>
+              )}
+            </div>
+
+            {/* Sort dropdown */}
+            <div className="flex items-center gap-2">
+              <label htmlFor="sort-select" className="text-sm font-medium text-gray-700">
+                Sort by:
+              </label>
+              <select
+                id="sort-select"
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as 'title' | 'artist' | 'date')}
+                className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white"
+              >
+                <option value="title">Album Title</option>
+                <option value="artist">Artist Name</option>
+                <option value="date">Date Added</option>
+              </select>
+            </div>
           </div>
         </div>
       </header>
@@ -360,7 +372,7 @@ function App() {
                     )}
                 </div>
               ) : (
-                displayAlbums.map((album) => (
+                sortedAlbums.map((album) => (
                   <div
                     key={album.id}
                     className="bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow group relative overflow-hidden cursor-pointer"
