@@ -1,7 +1,11 @@
 import { Request, Response } from 'express';
 import visionService from '../services/vision';
 import discogsService from '../services/discogs';
+import pool from '../config/database';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
+
+// Helper to normalize strings for comparison
+const normalize = (str: string) => str.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 export const analyzeImage = asyncHandler(async (req: Request, res: Response) => {
   const { image } = req.body;
@@ -62,6 +66,49 @@ export const analyzeImage = asyncHandler(async (req: Request, res: Response) => 
   }
 
   discogsMatches = Array.from(matchesMap.values());
+
+  // Annotate matches with collection/wishlist status
+  // Build lookup from local collection
+  const allCollections = await pool.query(`
+    SELECT albums.id, albums.discogs_id, albums.title, artists.name as artist_name, collections.status
+    FROM collections
+    JOIN albums ON collections.album_id = albums.id
+    JOIN artists ON albums.artist_id = artists.id
+  `);
+
+  const collectionLookup = new Set<string>();
+  const wishlistLookup = new Set<string>();
+  const albumIdLookup = new Map<string, number>();
+
+  allCollections.rows.forEach((row: any) => {
+    const key = `${normalize(row.artist_name)}:${normalize(row.title)}`;
+    const discogsKey = row.discogs_id ? `discogs:${row.discogs_id}` : null;
+    if (row.status === 'wishlist') {
+      wishlistLookup.add(key);
+      if (discogsKey) wishlistLookup.add(discogsKey);
+    } else {
+      collectionLookup.add(key);
+      if (discogsKey) collectionLookup.add(discogsKey);
+    }
+    albumIdLookup.set(key, row.id);
+    if (discogsKey) albumIdLookup.set(discogsKey, row.id);
+  });
+
+  discogsMatches = discogsMatches.map((match: any) => {
+    const key = `${normalize(match.artist)}:${normalize(match.album)}`;
+    const discogsKey = match.discogsId ? `discogs:${match.discogsId}` : null;
+
+    const inCollection = collectionLookup.has(key) || (discogsKey ? collectionLookup.has(discogsKey) : false);
+    const inWishlist = wishlistLookup.has(key) || (discogsKey ? wishlistLookup.has(discogsKey) : false);
+    const existingAlbumId = albumIdLookup.get(key) || (discogsKey ? albumIdLookup.get(discogsKey) : null);
+
+    return {
+      ...match,
+      inCollection,
+      inWishlist,
+      existingAlbumId: existingAlbumId || null,
+    };
+  });
 
   res.json({
     extractedText,

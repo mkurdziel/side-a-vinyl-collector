@@ -13,6 +13,7 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
   const [scanning, setScanning] = useState(true);
   const [lastBarcode, setLastBarcode] = useState<string>('');
   const [scannedResult, setScannedResult] = useState<any>(null);
+  const [transferring, setTransferring] = useState(false);
 
   const handleDetected = async (barcode: string) => {
     if (barcode === lastBarcode) return; // Prevent duplicate scans
@@ -53,6 +54,22 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
       onClose();
     } catch (error: any) {
       toast.error(error.message || 'Failed to add album');
+    }
+  };
+
+  const handleTransferToCollection = async () => {
+    if (!scannedResult?.existingAlbumId) return;
+
+    setTransferring(true);
+    try {
+      await api.updateStatus(scannedResult.existingAlbumId, 'collection');
+      toast.success(`Moved "${scannedResult.album}" by ${scannedResult.artist} to your collection! 🎉`);
+      onSuccess();
+      onClose();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to move album');
+    } finally {
+      setTransferring(false);
     }
   };
 
@@ -142,22 +159,88 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
                 <p className="text-sm text-gray-600">{scannedResult.artist}</p>
                 {scannedResult.year && <p className="text-sm text-gray-500">{scannedResult.year}</p>}
                 <p className="text-xs text-gray-400 mt-1">Barcode: {scannedResult.barcode}</p>
+                {/* Status badge for existing albums */}
+                {scannedResult.existingStatus && (
+                  <div className={`inline-flex items-center gap-1 mt-2 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                    scannedResult.existingStatus === 'collection'
+                      ? 'bg-green-100 text-green-700'
+                      : 'bg-purple-100 text-purple-700'
+                  }`}>
+                    {scannedResult.existingStatus === 'collection' ? (
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : (
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                      </svg>
+                    )}
+                    {scannedResult.existingStatus === 'collection' ? 'In Collection' : 'In Wishlist'}
+                  </div>
+                )}
               </div>
             </div>
             
             <div className="flex flex-col gap-2">
-              <button
-                onClick={() => handleAddToCollection('collection')}
-                className="w-full px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition-colors"
-              >
-                Add to Collection
-              </button>
-              <button
-                onClick={() => handleAddToCollection('wishlist')}
-                className="w-full px-4 py-2.5 bg-pink-600 hover:bg-pink-700 text-white rounded-lg font-medium transition-colors"
-              >
-                Add to Wishlist
-              </button>
+              {/* If album is in the wishlist, show prominent transfer button */}
+              {scannedResult.existingStatus === 'wishlist' && scannedResult.existingAlbumId && (
+                <button
+                  onClick={handleTransferToCollection}
+                  disabled={transferring}
+                  className="w-full px-4 py-3 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white rounded-xl font-bold transition-all shadow-lg shadow-green-200 hover:shadow-green-300 hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-3 disabled:opacity-60 disabled:cursor-not-allowed group"
+                >
+                  {transferring ? (
+                    <>
+                      <div className="w-5 h-5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                      Moving...
+                    </>
+                  ) : (
+                    <>
+                      {/* Arrow up from wishlist to collection icon */}
+                      <div className="flex items-center gap-1.5">
+                        <svg className="w-4 h-4 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                        </svg>
+                        <svg className="w-5 h-5 group-hover:translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                        </svg>
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                        </svg>
+                      </div>
+                      <span>Move to Collection</span>
+                    </>
+                  )}
+                </button>
+              )}
+
+              {/* If album is already in collection, show info badge */}
+              {scannedResult.existingStatus === 'collection' && (
+                <div className="w-full px-4 py-3 bg-green-50 border-2 border-green-200 text-green-700 rounded-xl font-medium flex items-center justify-center gap-2">
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  Already in your Collection
+                </div>
+              )}
+
+              {/* Standard add buttons - only show if album doesn't already exist */}
+              {!scannedResult.existingStatus && (
+                <>
+                  <button
+                    onClick={() => handleAddToCollection('collection')}
+                    className="w-full px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition-colors"
+                  >
+                    Add to Collection
+                  </button>
+                  <button
+                    onClick={() => handleAddToCollection('wishlist')}
+                    className="w-full px-4 py-2.5 bg-pink-600 hover:bg-pink-700 text-white rounded-lg font-medium transition-colors"
+                  >
+                    Add to Wishlist
+                  </button>
+                </>
+              )}
               <button
                 onClick={handleScanAnother}
                 className="w-full px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"

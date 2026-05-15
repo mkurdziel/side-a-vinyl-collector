@@ -43,6 +43,7 @@ export interface DiscogsAlbum {
   discogsId: number;
   inCollection?: boolean;
   inWishlist?: boolean;
+  existingAlbumId?: number;
   fromProvider?: string;
   confidence?: number;
 }
@@ -120,6 +121,8 @@ class ApiService {
     year?: number;
     coverImageUrl?: string;
     discogsId: number;
+    existingStatus?: 'collection' | 'wishlist' | null;
+    existingAlbumId?: number | null;
   }> {
     return this.request('/api/barcode/scan', {
       method: 'POST',

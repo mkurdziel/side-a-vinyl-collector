@@ -14,6 +14,7 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
   const [imagePreview, setImagePreview] = useState<string>('');
   const [confidence, setConfidence] = useState<number>(0);
   const [extractedInfo, setExtractedInfo] = useState<{ artist?: string; album?: string; year?: number; provider?: string; usedFallback?: boolean } | null>(null);
+  const [transferringId, setTransferringId] = useState<number | null>(null);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -84,6 +85,15 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
   };
 
   const handleSelectMatch = async (match: DiscogsAlbum) => {
+    // If already in collection, do nothing
+    if (match.inCollection) return;
+
+    // If in wishlist, transfer to collection
+    if (match.inWishlist && match.existingAlbumId) {
+      await handleTransferToCollection(match);
+      return;
+    }
+
     try {
       toast.loading('Adding to collection...', { id: 'add' });
 
@@ -101,6 +111,23 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
       onClose();
     } catch (error: any) {
       toast.error(error.message || 'Failed to add album', { id: 'add' });
+    }
+  };
+
+  const handleTransferToCollection = async (match: DiscogsAlbum) => {
+    if (!match.existingAlbumId) return;
+
+    setTransferringId(match.discogsId);
+    try {
+      toast.loading('Moving to collection...', { id: 'transfer' });
+      await api.updateStatus(match.existingAlbumId, 'collection');
+      toast.success(`Moved "${match.album}" by ${match.artist} to your collection! 🎉`, { id: 'transfer' });
+      onSuccess();
+      onClose();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to move album', { id: 'transfer' });
+    } finally {
+      setTransferringId(null);
     }
   };
 
@@ -251,7 +278,13 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
               {matches.map((match) => (
                 <div
                   key={match.discogsId}
-                  className="bg-white rounded-xl border border-gray-200 hover:border-purple-300 hover:shadow-md transition-all p-3 flex gap-4 cursor-pointer group"
+                  className={`bg-white rounded-xl border transition-all p-3 flex gap-4 group ${
+                    match.inCollection
+                      ? 'border-green-200 bg-green-50/50 cursor-default'
+                      : match.inWishlist
+                        ? 'border-purple-200 hover:border-emerald-400 hover:shadow-md cursor-pointer'
+                        : 'border-gray-200 hover:border-purple-300 hover:shadow-md cursor-pointer'
+                  }`}
                   onClick={() => handleSelectMatch(match)}
                 >
                   {match.coverImageUrl && (
@@ -262,7 +295,9 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
                     />
                   )}
                   <div className="flex-1 min-w-0 flex flex-col justify-center">
-                    <h4 className="font-bold text-gray-900 truncate group-hover:text-purple-700 transition-colors">{match.album}</h4>
+                    <h4 className={`font-bold truncate transition-colors ${
+                      match.inCollection ? 'text-green-800' : 'text-gray-900 group-hover:text-purple-700'
+                    }`}>{match.album}</h4>
                     <p className="text-gray-600 truncate">{match.artist}</p>
                     <div className="flex items-center gap-2 mt-0.5">
                       {match.year && <span className="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{match.year}</span>}
@@ -271,12 +306,46 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
                            {match.confidence}% match
                         </span>
                       )}
+                      {/* Status badge */}
+                      {match.inCollection && (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 bg-green-100 px-2 py-0.5 rounded-full">
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                          In Collection
+                        </span>
+                      )}
+                      {match.inWishlist && (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full">
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                          </svg>
+                          In Wishlist
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center px-2">
-                    <svg className="w-5 h-5 text-gray-300 group-hover:text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                    </svg>
+                    {match.inCollection ? (
+                      <svg className="w-5 h-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : match.inWishlist ? (
+                      transferringId === match.discogsId ? (
+                        <div className="w-5 h-5 border-2 border-emerald-300 border-t-emerald-600 rounded-full animate-spin" />
+                      ) : (
+                        <div className="flex items-center gap-1 bg-gradient-to-r from-emerald-500 to-green-600 text-white rounded-lg px-2.5 py-1.5 text-xs font-bold shadow-sm group-hover:shadow-md transition-all group-hover:scale-105">
+                          <svg className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                          </svg>
+                          <span className="whitespace-nowrap">Move to Collection</span>
+                        </div>
+                      )
+                    ) : (
+                      <svg className="w-5 h-5 text-gray-300 group-hover:text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    )}
                   </div>
                 </div>
               ))}
