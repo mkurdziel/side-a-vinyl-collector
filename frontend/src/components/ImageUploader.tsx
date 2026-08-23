@@ -334,7 +334,7 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
                       transferringId === match.discogsId ? (
                         <div className="w-5 h-5 border-2 border-emerald-300 border-t-emerald-600 rounded-full animate-spin" />
                       ) : (
-                        <div className="flex items-center gap-1 bg-gradient-to-r from-emerald-500 to-green-600 text-white rounded-lg px-2.5 py-1.5 text-xs font-bold shadow-sm group-hover:shadow-md transition-all group-hover:scale-105">
+                        <div className="flex items-center gap-1 bg-purple-600 text-white rounded-lg px-2.5 py-1.5 text-xs font-bold shadow-sm group-hover:shadow-md transition-all group-hover:scale-105">
                           <svg className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                           </svg>

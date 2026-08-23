@@ -105,7 +105,7 @@ export const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
       <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
           <h2 className="text-xl font-bold text-gray-900">Settings</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600" aria-label="Close settings">
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -157,9 +157,9 @@ export const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
                 />
               </div>
             </div>
-            <p className="mt-3 text-xs text-amber-600 bg-amber-50 p-2 rounded border border-amber-100 flex items-start gap-2">
+            <p className="mt-3 text-xs text-amber-600 bg-amber-50 p-3 rounded border border-amber-100 flex items-start gap-2 leading-relaxed">
               <span className="text-lg leading-none">⚠️</span>
-              Importing data will <strong>overwrite correctly existing data</strong>. Please verify your backup file before proceeding.
+              <span>Importing a backup will <strong>overwrite all existing data</strong>. Verify the backup before continuing.</span>
             </p>
           </div>
         </div>

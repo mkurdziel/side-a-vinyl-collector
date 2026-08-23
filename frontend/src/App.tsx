@@ -189,20 +189,32 @@ function App() {
   const sortedAlbums = sortAlbums(displayAlbums);
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Toaster position="top-right" />
+    <div className="rh-app min-h-screen bg-gray-50">
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          style: {
+            background: 'var(--rh-surface-2)',
+            color: 'var(--rh-ink)',
+            border: '1px solid var(--rh-edge)',
+            boxShadow: 'var(--rh-shadow-panel)',
+          },
+        }}
+      />
 
-      <header className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-6 py-8">
+      <header className="rh-header bg-white border-b border-gray-200">
+        <div className="rh-shell max-w-7xl mx-auto px-6 py-8">
           <div className="flex items-start justify-between mb-6">
             <div>
+              <p className="rh-kicker">Side A · Personal archive</p>
               <h1 className="text-2xl font-bold text-gray-900 mb-1">Vinyl Collector</h1>
               <p className="text-sm text-gray-600">Manage your vinyl record collection</p>
             </div>
             <button
               onClick={() => setShowSettings(true)}
-              className="p-2.5 text-gray-500 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-colors"
+              className="rh-icon-button p-2.5 text-gray-500 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-colors"
               title="Settings"
+              aria-label="Open settings"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -211,37 +223,35 @@ function App() {
             </button>
           </div>
 
-          <div className="flex gap-4 border-b border-gray-200">
+          <div className="rh-view-switcher flex gap-4 border-b border-gray-200" role="tablist" aria-label="Library view">
             <button
-              className={`pb-3 px-1 text-sm font-medium transition-colors relative ${
+              className={`rh-view-tab pb-3 px-1 text-sm font-medium transition-colors relative ${
                 viewMode === 'collection'
                   ? 'text-purple-600'
                   : 'text-gray-500 hover:text-gray-700'
               }`}
               onClick={() => setViewMode('collection')}
+              role="tab"
+              aria-selected={viewMode === 'collection'}
             >
               Collection
-              {viewMode === 'collection' && (
-                <div className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-600 rounded-t-full"></div>
-              )}
             </button>
             <button
-              className={`pb-3 px-1 text-sm font-medium transition-colors relative ${
+              className={`rh-view-tab pb-3 px-1 text-sm font-medium transition-colors relative ${
                 viewMode === 'wishlist'
                   ? 'text-purple-600'
                   : 'text-gray-500 hover:text-gray-700'
               }`}
               onClick={() => setViewMode('wishlist')}
+              role="tab"
+              aria-selected={viewMode === 'wishlist'}
             >
               Wishlist
-              {viewMode === 'wishlist' && (
-                <div className="absolute bottom-0 left-0 w-full h-0.5 bg-purple-600 rounded-t-full"></div>
-              )}
             </button>
           </div>
 
           <div className="mt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="text-sm font-medium text-gray-600">
+            <div className="rh-library-count text-sm font-medium text-gray-600">
               {loading ? (
                 <span>Loading...</span>
               ) : (
@@ -253,8 +263,8 @@ function App() {
 
             {/* Sort dropdown */}
             <div className="flex items-center gap-2">
-              <label htmlFor="sort-select" className="text-sm font-medium text-gray-700">
-                Sort by:
+              <label htmlFor="sort-select" className="rh-field-label text-sm font-medium text-gray-700">
+                Sort
               </label>
               <select
                 id="sort-select"
@@ -271,9 +281,9 @@ function App() {
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        <div className="flex flex-col md:flex-row gap-3 mb-12">
-          <div className="relative flex-1">
+      <main className="rh-main rh-shell max-w-7xl mx-auto px-6 py-8">
+        <div className="rh-command-bar flex flex-col md:flex-row gap-3 mb-12">
+          <div className="rh-search relative flex-1">
             {isSearching ? (
               <div className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 border-2 border-purple-200 border-t-purple-600 rounded-full animate-spin"></div>
             ) : (
@@ -320,7 +330,7 @@ function App() {
               </div>
             )}
           </div>
-          <button className="px-5 py-2.5 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors md:w-auto w-full flex items-center justify-center gap-2" onClick={() => setShowAddMenu(!showAddMenu)}>
+          <button className="rh-primary-action px-5 py-2.5 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors md:w-auto w-full flex items-center justify-center gap-2" onClick={() => setShowAddMenu(!showAddMenu)} aria-expanded={showAddMenu}>
             {showAddMenu ? (
               <>
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -340,7 +350,7 @@ function App() {
         </div>
 
         {viewMode === 'wishlist' && albums.length > 0 && !loading && (
-          <div className="mb-8 p-4 bg-purple-50 rounded-lg border border-purple-100 flex items-start gap-3">
+          <div className="rh-notice mb-8 p-4 bg-purple-50 rounded-lg border border-purple-100 flex items-start gap-3">
             <svg className="w-5 h-5 text-purple-600 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
@@ -380,7 +390,7 @@ function App() {
         {loading ? (
           <div className="text-center py-16">
             <div className="inline-block w-16 h-16 border-4 border-white/30 border-t-white rounded-full animate-spin"></div>
-            <p className="mt-4 text-xl text-white font-medium">Loading your collection...</p>
+            <p className="mt-4 text-xl text-gray-900 font-medium">Loading your collection...</p>
           </div>
         ) : (
           <>
@@ -414,10 +424,10 @@ function App() {
                 sortedAlbums.map((album) => (
                   <div
                     key={album.id}
-                    className="bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow group relative overflow-hidden cursor-pointer"
+                    className="rh-album-card bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow group relative overflow-hidden cursor-pointer"
                     onClick={() => setSelectedAlbum(album)}
                   >
-                    <div className="aspect-square bg-gray-50 flex items-center justify-center overflow-hidden rounded-t-xl">
+                    <div className="rh-album-cover aspect-square bg-gray-50 flex items-center justify-center overflow-hidden rounded-t-xl">
                       <img
                         src={getCoverArtUrl(album.id)}
                         alt={album.title}
@@ -446,7 +456,7 @@ function App() {
                         )}
                       </div>
                     </div>
-                    <div className="p-3">
+                    <div className="rh-album-meta p-3">
                       <h3 className="font-medium text-sm mb-0.5 truncate text-gray-900">{album.title}</h3>
                       <p className="text-xs text-gray-600 truncate mb-0.5">{album.artist_name}</p>
                       {album.year && <p className="text-xs text-gray-400">{album.year}</p>}
@@ -483,8 +493,8 @@ function App() {
                 <h2 className="text-lg font-semibold text-gray-900 mb-4">Search Results</h2>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
                   {searchResults.discogs.map((album) => (
-                    <div key={album.discogsId} className="bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow group relative overflow-hidden">
-                      <div className="aspect-square bg-gray-50 flex items-center justify-center overflow-hidden rounded-t-xl">
+                    <div key={album.discogsId} className="rh-album-card bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow group relative overflow-hidden">
+                      <div className="rh-album-cover aspect-square bg-gray-50 flex items-center justify-center overflow-hidden rounded-t-xl">
                         {album.coverImageUrl ? (
                           <img
                             src={album.coverImageUrl}
@@ -497,7 +507,7 @@ function App() {
                           </svg>
                         )}
                       </div>
-                      <div className="p-3">
+                      <div className="rh-album-meta p-3">
                         <h3 className="font-medium text-sm mb-0.5 truncate text-gray-900">{album.album}</h3>
                         <p className="text-xs text-gray-600 truncate mb-0.5">{album.artist}</p>
                         {album.year && <p className="text-xs text-gray-400">{album.year}</p>}
@@ -570,7 +580,7 @@ function App() {
             )}
           </>
         )}
-      </div>
+      </main>
 
       {/* Version Footer */}
       <footer className="max-w-7xl mx-auto px-6 py-4 text-center">

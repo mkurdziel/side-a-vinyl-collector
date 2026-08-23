@@ -128,7 +128,7 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
                 <div className="absolute inset-0 pointer-events-none">
                   {/* Scanning frame - centered */}
                   <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-3/4 max-w-xs h-40 border-2 border-purple-500 rounded-xl shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]">
-                    <div className="absolute top-0 left-0 right-0 h-0.5 bg-purple-500 animate-scan" style={{ top: '50%', boxShadow: '0 0 8px 2px rgba(168, 85, 247, 0.6)' }} />
+                    <div className="absolute top-0 left-0 right-0 h-0.5 bg-purple-500 animate-scan" style={{ top: '50%', boxShadow: '0 0 8px 2px rgba(84, 156, 214, 0.6)' }} />
                   </div>
                 </div>
                 
@@ -187,7 +187,7 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
                 <button
                   onClick={handleTransferToCollection}
                   disabled={transferring}
-                  className="w-full px-4 py-3 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white rounded-xl font-bold transition-all shadow-lg shadow-green-200 hover:shadow-green-300 hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-3 disabled:opacity-60 disabled:cursor-not-allowed group"
+                  className="w-full px-4 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold transition-all shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-3 disabled:opacity-60 disabled:cursor-not-allowed group"
                 >
                   {transferring ? (
                     <>
@@ -235,7 +235,7 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
                   </button>
                   <button
                     onClick={() => handleAddToCollection('wishlist')}
-                    className="w-full px-4 py-2.5 bg-pink-600 hover:bg-pink-700 text-white rounded-lg font-medium transition-colors"
+                    className="w-full px-4 py-2.5 text-purple-600 bg-purple-50 border border-purple-200 hover:bg-purple-100 rounded-lg font-medium transition-colors"
                   >
                     Add to Wishlist
                   </button>
