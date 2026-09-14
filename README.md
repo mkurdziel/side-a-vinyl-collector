@@ -11,7 +11,7 @@ A modern web application for managing your vinyl record collection with AI-power
   - Move albums between collection and wishlist
   - Search and add directly to wishlist
 - **AI Vision Recognition**: Upload photos of album covers for automatic identification
-  - Dual-provider fallback system (OpenAI GPT-4 + Anthropic Claude)
+  - Dual-provider fallback system (OpenAI GPT-6 Astra + Anthropic Claude)
   - Configurable confidence thresholds
   - Automatic fallback for maximum accuracy
 - **Barcode Scanning**: Scan barcodes to quickly add albums
@@ -48,7 +48,7 @@ A modern web application for managing your vinyl record collection with AI-power
 - Express.js
 - PostgreSQL database
 - Redis caching
-- OpenAI GPT-4 Vision API
+- OpenAI GPT-6 Astra with image input
 - Anthropic Claude Vision API
 - Discogs API integration
 

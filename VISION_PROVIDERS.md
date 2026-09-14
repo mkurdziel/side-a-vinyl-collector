@@ -14,10 +14,10 @@ This ensures maximum accuracy while optimizing API costs.
 
 ## Supported Providers
 
-### OpenAI GPT-4
-- Model: `gpt-4o` (latest vision model)
-- High-quality image understanding
-- Excellent at recognizing iconic album covers
+### OpenAI GPT-6 Astra
+- Model: `gpt-6-astra` ([official model documentation](https://developers.openai.com/api/docs/models/gpt-6-astra), checked September 13, 2026)
+- OpenAI's most capable model, with image input support
+- Uses high-detail images and low reasoning effort for interactive cover recognition
 - Requires `OPENAI_API_KEY` environment variable
 
 ### Anthropic Claude
@@ -117,20 +117,13 @@ You'll see messages like:
 
 ### Per-Request Costs
 - **Anthropic Claude Sonnet 4**: ~$3 per 1M input tokens, ~$15 per 1M output tokens
-- **OpenAI GPT-4o**: ~$2.50 per 1M input tokens, ~$10 per 1M output tokens
+- **OpenAI GPT-6 Astra**: $10 per 1M input tokens, $50 per 1M output tokens at standard rates for this workload ([pricing](https://developers.openai.com/api/docs/models/gpt-6-astra))
 
 ### Token Usage Per Album
-Each album cover analysis typically uses:
-- ~1000-2000 tokens for the image
-- ~100-200 tokens for the prompt
-- ~50-100 tokens for the response
-- **Total: ~1500 tokens per analysis**
+Usage depends on image dimensions, prompt length, and reasoning. The OpenAI request allows up to 8,192 completion tokens, including reasoning and the JSON result; this is a ceiling, not expected usage.
 
 ### Fallback Cost Impact
-With dual-provider fallback enabled:
-- **Best case**: Only primary provider used (~$0.004 per album)
-- **Fallback triggered**: Both providers used (~$0.008 per album)
-- **Typical usage**: ~20-30% fallback rate (based on 90% threshold)
+With dual-provider fallback enabled, a fallback attempt adds the second provider's usage cost. Measure actual token usage and fallback frequency on your covers before estimating per-album cost.
 
 ### Recommendations
 - **High accuracy needs**: Use dual-provider with 90% threshold
@@ -139,12 +132,4 @@ With dual-provider fallback enabled:
 
 ## Accuracy Comparison
 
-Both providers deliver excellent results:
-
-- **GPT-4o**: Best for iconic albums, overall image understanding
-- **Claude Sonnet 4**: Best for text-heavy covers, OCR accuracy
-
-With dual-provider fallback at 90% confidence:
-- **~95% first-try accuracy** (primary provider meets threshold)
-- **~98% with fallback** (either provider succeeds)
-- Significantly better than single-provider setups
+Cover recognition accuracy has not been benchmarked for GPT-6 Astra in this app. Evaluate it on representative album photos; the providers' confidence scores are self-reported and are not measured accuracy percentages.

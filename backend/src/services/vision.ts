@@ -238,7 +238,7 @@ class VisionService {
       }
 
       const response = await this.openaiClient.chat.completions.create({
-        model: 'gpt-4o', // Latest GPT-4 with vision
+        model: 'gpt-6-astra',
         messages: [
           {
             role: 'user',
@@ -269,8 +269,9 @@ Use null for any field you cannot determine. Confidence scoring guide:
             ]
           }
         ],
-        max_tokens: 1024,
-        temperature: 0.3
+        // Allow room for reasoning as well as the short JSON result.
+        max_completion_tokens: 8192,
+        reasoning_effort: 'low'
       });
 
       const content = response.choices[0]?.message?.content;
