@@ -37,7 +37,7 @@ New columns added to the `albums` table:
 ```sql
 musicbrainz_id UUID                 -- MusicBrainz Release ID (MBID)
 local_cover_path TEXT               -- Local filename for cached cover art
-cover_art_fetched BOOLEAN           -- Whether we attempted to fetch from MusicBrainz
+cover_art_fetched BOOLEAN           -- Artwork successfully resolved or manually selected
 ```
 
 ## API Endpoints
@@ -62,6 +62,16 @@ POST /api/cover-art/:id/fetch
 ```
 
 Manually trigger MusicBrainz cover art fetching for an existing album.
+
+Explicit refreshes retry even when `cover_art_fetched` is already true, including
+records marked by older versions after failed lookups. Failed or empty MusicBrainz
+lookups preserve existing artwork and do not mark it fetched. A cached Discogs
+fallback remains available while a later refresh can retry MusicBrainz. When
+official artwork is found, its URL replaces the fallback and the old local-file
+reference is cleared so the new image is served.
+
+With MusicBrainz disabled, a successful fallback cache marks artwork fetched;
+manually selected artwork also marks it fetched after it has been saved.
 
 **Response**:
 ```json

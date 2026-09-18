@@ -72,15 +72,8 @@ export const fetchOfficialCoverArt = asyncHandler(async (req: Request, res: Resp
 
   const album = result.rows[0];
 
-  // Skip if we already have official cover art
-  if (album.cover_art_fetched && album.cover_image_url) {
-    return res.json({
-      message: 'Album already has official cover art',
-      coverArtUrl: `/api/cover-art/${id}`
-    });
-  }
-
-  // Try to fetch from MusicBrainz
+  // Explicit refreshes always retry. Older records may be marked fetched after
+  // a failed lookup, and successfully cached fallback art is not official art.
   let mbAlbum;
   if (album.musicbrainz_id) {
     // We already have the MBID, just get cover art
@@ -88,7 +81,7 @@ export const fetchOfficialCoverArt = asyncHandler(async (req: Request, res: Resp
     if (coverArt) {
       mbAlbum = {
         mbid: album.musicbrainz_id,
-        coverArtUrl: coverArt,
+        coverImageUrl: coverArt,
         hasCoverArt: true
       };
     }
@@ -97,21 +90,24 @@ export const fetchOfficialCoverArt = asyncHandler(async (req: Request, res: Resp
     mbAlbum = await musicbrainzService.searchAndGetCoverArt(album.artist, album.title);
   }
 
-  if (mbAlbum && mbAlbum.coverArtUrl) {
+  if (mbAlbum?.coverImageUrl) {
     // Update database with MusicBrainz info
     await pool.query(
       `UPDATE albums
-       SET musicbrainz_id = $1, cover_image_url = $2, cover_art_fetched = TRUE
+       SET musicbrainz_id = $1, cover_image_url = $2, local_cover_path = NULL,
+           cover_art_fetched = TRUE
        WHERE id = $3`,
-      [mbAlbum.mbid, mbAlbum.coverArtUrl, id]
+      [mbAlbum.mbid, mbAlbum.coverImageUrl, id]
     );
 
   } else {
-    // No official cover art found - mark as attempted
-    await pool.query(
-      'UPDATE albums SET cover_art_fetched = TRUE WHERE id = $1',
-      [id]
-    );
+    // Preserve a discovered MBID for retry without marking a failed lookup fetched.
+    if (mbAlbum?.mbid) {
+      await pool.query(
+        'UPDATE albums SET musicbrainz_id = $1 WHERE id = $2',
+        [mbAlbum.mbid, id]
+      );
+    }
 
     // Try to cache from Discogs if available
     if (album.cover_image_url && !album.local_cover_path) {
@@ -175,9 +171,9 @@ export const searchCoverArt = asyncHandler(async (req: Request, res: Response) =
   ]);
 
   // Format MusicBrainz results
-  const mbCandidates = mbResults.map(r => ({
+  const mbCandidates = mbResults.filter(r => r.coverImageUrl).map(r => ({
     source: 'MusicBrainz',
-    url: r.coverArtUrl,
+    url: r.coverImageUrl,
     title: r.album,
     year: r.year,
     id: r.mbid

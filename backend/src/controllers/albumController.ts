@@ -20,15 +20,16 @@ async function fetchMusicBrainzCoverArt(
     // Search MusicBrainz and get cover art
     const mbAlbum = await musicbrainzService.searchAndGetCoverArt(artist, album);
 
-    if (mbAlbum && mbAlbum.coverArtUrl) {
+    if (mbAlbum?.coverImageUrl) {
       // Found official cover art from MusicBrainz
       console.log(`✓ Found MusicBrainz cover art for ${artist} - ${album}`);
 
       await pool.query(
         `UPDATE albums
-         SET musicbrainz_id = $1, cover_image_url = $2, cover_art_fetched = TRUE
+         SET musicbrainz_id = $1, cover_image_url = $2, local_cover_path = NULL,
+             cover_art_fetched = TRUE
          WHERE id = $3`,
-        [mbAlbum.mbid, mbAlbum.coverArtUrl, albumId]
+        [mbAlbum.mbid, mbAlbum.coverImageUrl, albumId]
       );
     } else {
       // No official cover art found - cache existing cover from Discogs/other source
@@ -37,18 +38,12 @@ async function fetchMusicBrainzCoverArt(
       if (mbAlbum?.mbid) {
         // We found the album but no cover art
         await pool.query(
-          'UPDATE albums SET musicbrainz_id = $1, cover_art_fetched = TRUE WHERE id = $2',
+          'UPDATE albums SET musicbrainz_id = $1 WHERE id = $2',
           [mbAlbum.mbid, albumId]
-        );
-      } else {
-        // Couldn't find the album in MusicBrainz at all
-        await pool.query(
-          'UPDATE albums SET cover_art_fetched = TRUE WHERE id = $1',
-          [albumId]
         );
       }
 
-      // Cache the existing Discogs/other cover art locally
+      // Keep unsuccessful MusicBrainz lookups retryable, even when caching a fallback.
       if (existingCoverUrl) {
         try {
           const imageBuffer = await musicbrainzService.downloadCoverArt(existingCoverUrl);
