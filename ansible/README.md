@@ -11,6 +11,8 @@ This directory contains Ansible playbooks for deploying Vinyl Collector to your 
    - `default_pass` - PostgreSQL password
    - `host_db` - PostgreSQL host
    - `host_redis` - Redis host (or use the deployed vinyl_redis container)
+   - `vinyl_redis_password` - Redis password (optional, for an authenticated Redis server)
+   - `vinyl_redis_username` - Redis ACL username (optional; omit for password-only authentication)
    - `docker_dir` - Base directory for Docker volumes
    - `vinyl_discogs_token` - Discogs API token
    - `vinyl_anthropic_key` - Anthropic API key (optional)
@@ -45,4 +47,8 @@ ansible-playbook vinyl-collector.yml
 - The service uses the combined single-container image from GHCR
 - Both frontend and backend are served from port 5001
 - Redis runs as a separate container for caching
+- The deployed `vinyl_redis` container has no authentication by default. The optional
+  Redis credentials apply to the app's connection to `host_redis`; they do not
+  configure authentication on the Redis server. Omit both variables when using
+  the default container.
 - PostgreSQL is expected to be running externally

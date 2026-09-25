@@ -64,6 +64,8 @@
       REDIS_HOST: "{{ host_redis }}"
       REDIS_PORT: "6379"
       REDIS_DB: "0"
+      REDIS_USERNAME: "{{ vinyl_redis_username | default('') }}"
+      REDIS_PASSWORD: "{{ vinyl_redis_password | default('') }}"
       DISCOGS_TOKEN: "{{ vinyl_discogs_token }}"
       ANTHROPIC_API_KEY: "{{ vinyl_anthropic_key }}"
       OPENAI_API_KEY: "{{ vinyl_openai_key }}"

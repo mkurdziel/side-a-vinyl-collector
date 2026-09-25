@@ -230,10 +230,18 @@ docker exec vinyl_backend bun run migrate
 See `.env.example` for all configuration options:
 
 - Database: PostgreSQL connection settings
-- Redis: Cache configuration
+- Redis: Cache configuration, with optional `REDIS_PASSWORD` and `REDIS_USERNAME` credentials
 - Discogs: API token for imports and search
 - Vision AI: OpenAI and Anthropic API keys
 - Vision Config: Provider selection and confidence threshold
+
+For a Redis server that requires authentication, set `REDIS_PASSWORD`. Set
+`REDIS_USERNAME` as well when using a named Redis ACL user; leave it empty for
+password-only authentication. Leaving both credentials unset or empty preserves
+unauthenticated connections. These settings authenticate the app to an existing Redis
+server; they do not configure server-side users or passwords. The bundled Compose
+Redis containers run without authentication, so leave both values empty unless
+you also configure the Redis server to require matching credentials.
 
 ## CI/CD
 
