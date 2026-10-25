@@ -1,6 +1,12 @@
 node_modules
+**/node_modules
 .git
 .env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
 *.log
 .DS_Store
 bun.lockb
@@ -8,3 +14,6 @@ dist
 build
 .vscode
 .idea
+**/coverage
+**/.DS_Store
+**/*.tsbuildinfo

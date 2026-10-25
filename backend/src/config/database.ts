@@ -12,8 +12,13 @@ const pool = new Pool({
 });
 
 pool.on('error', (err) => {
-  console.error('Unexpected error on idle PostgreSQL client', err);
-  process.exit(-1);
+  // pg-pool has already removed the failed idle client. Future checkouts open
+  // a replacement connection; terminating here also interrupts healthy requests.
+  // Do not log the whole error: pg-pool attaches the client, including its config.
+  console.error('Idle PostgreSQL connection failed; the pool will reconnect on demand', {
+    message: err.message,
+    code: (err as Error & { code?: string }).code,
+  });
 });
 
 export default pool;

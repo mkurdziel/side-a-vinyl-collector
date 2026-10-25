@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 
 export class AppError extends Error {
   statusCode: number;
@@ -18,6 +18,14 @@ export const errorHandler = (
   res: Response,
   next: NextFunction
 ) => {
+  const bodyError = err as Error & { type?: string };
+  if (bodyError.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'Image must be less than 10MB', status: 'error' });
+  }
+  if (bodyError.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'Invalid JSON request body', status: 'error' });
+  }
+
   if (err instanceof AppError) {
     return res.status(err.statusCode).json({
       error: err.message,

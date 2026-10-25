@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 import discogs from '../services/discogs';
 import pool from '../config/database';
 

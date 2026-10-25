@@ -213,7 +213,7 @@ export const updateCoverArt = asyncHandler(async (req: Request, res: Response) =
   let localPath;
   try {
     const imageBuffer = await musicbrainzService.downloadCoverArt(url as string);
-    localPath = await storageService.saveCoverArt(imageBuffer, parseInt(id), url as string);
+    localPath = await storageService.saveCoverArt(imageBuffer, parseInt(String(id)), url as string);
   } catch (error) {
     console.error('Failed to download/cache image:', error);
     // Be lenient? No, if we can't download it, we probably shouldn't set it if we rely on local serving.

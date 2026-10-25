@@ -21,7 +21,8 @@ This ensures maximum accuracy while optimizing API costs.
 - Requires `OPENAI_API_KEY` environment variable
 
 ### Anthropic Claude
-- Model: `claude-sonnet-4-20250514`
+- Default model: `claude-sonnet-5-5` ([official model documentation](https://platform.claude.com/docs/en/models/sonnet-5-5/overview), checked October 25, 2026)
+- Set `ANTHROPIC_VISION_MODEL` to override the default model
 - Excellent accuracy for text recognition on album covers
 - Very strong with OCR for artist names and album titles
 - Requires `ANTHROPIC_API_KEY` environment variable
@@ -40,6 +41,9 @@ VISION_PROVIDER=openai
 # Minimum confidence threshold (0-100, default: 90)
 # If primary provider returns confidence below this, fallback provider is tried
 VISION_MIN_CONFIDENCE=90
+
+# Optional Anthropic model override
+ANTHROPIC_VISION_MODEL=claude-sonnet-5-5
 
 # API Keys - configure both for automatic fallback
 OPENAI_API_KEY=sk-xxxxx

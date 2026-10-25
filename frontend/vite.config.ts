@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import { execSync } from 'child_process'
 
 // Get git version tag, with fallback for Docker builds
-let gitVersion = 'unknown'
+let gitVersion: string
 try {
   gitVersion = execSync('git describe --tags --always').toString().trim()
 } catch (error) {

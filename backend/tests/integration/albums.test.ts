@@ -12,7 +12,7 @@ describe('Album CRUD Operations', () => {
     testPool = getTestPool();
     
     // Clear database
-    await testPool.query('DELETE FROM collection');
+    await testPool.query('DELETE FROM collections');
     await testPool.query('DELETE FROM albums');
     await testPool.query('DELETE FROM artists');
 

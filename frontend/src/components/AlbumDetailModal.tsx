@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { toast } from 'react-hot-toast';
 import api, { type Album, type SearchCoverArtResult, getCoverArtUrl } from '../services/api';
 
@@ -11,15 +11,18 @@ interface AlbumDetailModalProps {
 export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModalProps) => {
   const [refetching, setRefetching] = useState(false);
   const [currentAlbum, setCurrentAlbum] = useState<Album>(album);
+  const [receivedAlbum, setReceivedAlbum] = useState(album);
 
   const [showSelectionModal, setShowSelectionModal] = useState(false);
   const [candidates, setCandidates] = useState<SearchCoverArtResult[]>([]);
   const [imageDimensions, setImageDimensions] = useState<Record<string, string>>({});
 
-  // Sync state with prop if it changes externally
-  useEffect(() => {
+  // Reset local artwork edits when the parent supplies a different album value.
+  // React retries this render before committing children, avoiding a stale frame.
+  if (receivedAlbum !== album) {
+    setReceivedAlbum(album);
     setCurrentAlbum(album);
-  }, [album]);
+  }
 
   const handleSearchArtwork = async () => {
     setRefetching(true);

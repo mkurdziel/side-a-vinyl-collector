@@ -21,7 +21,8 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
     if (!file) return;
 
     // Validate file type
-    if (!file.type.startsWith('image/')) {
+    const isHEIC = /\.(heic|heif)$/i.test(file.name) || /^image\/(heic|heif)$/i.test(file.type);
+    if (!file.type.startsWith('image/') && !isHEIC) {
       toast.error('Please select an image file');
       return;
     }
@@ -33,16 +34,15 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
     }
 
     // Convert to base64
+    setMatches([]);
+    setExtractedInfo(null);
+    setConfidence(0);
     const reader = new FileReader();
+    reader.onerror = () => toast.error('Could not read image. Please select it again.');
     reader.onload = async () => {
       const base64 = reader.result as string;
 
       // Check if this is a HEIC image (browsers can't display HEIC)
-      const isHEIC = file.type === 'image/heic' ||
-                     file.type === 'image/heif' ||
-                     file.name.toLowerCase().endsWith('.heic') ||
-                     file.name.toLowerCase().endsWith('.heif');
-
       // Only set preview for displayable formats
       if (!isHEIC) {
         setImagePreview(base64);
@@ -196,7 +196,12 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
               </div>
               {!analyzing && (
                 <button 
-                  onClick={() => setImagePreview('')}
+                  onClick={() => {
+                    setImagePreview('');
+                    setMatches([]);
+                    setExtractedInfo(null);
+                    setConfidence(0);
+                  }}
                   className="absolute top-4 right-4 bg-white/90 text-gray-700 hover:text-red-600 p-2 rounded-lg shadow-md opacity-0 group-hover:opacity-100 transition-opacity"
                   title="Remove image"
                 >

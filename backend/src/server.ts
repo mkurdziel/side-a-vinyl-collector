@@ -4,6 +4,7 @@ import morgan from 'morgan';
 import pool from './config/database';
 import redis from './config/redis';
 import { errorHandler } from './middleware/errorHandler';
+import { jsonBodyParser } from './middleware/requestBody';
 import * as albumController from './controllers/albumController';
 import * as barcodeController from './controllers/barcodeController';
 import * as searchController from './controllers/searchController';
@@ -27,7 +28,7 @@ if (process.env.CORS_ORIGIN) {
   console.log('✓ CORS disabled (same-origin only)');
 }
 
-app.use(express.json({ limit: '10mb' }));
+app.use(jsonBodyParser);
 app.use(morgan('dev'));
 
 // Serve static files from frontend build (for single-container deployment)

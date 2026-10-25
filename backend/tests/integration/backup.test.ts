@@ -15,7 +15,7 @@ describe('Backup and Restore', () => {
     testPool = getTestPool();
     
     // Clear database
-    await testPool.query('DELETE FROM collection');
+    await testPool.query('DELETE FROM collections');
     await testPool.query('DELETE FROM albums');
     await testPool.query('DELETE FROM artists');
 
@@ -50,6 +50,13 @@ describe('Backup and Restore', () => {
     // Export backup
     const response = await request(app)
       .get('/api/backup/export')
+      .buffer(true)
+      .parse((response, done) => {
+        const chunks: Buffer[] = [];
+        response.on('data', chunk => chunks.push(Buffer.from(chunk)));
+        response.on('end', () => done(null, Buffer.concat(chunks)));
+        response.on('error', done);
+      })
       .expect(200);
 
     expect(response.headers['content-type']).toContain('application/zip');
@@ -68,12 +75,19 @@ describe('Backup and Restore', () => {
       });
 
     const exportResponse = await request(app)
-      .get('/api/backup/export');
+      .get('/api/backup/export')
+      .buffer(true)
+      .parse((response, done) => {
+        const chunks: Buffer[] = [];
+        response.on('data', chunk => chunks.push(Buffer.from(chunk)));
+        response.on('end', () => done(null, Buffer.concat(chunks)));
+        response.on('error', done);
+      });
 
     const backupFile = exportResponse.body;
 
     // Clear database
-    await testPool.query('DELETE FROM collection');
+    await testPool.query('DELETE FROM collections');
     await testPool.query('DELETE FROM albums');
     await testPool.query('DELETE FROM artists');
 
@@ -125,10 +139,17 @@ describe('Backup and Restore', () => {
 
     // Export
     const exportResponse = await request(app)
-      .get('/api/backup/export');
+      .get('/api/backup/export')
+      .buffer(true)
+      .parse((response, done) => {
+        const chunks: Buffer[] = [];
+        response.on('data', chunk => chunks.push(Buffer.from(chunk)));
+        response.on('end', () => done(null, Buffer.concat(chunks)));
+        response.on('error', done);
+      });
 
     // Clear and import
-    await testPool.query('DELETE FROM collection');
+    await testPool.query('DELETE FROM collections');
     await testPool.query('DELETE FROM albums');
     await testPool.query('DELETE FROM artists');
 

@@ -269,3 +269,5 @@ Pull requests welcome! Please ensure:
 - Code follows existing style
 - Tests pass (when implemented)
 - Documentation is updated
+
+For reproducible offline dependency installation and release builds, use the checked-in npm archives and Bun 1.4.4. See [vendor/README.md](vendor/README.md) for integrity verification, regeneration, supported platforms, and Docker build commands.

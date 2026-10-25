@@ -1,7 +1,7 @@
-import { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 import pool from '../config/database';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
-import { AlbumWithArtist } from '../types';
+import type { AlbumWithArtist } from '../types';
 import musicbrainzService from '../services/musicbrainz';
 import storageService from '../services/storage';
 
@@ -202,13 +202,17 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
       });
     }
 
-    // Fetch the complete album with artist info
+    // Return the same collection metadata as the album lookup endpoints.
     const finalResult = await client.query<AlbumWithArtist>(`
       SELECT
         albums.*,
-        artists.name as artist_name
+        artists.name as artist_name,
+        collections.status,
+        collections.notes,
+        collections.added_at
       FROM albums
       JOIN artists ON albums.artist_id = artists.id
+      JOIN collections ON collections.album_id = albums.id
       WHERE albums.id = $1
     `, [albumId]);
 

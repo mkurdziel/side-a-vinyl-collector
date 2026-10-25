@@ -4,6 +4,7 @@ import path from 'path';
 export default defineConfig({
   test: {
     globals: true,
+    include: ['tests/integration/**/*.test.ts'],
     environment: 'node',
     setupFiles: ['./tests/setup/testSetup.ts'],
     testTimeout: 30000, // 30s for testcontainers
@@ -21,7 +22,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
+      '@': path.resolve(import.meta.dirname, './src'),
     },
   },
 });

@@ -36,11 +36,6 @@ function App() {
     localStorage.setItem('albumSortBy', sortBy);
   }, [sortBy]);
 
-  useEffect(() => {
-    loadAlbums();
-    checkDiscogsConfig();
-  }, [viewMode]);
-
   // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
@@ -50,25 +45,19 @@ function App() {
     };
   }, []);
 
-  const checkDiscogsConfig = async () => {
-    try {
-      const config = await api.checkDiscogsConfig();
-      setDiscogsConfigured(config.configured);
-    } catch (error) {
-      console.error('Failed to check Discogs config:', error);
-    }
-  };
+  const checkDiscogsConfig = () => api.checkDiscogsConfig()
+    .then(config => setDiscogsConfigured(config.configured))
+    .catch(error => console.error('Failed to check Discogs config:', error));
 
-  const loadAlbums = async () => {
-    try {
-      const data = await api.getAlbums(viewMode);
-      setAlbums(data.albums);
-    } catch (error) {
-      toast.error('Failed to load albums');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const loadAlbums = () => api.getAlbums(viewMode)
+    .then(data => setAlbums(data.albums))
+    .catch(() => toast.error('Failed to load albums'))
+    .finally(() => setLoading(false));
+
+  useEffect(() => {
+    loadAlbums();
+    checkDiscogsConfig();
+  }, [viewMode]);
 
   const performSearch = async (query: string) => {
     if (query.trim().length < 2) {

@@ -1,5 +1,7 @@
 # backend
 
+Use Node.js 24 LTS (or 22.22 or newer within Node 22) for testing and type checking, and Bun 1.4.4 or newer for the application runtime and locked dependency graph.
+
 To install dependencies:
 
 ```bash

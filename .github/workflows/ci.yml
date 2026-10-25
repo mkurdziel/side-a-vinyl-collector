@@ -11,13 +11,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7.0.1
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@v4.4.1
 
     - name: Build combined image
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@v7.4.0
       with:
         context: .
         file: ./Dockerfile.combined

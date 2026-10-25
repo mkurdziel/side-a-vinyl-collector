@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 import visionService from '../services/vision';
 import discogsService from '../services/discogs';
 import pool from '../config/database';
@@ -10,7 +10,7 @@ const normalize = (str: string) => str.toLowerCase().replace(/[^a-z0-9]/g, '');
 export const analyzeImage = asyncHandler(async (req: Request, res: Response) => {
   const { image } = req.body;
 
-  if (!image) {
+  if (typeof image !== 'string' || !image.trim()) {
     throw new AppError('Image data is required', 400);
   }
 

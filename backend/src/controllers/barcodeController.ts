@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 import pool from '../config/database';
 import discogsService from '../services/discogs';
 import { asyncHandler, AppError } from '../middleware/errorHandler';

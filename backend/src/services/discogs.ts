@@ -1,7 +1,8 @@
-import axios, { AxiosInstance } from 'axios';
+import axios, { type AxiosInstance } from 'axios';
 import redis from '../config/redis';
 import { RateLimiter } from '../utils/rateLimit';
-import { DiscogsAlbum, DiscogsSearchResponse } from '../types';
+import type { DiscogsAlbum, DiscogsSearchResponse } from '../types';
+import { AppError } from '../middleware/errorHandler';
 
 class DiscogsService {
   private client: AxiosInstance;
@@ -28,12 +29,35 @@ class DiscogsService {
     this.rateLimiter = new RateLimiter(60);
   }
 
+  private logError(operation: string, error: unknown): void {
+    // Axios errors retain request headers, including the Discogs token.
+    console.error(operation, axios.isAxiosError(error)
+      ? { code: error.code, status: error.response?.status }
+      : { name: error instanceof Error ? error.name : 'UnknownError' });
+  }
+
+  private throwSearchError(error: unknown, message: string): never {
+    if (axios.isAxiosError(error)) {
+      if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+        throw new AppError('Discogs took too long to respond. Please try again.', 503);
+      }
+      if (error.response?.status === 429) {
+        throw new AppError('Discogs is busy. Please wait a moment and try again.', 503);
+      }
+      const networkCodes = ['ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ERR_NETWORK'];
+      if (networkCodes.includes(error.code || '') || (error.response && error.response.status >= 500)) {
+        throw new AppError('Discogs is temporarily unavailable. Please try again.', 503);
+      }
+    }
+    throw new Error(message);
+  }
+
   private async getCached<T>(key: string): Promise<T | null> {
     try {
       const cached = await redis.get(`${this.cachePrefix}:${key}`);
       return cached ? JSON.parse(cached) : null;
     } catch (error) {
-      console.error('Cache get error:', error);
+      this.logError('Discogs cache get error:', error);
       return null;
     }
   }
@@ -46,7 +70,7 @@ class DiscogsService {
         JSON.stringify(value)
       );
     } catch (error) {
-      console.error('Cache set error:', error);
+      this.logError('Discogs cache set error:', error);
     }
   }
 
@@ -72,8 +96,8 @@ class DiscogsService {
 
       return null;
     } catch (error) {
-      console.error('Discogs barcode search error:', error);
-      throw new Error('Failed to search Discogs by barcode');
+      this.logError('Discogs barcode search error:', error);
+      this.throwSearchError(error, 'Failed to search Discogs by barcode');
     }
   }
 
@@ -94,8 +118,8 @@ class DiscogsService {
       await this.setCache(cacheKey, albums);
       return albums;
     } catch (error) {
-      console.error('Discogs query search error:', error);
-      throw new Error('Failed to search Discogs');
+      this.logError('Discogs query search error:', error);
+      this.throwSearchError(error, 'Failed to search Discogs');
     }
   }
 
@@ -114,7 +138,7 @@ class DiscogsService {
       await this.setCache(cacheKey, album);
       return album;
     } catch (error) {
-      console.error(`Discogs get release ${releaseId} error:`, error);
+      this.logError(`Discogs get release ${releaseId} error:`, error);
       return null;
     }
   }
@@ -139,7 +163,7 @@ class DiscogsService {
       });
       return { username: result.username };
     } catch (error) {
-      console.error('Failed to get Discogs user identity:', error);
+      this.logError('Failed to get Discogs user identity:', error);
       return null;
     }
   }
@@ -167,7 +191,7 @@ class DiscogsService {
       }
       return null;
     } catch (error) {
-      console.error('Discogs artist search error:', error);
+      this.logError('Discogs artist search error:', error);
       return null;
     }
   }
@@ -222,7 +246,7 @@ class DiscogsService {
       await this.setCache(cacheKey, albums);
       return albums;
     } catch (error) {
-      console.error(`Discogs artist releases error for ${artistId}:`, error);
+      this.logError(`Discogs artist releases error for ${artistId}:`, error);
       return [];
     }
   }
@@ -253,7 +277,7 @@ class DiscogsService {
 
       return Array.from(seen.values());
     } catch (error) {
-      console.error('Failed to get Discogs collection:', error);
+      this.logError('Failed to get Discogs collection:', error);
       throw new Error('Failed to fetch Discogs collection');
     }
   }

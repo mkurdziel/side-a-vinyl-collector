@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { toast } from 'react-hot-toast';
 import api from '../services/api';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
@@ -11,14 +11,14 @@ interface BarcodeScannerProps {
 
 export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
   const [scanning, setScanning] = useState(true);
-  const [lastBarcode, setLastBarcode] = useState<string>('');
+  const lookupInProgress = useRef(false);
   const [scannedResult, setScannedResult] = useState<any>(null);
   const [transferring, setTransferring] = useState(false);
 
   const handleDetected = async (barcode: string) => {
-    if (barcode === lastBarcode) return; // Prevent duplicate scans
+    if (lookupInProgress.current) return;
 
-    setLastBarcode(barcode);
+    lookupInProgress.current = true;
     setScanning(false);
 
     try {
@@ -31,7 +31,7 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
     } catch (error: any) {
       toast.error(error.message || 'Failed to find album', { id: 'barcode' });
       setScanning(true);
-      setLastBarcode('');
+      lookupInProgress.current = false;
     }
   };
 
@@ -75,7 +75,7 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
 
   const handleScanAnother = () => {
     setScannedResult(null);
-    setLastBarcode('');
+    lookupInProgress.current = false;
     setScanning(true);
   };
 

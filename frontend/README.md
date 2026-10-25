@@ -1,3 +1,17 @@
+# Frontend development
+
+Use Node.js 24 LTS (or 22.12 or newer within Node 22) for tooling and Bun 1.4.4 or newer for the locked dependency graph.
+
+```sh
+bun install --frozen-lockfile
+bun run dev
+bun run build
+```
+
+Type checking uses the TypeScript 7 native compiler (`@typescript/native`). The
+`typescript` alias supplies Microsoft's TypeScript 6 compatibility API for
+typescript-eslint, which does not yet support the TypeScript 7 API.
+
 # React + TypeScript + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.

@@ -1,45 +1,33 @@
-# Multi-stage build combining frontend and backend
-FROM oven/bun:1 AS frontend-builder
+# Base image fetch is the only network access needed by this build.
+ARG BUN_IMAGE=oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d
+ARG RUNTIME_IMAGE=gcr.io/distroless/cc-debian13@sha256:d74d144baa124dd9defd01d71872bb56c49d4441dba6153ccf790364f97e64b1
+FROM ${BUN_IMAGE} AS dependency-assets
+WORKDIR /source
+COPY scripts/vendor-dependencies.ts scripts/
+COPY vendor/ vendor/
+COPY backend/package.json backend/bun.lock backend/
+COPY frontend/package.json frontend/bun.lock frontend/
 
+FROM dependency-assets AS frontend-builder
+RUN --network=none bun scripts/vendor-dependencies.ts install frontend
+COPY frontend/ frontend/
 ARG APP_VERSION=unknown
+RUN --network=none cd frontend && APP_VERSION=${APP_VERSION} bun run build
 
-WORKDIR /app/frontend
-COPY frontend/package.json frontend/bun.lockb* ./
-RUN bun install --frozen-lockfile
+FROM dependency-assets AS backend-dependencies
+RUN --network=none bun scripts/vendor-dependencies.ts install backend --production
 
-COPY frontend/ ./
-RUN APP_VERSION=${APP_VERSION} bun run build
-
-# Backend stage
-FROM oven/bun:1
-
-# Install system dependencies for Sharp with HEIC support
-# Note: Sharp v0.33.0+ includes prebuilt binaries with HEIC support
-RUN apt-get update && apt-get install -y \
-    libheif1 \
-    libvips42 \
-    && rm -rf /var/lib/apt/lists/*
-
+FROM ${RUNTIME_IMAGE} AS runtime
 WORKDIR /app
-
-# Copy backend files
-COPY backend/package.json backend/bun.lockb* ./
-
-# Install dependencies - Sharp should use prebuilt binary with HEIC support
-RUN bun install --frozen-lockfile
-
-# Add build arg for cache busting BEFORE copying source
-ARG CACHEBUST=1
-RUN echo "Cache bust: ${CACHEBUST}"
-
-COPY backend/ ./
-
-# Copy built frontend into backend's public directory
-COPY --from=frontend-builder /app/frontend/dist ./public
-
-# Create data directories
-RUN mkdir -p /app/data/cover-art
-
+ENV NODE_ENV=production PORT=5001 PATH=/usr/local/bin:/usr/bin:/bin
+USER 0
+COPY --from=dependency-assets /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=backend-dependencies /source/backend/node_modules ./node_modules
+COPY backend/package.json backend/bun.lock ./
+COPY backend/src ./src
+COPY --from=frontend-builder /source/frontend/dist ./public
+# Sharp uses its prebuilt libvips; HEIC decoding uses heic-convert's WASM.
+RUN --network=none ["/usr/local/bin/bun", "-e", "require(\"node:fs\").mkdirSync(\"/app/data/cover-art\",{recursive:true}); const sharp = require(\"sharp\"); await sharp({create:{width:1,height:1,channels:3,background:\"red\"}}).jpeg().toBuffer(); if(typeof require(\"heic-convert\") !== \"function\") throw new Error(\"Missing HEIC converter\"); console.log(\"Image codecs loaded\", sharp.versions.vips);"]
 EXPOSE 5001
-
-CMD ["sh", "-c", "bun run migrate && bun run dev"]
+ENTRYPOINT ["/usr/local/bin/bun"]
+CMD ["src/start.ts"]

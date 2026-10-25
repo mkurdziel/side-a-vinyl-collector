@@ -2,7 +2,7 @@ import { type Request, type Response } from 'express';
 import asyncHandler from 'express-async-handler';
 import pool from '../config/database';
 import storageService from '../services/storage';
-import archiver from 'archiver';
+import { ZipArchive } from 'archiver';
 import AdmZip from 'adm-zip';
 import fs from 'fs';
 import path from 'path';
@@ -39,7 +39,7 @@ export const exportBackup = asyncHandler(async (req: Request, res: Response) => 
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
   // 3. Create zip stream
-  const archive = archiver('zip', {
+  const archive = new ZipArchive({
     zlib: { level: 9 } // Maximum compression
   });
 
@@ -96,7 +96,7 @@ export const importBackup = asyncHandler(async (req: Request, res: Response) => 
     await disableConstraints(client);
 
     // 3. Truncate tables
-    await client.query('TRUNCATE TABLE collection, albums, artists CASCADE');
+    await client.query('TRUNCATE TABLE collections, albums, artists CASCADE');
 
     // 4. Restore Artists
     if (data.artists && data.artists.length > 0) {

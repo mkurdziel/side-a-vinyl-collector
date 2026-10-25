@@ -2,13 +2,14 @@ import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import sharp from 'sharp';
 import convert from 'heic-convert';
-import { VisionExtractionResult } from '../types';
+import type { VisionExtractionResult } from '../types';
+import { AppError } from '../middleware/errorHandler';
 
 type VisionProvider = 'anthropic' | 'openai';
 
 class VisionService {
-  private anthropicClient: Anthropic;
-  private openaiClient: OpenAI;
+  private anthropicClient: Anthropic | null;
+  private openaiClient: OpenAI | null;
   private primaryProvider: VisionProvider;
   private fallbackProvider: VisionProvider | null;
   private minConfidence: number;
@@ -24,7 +25,7 @@ class VisionService {
 
     // Get minimum confidence threshold (default 90%)
     this.minConfidence = parseInt(process.env.VISION_MIN_CONFIDENCE || '90', 10);
-    if (this.minConfidence < 0 || this.minConfidence > 100) {
+    if (!Number.isFinite(this.minConfidence) || this.minConfidence < 0 || this.minConfidence > 100) {
       console.warn(`Invalid VISION_MIN_CONFIDENCE: ${process.env.VISION_MIN_CONFIDENCE}, using default 90`);
       this.minConfidence = 90;
     }
@@ -52,8 +53,8 @@ class VisionService {
       this.fallbackProvider = null;
     }
 
-    this.anthropicClient = new Anthropic({ apiKey: anthropicKey });
-    this.openaiClient = new OpenAI({ apiKey: openaiKey });
+    this.anthropicClient = anthropicKey ? new Anthropic({ apiKey: anthropicKey }) : null;
+    this.openaiClient = openaiKey ? new OpenAI({ apiKey: openaiKey }) : null;
 
     console.log(`✓ Vision primary provider: ${this.primaryProvider}`);
     if (this.fallbackProvider) {
@@ -73,7 +74,7 @@ class VisionService {
 
     try {
       // Strip data URI prefix if present
-      const base64Data = base64Image.replace(/^data:image\/\w+;base64,/, '');
+      const base64Data = base64Image.replace(/^data:[^,]*;base64,/i, '');
 
       // Convert base64 to buffer
       let imageBuffer = Buffer.from(base64Data, 'base64');
@@ -160,6 +161,9 @@ class VisionService {
   }
 
   async extractAlbumInfo(base64Image: string): Promise<VisionExtractionResult> {
+    if (!this.hasOpenAI && !this.hasAnthropic) {
+      throw new AppError('Image recognition is not configured', 503);
+    }
     // Compress image if needed to stay under API limits
     const compressedImage = await this.compressImage(base64Image);
     // Try primary provider
@@ -177,7 +181,13 @@ class VisionService {
       // If confidence is too low and we have a fallback provider, try it
       if (this.fallbackProvider) {
         console.log(`⚠ ${this.primaryProvider} confidence ${result.confidence}% below threshold ${this.minConfidence}%, trying ${this.fallbackProvider}`);
-        const fallbackResult = await this.extractWithProvider(this.fallbackProvider, compressedImage);
+        let fallbackResult: VisionExtractionResult;
+        try {
+          fallbackResult = await this.extractWithProvider(this.fallbackProvider, compressedImage);
+        } catch (error) {
+          console.warn(`✗ ${this.fallbackProvider} failed; preserving ${this.primaryProvider} identification:`, error);
+          return result;
+        }
         fallbackResult.provider = this.fallbackProvider;
         fallbackResult.usedFallback = true;
 
@@ -230,6 +240,7 @@ class VisionService {
   }
 
   private async extractWithOpenAI(base64Image: string): Promise<VisionExtractionResult> {
+    if (!this.openaiClient) throw new AppError('OpenAI image recognition is not configured', 503);
     try {
       // Extract base64 data URL if present
       let imageUrl = base64Image;
@@ -304,13 +315,14 @@ Use null for any field you cannot determine. Confidence scoring guide:
   }
 
   private async extractWithAnthropic(base64Image: string): Promise<VisionExtractionResult> {
+    if (!this.anthropicClient) throw new AppError('Anthropic image recognition is not configured', 503);
     try {
       // Extract base64 data and detect media type
       const base64Match = base64Image.match(/^data:image\/(\w+);base64,(.+)$/);
       let mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' = 'image/jpeg';
       let imageData = base64Image;
 
-      if (base64Match) {
+      if (base64Match?.[1] && base64Match[2]) {
         // Has data URI prefix - extract media type and data
         const detectedType = base64Match[1].toLowerCase();
         // Map to supported types (Claude only supports jpeg, png, gif, webp)
@@ -334,8 +346,10 @@ Use null for any field you cannot determine. Confidence scoring guide:
       }
 
       const message = await this.anthropicClient.messages.create({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1024,
+        model: process.env.ANTHROPIC_VISION_MODEL || 'claude-sonnet-5-5',
+        // Current models include adaptive thinking in the output token budget.
+        max_tokens: 8192,
+        output_config: { effort: 'low' },
         messages: [
           {
             role: 'user',

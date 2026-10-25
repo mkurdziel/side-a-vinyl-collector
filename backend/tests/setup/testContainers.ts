@@ -1,6 +1,7 @@
 import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers';
 import { Pool } from 'pg';
 import Redis from 'ioredis';
+import { readFile } from 'node:fs/promises';
 
 let postgresContainer: StartedTestContainer;
 let redisContainer: StartedTestContainer;
@@ -46,15 +47,15 @@ export async function setupTestContainers() {
   const redisHost = redisContainer.getHost();
 
   testRedis = new Redis({
+    protocol: 2,
     host: redisHost,
     port: redisPort,
     retryStrategy: (times) => Math.min(times * 50, 2000),
   });
 
-  // Wait a bit for connections to stabilize
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  await testRedis.ping();
 
-  // Run migrations with retry
+  // Apply production migrations to the disposable database.
   await runMigrations(testPool);
 
   // Set environment variables for tests
@@ -78,45 +79,11 @@ export async function teardownTestContainers() {
 }
 
 async function runMigrations(pool: Pool) {
-  // Base schema
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS artists (
-      id SERIAL PRIMARY KEY,
-      name VARCHAR(255) NOT NULL,
-      discogs_id INTEGER UNIQUE,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS albums (
-      id SERIAL PRIMARY KEY,
-      artist_id INTEGER REFERENCES artists(id) ON DELETE CASCADE,
-      title VARCHAR(255) NOT NULL,
-      year INTEGER,
-      cover_image_url TEXT,
-      discogs_id INTEGER,
-      musicbrainz_id VARCHAR(255),
-      local_cover_path TEXT,
-      cover_art_fetched BOOLEAN DEFAULT FALSE,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS collection (
-      id SERIAL PRIMARY KEY,
-      album_id INTEGER REFERENCES albums(id) ON DELETE CASCADE,
-      added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      notes TEXT,
-      status VARCHAR(50) DEFAULT 'collection'
-    );
-
-    CREATE TABLE IF NOT EXISTS barcodes (
-      id SERIAL PRIMARY KEY,
-      barcode VARCHAR(255) NOT NULL UNIQUE,
-      album_id INTEGER REFERENCES albums(id) ON DELETE CASCADE,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
+  // Exercise the same schema and migrations as the deployed application.
+  await pool.query(await readFile(new URL('../../src/db/schema.sql', import.meta.url), 'utf8'));
+  for (const migration of ['001_add_musicbrainz_and_local_cover.sql', '002_add_collection_status.sql']) {
+    await pool.query(await readFile(new URL(`../../src/db/migrations/${migration}`, import.meta.url), 'utf8'));
+  }
 }
 
 export function getTestPool() {

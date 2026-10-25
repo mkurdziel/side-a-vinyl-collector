@@ -4,9 +4,15 @@ import Quagga from '@ericblade/quagga2';
 export const useBarcodeScanner = (onDetected: (barcode: string) => void, isActive: boolean) => {
   const scannerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
+  const onDetectedRef = useRef(onDetected);
+
+  useEffect(() => {
+    onDetectedRef.current = onDetected;
+  }, [onDetected]);
 
   useEffect(() => {
     if (!isActive || !scannerRef.current) return;
+    let cancelled = false;
 
     const config: any = {
       inputStream: {
@@ -37,6 +43,7 @@ export const useBarcodeScanner = (onDetected: (barcode: string) => void, isActiv
     };
 
     Quagga.init(config, (err) => {
+      if (cancelled) return;
       if (err) {
         console.error('Quagga initialization error:', err);
         setError('Failed to access camera. Please check permissions.');
@@ -46,12 +53,12 @@ export const useBarcodeScanner = (onDetected: (barcode: string) => void, isActiv
     });
 
     const handleDetected = (result: any) => {
-      if (result.codeResult.code) {
+      if (!cancelled && result.codeResult?.code && result.codeResult.decodedCodes?.length) {
         const confidence = result.codeResult.decodedCodes
           .reduce((sum: number, code: any) => sum + (code.error || 0), 0) / result.codeResult.decodedCodes.length;
 
         if (confidence < 0.2) { // Higher confidence = lower error
-          onDetected(result.codeResult.code);
+          onDetectedRef.current(result.codeResult.code);
         }
       }
     };
@@ -59,10 +66,11 @@ export const useBarcodeScanner = (onDetected: (barcode: string) => void, isActiv
     Quagga.onDetected(handleDetected);
 
     return () => {
+      cancelled = true;
       Quagga.stop();
       Quagga.offDetected(handleDetected);
     };
-  }, [isActive, onDetected]);
+  }, [isActive]);
 
   return { scannerRef, error };
 };
