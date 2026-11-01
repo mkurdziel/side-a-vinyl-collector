@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const { quagga, scanBarcode } = vi.hoisted(() => ({
   quagga: {
     init: vi.fn(), start: vi.fn(), stop: vi.fn(), onDetected: vi.fn(), offDetected: vi.fn(),
+    CameraAccess: { enumerateVideoDevices: vi.fn() },
   },
   scanBarcode: vi.fn(),
 }));
@@ -22,15 +23,23 @@ let renderer: ReturnType<typeof create> | undefined;
 const result = { codeResult: { code: '0602537340436', decodedCodes: [{ error: 0.05 }] } };
 
 function Camera({ callback, active = true }: { callback: (barcode: string) => void; active?: boolean }) {
-  const { scannerRef } = useBarcodeScanner(callback, active);
-  return createElement('div', { ref: scannerRef });
+  const { scannerRef, cameraId, setCameraId } = useBarcodeScanner(callback, active);
+  return createElement('div', { ref: scannerRef }, createElement('select', {
+    value: cameraId,
+    onChange: (event: { target: { value: string } }) => setCameraId(event.target.value),
+  }));
 }
 
 async function mount(element: ReturnType<typeof createElement>) {
   await act(async () => { renderer = create(element, { createNodeMock: () => ({}) }); });
 }
 
-beforeEach(() => vi.resetAllMocks());
+beforeEach(() => {
+  vi.resetAllMocks();
+  quagga.init.mockImplementation((_config, callback) => callback(null));
+  quagga.stop.mockResolvedValue(undefined);
+  quagga.CameraAccess.enumerateVideoDevices.mockResolvedValue([]);
+});
 afterEach(async () => {
   await act(async () => renderer?.unmount());
   renderer = undefined;
@@ -41,7 +50,6 @@ describe('barcode camera lifecycle', () => {
     const first = vi.fn();
     const latest = vi.fn();
     await mount(createElement(Camera, { callback: first }));
-    quagga.init.mock.calls[0]![1](null);
     await act(async () => renderer!.update(createElement(Camera, { callback: latest })));
 
     expect(quagga.init).toHaveBeenCalledOnce();
@@ -54,17 +62,47 @@ describe('barcode camera lifecycle', () => {
 
   it('does not start a camera or emit detections after scanning has stopped', async () => {
     const callback = vi.fn();
+    quagga.init.mockImplementationOnce(() => {});
     await mount(createElement(Camera, { callback }));
     const initialize = quagga.init.mock.calls[0]![1];
-    const detected = quagga.onDetected.mock.calls[0]![0];
     await act(async () => renderer!.update(createElement(Camera, { callback, active: false })));
-    initialize(null);
-    detected(result);
+    await act(async () => initialize(null));
 
     expect(quagga.stop).toHaveBeenCalledOnce();
-    expect(quagga.offDetected).toHaveBeenCalledWith(detected);
+    expect(quagga.onDetected).not.toHaveBeenCalled();
     expect(quagga.start).not.toHaveBeenCalled();
     expect(callback).not.toHaveBeenCalled();
+  });
+
+  it('releases the old camera before starting a selected lens and ignores stale detections', async () => {
+    const callback = vi.fn();
+    let release!: () => void;
+    quagga.stop.mockReturnValueOnce(new Promise<void>(resolve => { release = resolve; }));
+    await mount(createElement(Camera, { callback }));
+    const detected = quagga.onDetected.mock.calls[0]![0];
+    await act(async () => renderer!.root.findByType('select').props.onChange({ target: { value: 'rear-main' } }));
+
+    expect(quagga.init).toHaveBeenCalledOnce();
+    expect(quagga.stop).toHaveBeenCalledOnce();
+    detected(result);
+    expect(callback).not.toHaveBeenCalled();
+    await act(async () => release());
+
+    expect(quagga.init).toHaveBeenCalledTimes(2);
+    const constraints = quagga.init.mock.calls[1]![0].inputStream.constraints;
+    expect(constraints.deviceId).toEqual({ exact: 'rear-main' });
+    expect(constraints).not.toHaveProperty('facingMode');
+    expect(quagga.start).toHaveBeenCalledTimes(2);
+    quagga.onDetected.mock.calls[1]![0](result);
+    expect(callback).toHaveBeenCalledWith('0602537340436');
+  });
+
+  it('keeps scanning when camera enumeration is unavailable', async () => {
+    quagga.CameraAccess.enumerateVideoDevices.mockRejectedValue(new Error('Not supported'));
+    const callback = vi.fn();
+    await mount(createElement(Camera, { callback }));
+    quagga.onDetected.mock.calls[0]![0](result);
+    expect(callback).toHaveBeenCalledWith('0602537340436');
   });
 
   it('ignores incomplete decoder results', async () => {
@@ -97,5 +135,29 @@ describe('barcode lookup requests', () => {
     const retryDetection = quagga.onDetected.mock.calls.at(-1)![0];
     await act(async () => retryDetection(result));
     expect(scanBarcode).toHaveBeenCalledTimes(2);
+  });
+
+  it('looks up a manually entered barcode even when the camera fails, preserving leading zeroes', async () => {
+    quagga.init.mockImplementationOnce((_config, callback) => callback(new Error('Camera unavailable')));
+    scanBarcode.mockResolvedValue({ artist: 'Portishead', album: 'Dummy' });
+    await mount(createElement(BarcodeScanner, props));
+    await act(async () => renderer!.root.findByType('input').props.onChange({ target: { value: '0602537340436' } }));
+    const preventDefault = vi.fn();
+    await act(async () => renderer!.root.findByType('form').props.onSubmit({ preventDefault }));
+
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(scanBarcode).toHaveBeenCalledWith('0602537340436');
+    expect(JSON.stringify(renderer!.toJSON())).toContain('Dummy');
+  });
+
+  it('shows available camera labels and lets the user switch lenses', async () => {
+    quagga.CameraAccess.enumerateVideoDevices.mockResolvedValue([
+      { deviceId: 'rear-main', label: 'Back Camera' },
+      { deviceId: 'rear-wide', label: 'Back Ultra Wide Camera' },
+    ]);
+    await mount(createElement(BarcodeScanner, props));
+    expect(JSON.stringify(renderer!.toJSON())).toContain('Back Ultra Wide Camera');
+    await act(async () => renderer!.root.findByType('select').props.onChange({ target: { value: 'rear-main' } }));
+    expect(quagga.init.mock.calls.at(-1)![0].inputStream.constraints.deviceId).toEqual({ exact: 'rear-main' });
   });
 });

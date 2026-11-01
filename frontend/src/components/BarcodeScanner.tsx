@@ -14,6 +14,7 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
   const lookupInProgress = useRef(false);
   const [scannedResult, setScannedResult] = useState<any>(null);
   const [transferring, setTransferring] = useState(false);
+  const [manualBarcode, setManualBarcode] = useState('');
 
   const handleDetected = async (barcode: string) => {
     if (lookupInProgress.current) return;
@@ -79,7 +80,7 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
     setScanning(true);
   };
 
-  const { scannerRef, error } = useBarcodeScanner(handleDetected, scanning);
+  const { scannerRef, error, cameras, cameraId, setCameraId } = useBarcodeScanner(handleDetected, scanning);
 
   return (
     <div
@@ -111,20 +112,39 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
 
         <div className="p-4 overflow-y-auto">
           {!scannedResult && (
+            <>
+            {cameras.length > 1 && (
+              <label className="block mb-3 text-sm font-medium text-gray-700">
+                Camera
+                <select
+                  className="mt-1 block w-full rounded-lg border border-gray-300 p-2 bg-white"
+                  value={cameraId}
+                  onChange={event => setCameraId(event.target.value)}
+                  disabled={!scanning}
+                >
+                  <option value="">Automatic (back camera)</option>
+                  {cameras.map((camera, index) => (
+                    <option key={camera.deviceId} value={camera.deviceId}>
+                      {camera.label || `Camera ${index + 1}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <div className="relative bg-black rounded-2xl overflow-hidden mb-4 shadow-lg border border-gray-200 aspect-[4/3]">
+            <div ref={scannerRef} className="w-full h-full [&>video]:w-full [&>video]:h-full [&>video]:object-contain [&>canvas]:hidden" />
             {error ? (
-              <div className="text-center py-16 px-4">
+              <div className="absolute inset-0 bg-black text-center overflow-y-auto py-8 px-4">
                 <div className="inline-block p-4 bg-red-50 rounded-full mb-4">
                     <svg className="w-8 h-8 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                     </svg>
                 </div>
                 <p className="text-red-500 text-lg font-medium mb-2">{error}</p>
-                <p className="text-gray-400">Please allow camera access in your browser settings to scan barcodes.</p>
+                <p className="text-gray-400">You can also enter the barcode below.</p>
               </div>
             ) : (
               <>
-                <div ref={scannerRef} className="w-full h-full [&>video]:w-full [&>video]:h-full [&>video]:object-cover [&>canvas]:hidden" />
                 <div className="absolute inset-0 pointer-events-none">
                   {/* Scanning frame - centered */}
                   <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-3/4 max-w-xs h-40 border-2 border-purple-500 rounded-xl shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]">
@@ -140,6 +160,37 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
                 </>
               )}
             </div>
+            <p className="mb-4 text-sm text-gray-600">
+              Keep the whole barcode visible. Move farther back if it looks blurry, or try another camera.
+            </p>
+            <form className="mb-4" onSubmit={event => {
+              event.preventDefault();
+              if (manualBarcode.trim()) void handleDetected(manualBarcode.trim());
+            }}>
+              <label htmlFor="manual-barcode" className="block mb-1 text-sm font-medium text-gray-700">
+                Enter barcode manually
+              </label>
+              <div className="flex gap-2">
+                <input
+                  id="manual-barcode"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  pattern="[0-9]{8}|[0-9]{12,14}"
+                  title="Enter the 8, 12, 13, or 14 digits printed below the barcode."
+                  value={manualBarcode}
+                  onChange={event => setManualBarcode(event.target.value)}
+                  disabled={!scanning}
+                  required
+                  className="min-w-0 flex-1 rounded-lg border border-gray-300 p-2"
+                />
+                <button type="submit" disabled={!scanning || !manualBarcode.trim()}
+                  className="rounded-lg bg-purple-600 px-4 py-2 text-white disabled:opacity-50">
+                  {scanning ? 'Look up' : 'Looking up…'}
+                </button>
+              </div>
+            </form>
+            </>
           )}
 
         {/* Confirmation Dialog */}
