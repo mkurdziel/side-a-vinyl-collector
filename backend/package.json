@@ -53,5 +53,13 @@
     "node": "^22.22.0 || ^24.0.0 || >=26.0.0",
     "bun": ">=1.4.4"
   },
-  "packageManager": "bun@1.4.4"
+  "packageManager": "bun@1.4.4",
+  "overrides": {
+    "archiver-utils": {
+      "glob": "14.0.2"
+    },
+    "readdir-glob@^3": {
+      "minimatch": "11.0.1"
+    }
+  }
 }
