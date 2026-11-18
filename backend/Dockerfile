@@ -1,6 +1,6 @@
 # Build from repository root: docker build -f backend/Dockerfile .
 ARG BUN_IMAGE=oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d
-ARG RUNTIME_IMAGE=gcr.io/distroless/cc-debian13@sha256:d74d144baa124dd9defd01d71872bb56c49d4441dba6153ccf790364f97e64b1
+ARG RUNTIME_IMAGE=gcr.io/distroless/cc-debian13@sha256:809d04afa1be033c441f76bb0051878c342fb76d0ea236bc6dc94b655fa0fbd6
 FROM ${BUN_IMAGE} AS dependencies
 WORKDIR /source
 COPY scripts/vendor-dependencies.ts scripts/
