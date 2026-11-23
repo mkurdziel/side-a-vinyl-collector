@@ -23,7 +23,10 @@ export const DiscogsImporter = ({ open, onClose, onSuccess, viewMode }: DiscogsI
   const [albums, setAlbums] = useState<DiscogsAlbum[]>([]);
   const [outcomes, setOutcomes] = useState<Partial<Record<number, ImportOutcome>>>({});
   const [progress, setProgress] = useState<ImportProgress | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const [stopped, setStopped] = useState(false);
   const operationInProgress = useRef(false);
+  const stopRequested = useRef(false);
   const busy = fetchStatus === 'loading' || progress !== null;
 
   const fetchCollection = async () => {
@@ -51,9 +54,15 @@ export const DiscogsImporter = ({ open, onClose, onSuccess, viewMode }: DiscogsI
   const importRecords = async (jobs: ImportJob[]) => {
     if (operationInProgress.current || jobs.length === 0) return;
     operationInProgress.current = true;
+    stopRequested.current = false;
+    setStopped(false);
     let refreshLibrary = false;
     try {
       for (const [index, { album, destination }] of jobs.entries()) {
+        if (stopRequested.current) {
+          setStopped(true);
+          break;
+        }
         const albumId = album.discogsId;
         setProgress({ albumId, destination, current: index + 1, total: jobs.length });
         let status: ImportOutcome['status'];
@@ -77,6 +86,7 @@ export const DiscogsImporter = ({ open, onClose, onSuccess, viewMode }: DiscogsI
     } finally {
       operationInProgress.current = false;
       setProgress(null);
+      setStopping(false);
       if (refreshLibrary) onSuccess();
     }
   };
@@ -147,8 +157,11 @@ export const DiscogsImporter = ({ open, onClose, onSuccess, viewMode }: DiscogsI
                         ? 'Refreshing Discogs collection…'
                         : summary || `${remaining.length} ${remaining.length === 1 ? 'record' : 'records'} available`}
                   </p>
-                  <p className="text-sm text-gray-600">
-                    {progress ? 'The import continues if you close this window.' : `New imports go to ${destination}.`}
+                  <p className="text-sm text-gray-600" role="status">
+                    {stopping ? 'The current record will finish, then the import will stop.'
+                      : progress ? 'The import continues if you close this window.'
+                      : stopped ? 'Import stopped. The outcomes below are kept.'
+                      : `New imports go to ${destination}.`}
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -159,12 +172,25 @@ export const DiscogsImporter = ({ open, onClose, onSuccess, viewMode }: DiscogsI
                       onClick={() => importRecords(remaining.map(album => ({ album, destination: viewMode })))}
                       disabled={busy}
                     >
-                      {summary ? 'Import remaining' : 'Import all'}
+                      Import {remaining.length} {remaining.length === 1 ? 'record' : 'records'} to {destination}
                     </button>
                   )}
                   {retryJobs.length > 0 && (
                     <button type="button" className={secondaryAction} onClick={() => importRecords(retryJobs)} disabled={busy}>
                       Retry failed ({retryJobs.length})
+                    </button>
+                  )}
+                  {progress && progress.current < progress.total && (
+                    <button
+                      type="button"
+                      className={secondaryAction}
+                      disabled={stopping}
+                      onClick={() => {
+                        stopRequested.current = true;
+                        setStopping(true);
+                      }}
+                    >
+                      {stopping ? 'Stopping…' : 'Stop after current record'}
                     </button>
                   )}
                   <button type="button" className={secondaryAction} onClick={fetchCollection} disabled={busy}>

@@ -53,6 +53,7 @@ export interface DiscogsAlbum {
   year?: number;
   coverImageUrl?: string;
   discogsId: number;
+  discogsListing?: 'release' | 'master';
 }
 
 export interface DiscogsSearchResponse {

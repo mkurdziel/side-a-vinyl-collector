@@ -197,7 +197,7 @@ class DiscogsService {
   }
 
   async getArtistReleases(artistId: number, limit: number = 20): Promise<DiscogsAlbum[]> {
-    const cacheKey = `artist_releases:${artistId}:${limit}`;
+    const cacheKey = `artist_releases:v2:${artistId}:${limit}`;
     const cached = await this.getCached<DiscogsAlbum[]>(cacheKey);
     if (cached) return cached;
 
@@ -237,7 +237,8 @@ class DiscogsService {
           album: release.title,
           year,
           coverImageUrl,
-          discogsId: release.id // This might be a master ID or release ID depending on type
+          discogsId: release.type === 'master' ? release.main_release || 0 : release.id,
+          discogsListing: release.type === 'master' || release.type === 'release' ? release.type : undefined,
         });
         
         if (albums.length >= limit) break;

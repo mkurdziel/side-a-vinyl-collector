@@ -41,6 +41,7 @@ export interface DiscogsAlbum {
   year?: number;
   coverImageUrl?: string;
   discogsId: number;
+  discogsListing?: 'release' | 'master';
   source?: 'musicbrainz' | 'discogs';
   mbid?: string;
   inCollection?: boolean;
@@ -124,8 +125,11 @@ class ApiService {
     });
   }
 
-  async search(query: string, signal?: AbortSignal): Promise<SearchResult> {
-    return this.request(`/api/search?q=${encodeURIComponent(query)}`, { signal });
+  async search(query: string, signal?: AbortSignal, scope?: 'saved' | 'catalog', shelf?: Album['status']): Promise<SearchResult> {
+    const params = new URLSearchParams({ q: query });
+    if (scope) params.set('scope', scope);
+    if (shelf) params.set('shelf', shelf);
+    return this.request(`/api/search?${params}`, { signal });
   }
 
   async scanBarcode(barcode: string): Promise<{
