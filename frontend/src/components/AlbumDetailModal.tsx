@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactNode, type RefObject } from 'react';
 import { toast } from 'react-hot-toast';
 import api, { type Album, type SearchCoverArtResult, getCoverArtUrl } from '../services/api';
+import { savedCatalogSource, savedCopyLabel } from '../albumDisplay';
 import { ModalDialog } from './ModalDialog';
 
 interface AlbumDetailModalProps {
@@ -90,6 +91,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, shelfActions, back
         ? 'External image'
         : currentAlbum.local_cover_path ? 'Saved artwork' : 'No cover art';
 
+  const source = savedCatalogSource(currentAlbum);
   return (
     <ModalDialog labelledBy="album-details-title" onClose={onClose} returnFocusTo={returnFocusTo}>
       <div className="rh-dialog-panel max-w-2xl">
@@ -140,14 +142,15 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, shelfActions, back
               <dd className="text-sm text-gray-600">{artworkSource}</dd>
             </div>
             <div>
-              <dt className="text-sm font-medium text-gray-700">Discogs release</dt>
+              <dt className="text-sm font-medium text-gray-700">Catalog source</dt>
               <dd className="text-sm text-gray-600">
-                {currentAlbum.discogs_id ? (
-                  <a className="rh-lookup-link inline-flex items-center" href={`https://www.discogs.com/release/${currentAlbum.discogs_id}`}
-                    target="_blank" rel="noreferrer">
-                    {currentAlbum.discogs_id}<span className="sr-only"> on Discogs (opens in a new tab)</span>
+                {source?.url ? (
+                  <a className="rh-comparison-source" href={source.url} target="_blank" rel="noreferrer">
+                    {source.kind === 'pressing' ? `Discogs release ${currentAlbum.discogs_id}` : `${source.label} · ${source.type}`}
+                    <span className="sr-only"> · {savedCopyLabel(currentAlbum)} (opens in a new tab)</span>
                   </a>
-                ) : 'Unavailable'}
+                ) : source?.type ?? 'Unavailable'}
+                {source?.kind !== 'pressing' && <p>Pressing unconfirmed</p>}
               </dd>
             </div>
             {currentAlbum.notes && (

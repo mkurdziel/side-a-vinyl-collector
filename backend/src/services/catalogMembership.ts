@@ -1,7 +1,7 @@
 import pool from '../config/database';
 import type { AlbumWithArtist } from '../types';
 
-export type SavedTitleMatch = Pick<AlbumWithArtist, 'id' | 'discogs_id' | 'title' | 'artist_name' | 'status' | 'year'>;
+export type SavedTitleMatch = Pick<AlbumWithArtist, 'id' | 'discogs_id' | 'catalog_listing' | 'title' | 'artist_name' | 'status' | 'year'>;
 type CatalogMatch = { artist: string; album: string; discogsId?: number; discogsListing?: 'release' | 'master' };
 
 function nameKey(artist: string, title: string) {
@@ -16,7 +16,7 @@ export async function annotateCatalogMembership<T extends CatalogMatch>(matches:
 
   // Check membership independently of the display page so a name match is unique across both shelves.
   const { rows } = await pool.query<SavedTitleMatch>(`
-    SELECT albums.id, albums.discogs_id, albums.title, albums.year, artists.name AS artist_name, collections.status
+    SELECT albums.id, albums.discogs_id, albums.catalog_listing, albums.title, albums.year, artists.name AS artist_name, collections.status
     FROM collections
     JOIN albums ON collections.album_id = albums.id
     JOIN artists ON albums.artist_id = artists.id

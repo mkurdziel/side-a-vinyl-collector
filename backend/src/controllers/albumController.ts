@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import pool from '../config/database';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
-import type { AlbumWithArtist } from '../types';
+import type { AlbumWithArtist, CatalogListing } from '../types';
 import musicbrainzService from '../services/musicbrainz';
 import storageService from '../services/storage';
 
@@ -107,8 +107,25 @@ export const getAlbumById = asyncHandler(async (req: Request, res: Response) => 
   res.json({ album: result.rows[0] });
 });
 
+function parseCatalogListing(value: unknown): CatalogListing | null {
+  if (value == null) return null;
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    const { source, kind, id } = value as Record<string, unknown>;
+    if (source === 'discogs' && kind === 'master' && typeof id === 'number' && Number.isSafeInteger(id) && id > 0) {
+      return { source, kind, id };
+    }
+    if (source === 'musicbrainz' && kind === 'release-group' && typeof id === 'string'
+      && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)) {
+      return { source, kind, id };
+    }
+  }
+  throw new AppError('Choose a valid catalog listing', 400);
+}
+
 export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
-  const { artist: artistInput, album: albumInput, year, coverImageUrl, discogsId, barcode, status } = req.body;
+  const { artist: artistInput, album: albumInput, year, coverImageUrl, discogsId: releaseId, barcode, status } = req.body;
+  const catalogListing = parseCatalogListing(req.body.catalogListing);
+  const discogsId = catalogListing ? null : releaseId;
   const artist = typeof artistInput === 'string' ? artistInput.trim() : '';
   const album = typeof albumInput === 'string' ? albumInput.trim() : '';
 
@@ -148,8 +165,8 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
       )).rows[0]?.id;
       if (artistId === undefined) throw new Error('Artist insert did not return an ID');
       albumId = (await client.query<{ id: number }>(
-        `INSERT INTO albums (artist_id, title, year, cover_image_url, discogs_id)
-         VALUES ($1, $2, $3, $4, $5) RETURNING id`, [artistId, album, year || null, coverImageUrl || null, discogsId || null],
+        `INSERT INTO albums (artist_id, title, year, cover_image_url, discogs_id, catalog_listing)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`, [artistId, album, year || null, coverImageUrl || null, discogsId || null, catalogListing],
       )).rows[0]?.id;
       if (albumId === undefined) throw new Error('Album insert did not return an ID');
     }

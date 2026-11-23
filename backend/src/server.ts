@@ -79,6 +79,7 @@ app.post('/api/image/confirm', imageController.confirmAlbum);
 // Discogs import routes
 app.get('/api/discogs/config', discogsController.checkDiscogsConfig);
 app.get('/api/discogs/import', discogsController.importCollection);
+app.get('/api/discogs/releases/:id/pressing', discogsController.getPressingDetails);
 // Backup routes
 app.use('/api/backup', backupRoutes);
 

@@ -4,7 +4,7 @@ import api, { ApiError, isExactSavedMatch } from '../services/api';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 import { ModalDialog } from './ModalDialog';
 import { SaveDestinationActions, type DestinationAction } from './SaveDestinationActions';
-import { applyLookupShelfEdits, type LookupShelfEdits } from '../albumDisplay';
+import { applyLookupShelfEdits, discogsReleaseSource, type LookupShelfEdits } from '../albumDisplay';
 import type { OpenSavedAlbum } from './PressingComparison';
 import { LookupRecovery } from './LookupRecovery';
 import type { ManualAlbumDraft } from './ManualAlbumDialog';
@@ -359,11 +359,10 @@ export const BarcodeScanner = ({
                   titleMatches={scannedResult.titleMatches}
                   lookup={{
                     artist: scannedResult.artist, year: scannedResult.year, releaseId: scannedResult.discogsId,
-                    source: scannedResult.discogsId > 0
-                      ? { label: 'Discogs', url: `https://www.discogs.com/release/${scannedResult.discogsId}` }
-                      : undefined,
+                    source: discogsReleaseSource(scannedResult.discogsId),
                   }}
                   onSearch={editMatchedSearch}
+                  searchLabel="Search catalogs by name"
                   onOpenSaved={onOpenSaved}
                   pending={saving}
                   onSelect={action => void saveMatch(action)}
