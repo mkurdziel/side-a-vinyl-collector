@@ -22,10 +22,12 @@ interface BarcodeScannerProps {
   onClose: () => void;
   onSuccess: () => void;
   onSearchByName: () => void;
+  onMoveSaved: (id: number, title: string) => Promise<boolean>;
+  onOpenSaved: (id: number) => Promise<void>;
   viewMode: 'collection' | 'wishlist';
 }
 
-export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, viewMode }: BarcodeScannerProps) => {
+export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, onMoveSaved, onOpenSaved, viewMode }: BarcodeScannerProps) => {
   const [lookup, setLookup] = useState<Lookup>({ status: 'scanning' });
   const lookupInProgress = useRef(false);
   const [saving, setSaving] = useState<DestinationAction>();
@@ -72,8 +74,9 @@ export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, viewMode }:
     setSaving(action);
     try {
       if (moveId) {
-        await api.updateStatus(moveId, 'collection');
-        toast.success(`Moved “${scannedResult.album}” to Collection.`);
+        if (!await onMoveSaved(moveId, scannedResult.album)) return;
+        onClose();
+        return;
       } else if (adding) {
         await api.addAlbum({
           artist: scannedResult.artist,
@@ -261,6 +264,7 @@ export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, viewMode }:
                 preferred={viewMode}
                 existingStatus={scannedResult.existingStatus ?? undefined}
                 canMove={Boolean(scannedResult.existingAlbumId)}
+                onOpenSaved={scannedResult.existingAlbumId ? () => void onOpenSaved(scannedResult.existingAlbumId!) : undefined}
                 pending={saving}
                 onSelect={action => void saveMatch(action)}
               />

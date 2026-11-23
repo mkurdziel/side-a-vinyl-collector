@@ -20,7 +20,8 @@ type ShelfResult = { request: ShelfRequest } & (
 type SearchState =
   | { status: 'idle' | 'pending' | 'error' }
   | { status: 'ready'; results: SearchResult };
-type SearchRequest = { controller: AbortController; timer?: number };
+type ResultKind = 'saved' | 'catalog';
+type SearchRequest = { controller: AbortController; pending: Set<ResultKind>; timer?: number };
 type SaveAction = DestinationAction | 'remove';
 type ShelfMove = { albumId: number; title: string; from: Shelf; to: Shelf };
 
@@ -94,12 +95,15 @@ function App() {
   const [searchScope, setSearchScope] = useState<SearchScope>('saved');
   const [searchState, setSearchState] = useState<SearchState>({ status: 'idle' });
   const [catalogState, setCatalogState] = useState<SearchState>({ status: 'idle' });
+  const [savedLoading, setSavedLoading] = useState(false);
   const [catalogLoading, setCatalogLoading] = useState(false);
-  const [saveShelf, setSaveShelf] = useState<Shelf>('collection');
+  const [saveShelfOverride, setSaveShelfOverride] = useState<Shelf>();
+  const [loadingMore, setLoadingMore] = useState<Partial<Record<ResultKind, 'pending' | 'error'>>>({});
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [showBarcodeScanner, setShowBarcodeScanner] = useState(false);
   const [showImageUploader, setShowImageUploader] = useState(false);
   const [showDiscogsImporter, setShowDiscogsImporter] = useState(false);
+  const [discogsImporting, setDiscogsImporting] = useState(false);
   const [selectedAlbum, setSelectedAlbum] = useState<Album | null>(null);
   const [albumToRemove, setAlbumToRemove] = useState<Album | null>(null);
   const [lastShelfMove, setLastShelfMove] = useState<ShelfMove | null>(null);
@@ -109,19 +113,24 @@ function App() {
   const [pendingSaves, setPendingSaves] = useState<Partial<Record<string, SaveAction>>>({});
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
   const [artworkRevisions, setArtworkRevisions] = useState<Record<number, number>>({});
+  const [libraryArtworkRevision, setLibraryArtworkRevision] = useState<number>();
   const [sortBy, setSortBy] = useState<SortBy>(() => {
     const saved = localStorage.getItem('albumSortBy');
     return saved === 'artist' || saved === 'date' ? saved : 'title';
   });
   const inFlightSaves = useRef(new Set<string>());
+  const openingSavedAlbum = useRef(false);
   const searchRequest = useRef<SearchRequest | null>(null);
+  const pageRequests = useRef<Partial<Record<ResultKind, AbortController>>>({});
   const latestQuery = useRef('');
   const searchSettings = useRef<{ scope: SearchScope; shelf: Shelf }>({ scope: 'saved', shelf: 'collection' });
+  const searchSort = useRef(sortBy);
   const searchInput = useRef<HTMLInputElement>(null);
   const activeShelfButton = useRef<HTMLButtonElement>(null);
   const undoButton = useRef<HTMLButtonElement>(null);
 
   const viewMode = shelfRequest.view;
+  const saveShelf = saveShelfOverride ?? viewMode;
   const currentShelf = shelfResult?.request.view === viewMode &&
     (shelfResult.status === 'ready' || shelfResult.request.revision === shelfRequest.revision)
     ? shelfResult
@@ -155,41 +164,53 @@ function App() {
     return () => { active = false; };
   }, []);
 
-  useEffect(() => () => cancelSearch(searchRequest.current), []);
+  useEffect(() => () => {
+    cancelSearch(searchRequest.current);
+    for (const request of Object.values(pageRequests.current)) request.abort();
+  }, []);
 
   const refreshShelf = () => setShelfRequest(request => ({ ...request, revision: request.revision + 1 }));
 
   const runSearch = (value: string, { delay = 0, keepResults = false } = {}) => {
     cancelSearch(searchRequest.current);
+    for (const request of Object.values(pageRequests.current)) request.abort();
+    pageRequests.current = {};
+    setLoadingMore({});
     searchRequest.current = null;
     const query = value.trim();
     const { scope, shelf } = searchSettings.current;
     if (query.length < 2) {
       setSearchState({ status: 'idle' });
       setCatalogState({ status: 'idle' });
+      setSavedLoading(false);
       setCatalogLoading(false);
       return;
     }
 
-    const request: SearchRequest = { controller: new AbortController() };
+    const request: SearchRequest = {
+      controller: new AbortController(),
+      pending: new Set(scope === 'catalog' ? ['saved', 'catalog'] : ['saved']),
+    };
     searchRequest.current = request;
     if (!keepResults) setSearchState({ status: 'pending' });
+    setSavedLoading(true);
     if (scope !== 'catalog') setCatalogState({ status: 'idle' });
     else if (!keepResults) setCatalogState({ status: 'pending' });
     setCatalogLoading(scope === 'catalog');
 
-    let remaining = scope === 'catalog' ? 2 : 1;
-    const fetchResults = async (kind: 'saved' | 'catalog') => {
+    const fetchResults = async (kind: ResultKind) => {
       const setResult = kind === 'saved' ? setSearchState : setCatalogState;
       try {
-        const results = await api.search(query, request.controller.signal, kind, scope === 'shelf' ? shelf : undefined);
+        const results = await api.search(query, request.controller.signal, kind, scope === 'shelf' ? shelf : undefined, 0, searchSort.current);
         if (!request.controller.signal.aborted) setResult({ status: 'ready', results });
       } catch {
         if (!request.controller.signal.aborted) setResult({ status: 'error' });
       } finally {
         if (searchRequest.current === request) {
           if (kind === 'catalog') setCatalogLoading(false);
-          if (--remaining === 0) searchRequest.current = null;
+          else setSavedLoading(false);
+          request.pending.delete(kind);
+          if (!request.pending.size) searchRequest.current = null;
         }
       }
     };
@@ -199,6 +220,38 @@ function App() {
     };
     if (delay) request.timer = window.setTimeout(start, delay);
     else start();
+  };
+
+  const loadMore = async (kind: ResultKind, offset: number) => {
+    if (pageRequests.current[kind] || searchRequest.current?.pending.has(kind)) return;
+    const request = new AbortController();
+    pageRequests.current[kind] = request;
+    setLoadingMore(current => ({ ...current, [kind]: 'pending' }));
+    const { scope, shelf } = searchSettings.current;
+    const setResults = kind === 'saved' ? setSearchState : setCatalogState;
+    try {
+      const page = await api.search(latestQuery.current.trim(), request.signal, kind, scope === 'shelf' ? shelf : undefined, offset, searchSort.current);
+      if (request.signal.aborted) return;
+      if (page.errors?.length) throw new Error('Search continuation unavailable');
+      setResults(current => {
+        if (current.status !== 'ready' || current.results.nextOffset !== offset) return current;
+        const localIds = new Set(current.results.local.map(album => album.id));
+        const catalogKeys = new Set(current.results.discogs.map(catalogKey));
+        return {
+          status: 'ready',
+          results: {
+            ...page,
+            local: [...current.results.local, ...page.local.filter(album => !localIds.has(album.id))],
+            discogs: [...current.results.discogs, ...page.discogs.filter(album => !catalogKeys.has(catalogKey(album)))],
+          },
+        };
+      });
+      setLoadingMore(current => ({ ...current, [kind]: undefined }));
+    } catch {
+      if (!request.signal.aborted) setLoadingMore(current => ({ ...current, [kind]: 'error' }));
+    } finally {
+      if (pageRequests.current[kind] === request) delete pageRequests.current[kind];
+    }
   };
 
   const changeSearch = (value: string) => {
@@ -219,12 +272,23 @@ function App() {
     if (searchSettings.current.scope === scope) return;
     searchSettings.current.scope = scope;
     setSearchScope(scope);
-    if (scope === 'catalog') setSaveShelf(viewMode);
+    if (scope !== 'catalog') setSaveShelfOverride(undefined);
     runSearch(latestQuery.current);
   };
 
   const focusSearch = () => {
     window.requestAnimationFrame(() => searchInput.current?.focus());
+  };
+
+  const openNameSearch = (query?: string) => {
+    if (query) {
+      searchSettings.current.scope = 'catalog';
+      setSearchScope('catalog');
+      changeSearch(query);
+    } else {
+      changeScope('catalog');
+    }
+    focusSearch();
   };
 
   const refreshLibrary = (updatedArtwork?: Album) => {
@@ -277,7 +341,7 @@ function App() {
       refreshShelf();
       // A search that started before this save can carry the old membership. Deletion always needs a
       // refresh because there may be other saved records matching the same catalog result.
-      if (searchRequest.current || action === 'remove' || searchSettings.current.scope === 'shelf') {
+      if (searchRequest.current || Object.keys(pageRequests.current).length || action === 'remove' || searchSettings.current.scope === 'shelf') {
         runSearch(latestQuery.current, { keepResults: true });
       }
       return true;
@@ -349,6 +413,27 @@ function App() {
   const moveWishlistAlbum = (albumId: number, title: string) =>
     moveRecord({ albumId, title, from: 'wishlist', to: 'collection' });
 
+  const moveScannedAlbum = async (albumId: number, title: string) => {
+    const moved = await moveWishlistAlbum(albumId, title);
+    if (moved) window.requestAnimationFrame(() => undoButton.current?.focus());
+    else toast.error('Could not move the album. Check its current shelf and try again.');
+    return moved;
+  };
+
+  const openSavedAlbum = async (albumId: number, closeLookup?: () => void) => {
+    if (openingSavedAlbum.current) return;
+    openingSavedAlbum.current = true;
+    try {
+      const { album } = await api.getAlbum(albumId);
+      closeLookup?.();
+      setSelectedAlbum(album);
+    } catch {
+      toast.error('Could not open this saved album. Check its shelf and try again.');
+    } finally {
+      openingSavedAlbum.current = false;
+    }
+  };
+
   const moveAlbum = async (album: Album, button: HTMLButtonElement, fromDetails: boolean) => {
     const hadFocus = button.ownerDocument.activeElement === button;
     const to = album.status === 'collection' ? 'wishlist' : 'collection';
@@ -358,9 +443,7 @@ function App() {
     if (fromDetails) setSelectedAlbum(current => current?.id === album.id ? null : current);
     if (hadFocus || fromDetails) {
       window.requestAnimationFrame(() => {
-        if (fromDetails || !button.isConnected) {
-          undoButton.current?.focus();
-        }
+        undoButton.current?.focus();
       });
     }
   };
@@ -370,10 +453,10 @@ function App() {
     setAlbumToRemove(null);
   };
 
-  const removeWishlistAlbum = async (album: Album) => {
+  const removeAlbum = async (album: Album) => {
     const key = savedAlbumKey(album.id);
     const removed = await saveRecord(key, 'remove', async () => {
-      await api.deleteAlbum(album.id, 'wishlist');
+      await api.deleteAlbum(album.id, album.status);
       excludeFromShelf(album.id);
       setSearchState(current => current.status === 'ready'
         ? { ...current, results: { ...current.results, local: current.results.local.filter(result => result.id !== album.id) } }
@@ -384,7 +467,7 @@ function App() {
     setAlbumToRemove(null);
     setSelectedAlbum(current => current?.id === album.id ? null : current);
     setLastShelfMove(current => current?.albumId === album.id ? null : current);
-    toast.success(`“${album.title}” removed from Wishlist.`);
+    toast.success(`“${album.title}” removed from ${shelfLabel[album.status]}.`);
     window.requestAnimationFrame(() => {
       const target = latestQuery.current.trim().length >= 2 ? searchInput.current : activeShelfButton.current;
       target?.focus();
@@ -410,7 +493,12 @@ function App() {
       <select
         id="sort-select"
         value={sortBy}
-        onChange={event => setSortBy(event.target.value as SortBy)}
+        onChange={event => {
+          const next = event.target.value as SortBy;
+          searchSort.current = next;
+          setSortBy(next);
+          if (searchActive) runSearch(latestQuery.current, { keepResults: true });
+        }}
         className="min-h-11 rounded-lg border border-gray-300 bg-white px-2.5"
       >
         <option value="title">Album title</option>
@@ -425,23 +513,23 @@ function App() {
     const pending = pendingSaves[key];
     const inWishlist = album.status === 'wishlist';
     const moveLabel = inWishlist ? 'Move to Collection' : 'Move to Wishlist';
-    return (
-      <div className="grid gap-1.5">
-        <button
+    const move = (
+      <button
           type="button"
-          className={inWishlist ? 'rh-primary-action px-2 py-1.5 text-xs font-semibold' : secondaryButton}
+          className={inWishlist && !fromDetails ? 'min-h-11 rounded-lg border border-gray-300 px-2 py-1.5 text-xs font-semibold text-gray-900 hover:bg-gray-100' : secondaryButton}
           aria-label={`${moveLabel} — ${album.title}`}
           aria-disabled={!!pending}
           aria-busy={!!pending && pending !== 'remove'}
           onClick={event => void moveAlbum(album, event.currentTarget, fromDetails)}
         >
           {pending && pending !== 'remove' ? 'Moving…' : moveLabel}
-        </button>
-        {inWishlist && (
-          <button
+      </button>
+    );
+    const remove = (
+      <button
             type="button"
             className="min-h-11 rounded-lg px-2 text-xs font-semibold text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-            aria-label={`Remove from Wishlist — ${album.title}`}
+            aria-label={`Remove from ${shelfLabel[album.status]} — ${album.title}`}
             aria-haspopup="dialog"
             aria-disabled={!!pending}
             onClick={() => {
@@ -450,8 +538,29 @@ function App() {
               setAlbumToRemove(album);
             }}
           >
-            Remove from Wishlist
-          </button>
+            Remove from {shelfLabel[album.status]}
+      </button>
+    );
+    return (
+      <div className="grid gap-1.5">
+        {fromDetails ? <>{move}{remove}</> : (
+          <>
+            <p className="px-1 text-xs text-gray-600" aria-label={`${album.title} is in ${shelfLabel[album.status]}`}>{shelfLabel[album.status]}</p>
+            {inWishlist && move}
+            <details className="min-w-0">
+              <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-1 rounded-lg px-1 text-xs font-semibold text-gray-600 hover:bg-gray-100"
+                aria-label={`Shelf actions for ${album.title}`}>
+                Actions
+                <svg aria-hidden="true" className="size-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path strokeLinecap="round" strokeWidth="2" d="m6 9 6 6 6-6" />
+                </svg>
+              </summary>
+              <div className="grid gap-1.5">
+                {!inWishlist && move}
+                {remove}
+              </div>
+            </details>
+          </>
         )}
         {saveErrors[key] && <p role="alert" className="px-1 text-xs text-red-600">{saveErrors[key]}</p>}
       </div>
@@ -461,7 +570,7 @@ function App() {
   const renderSavedAlbums = () => (
     <div className={albumGrid}>
       {sortedAlbums.map(album => {
-        const revision = artworkRevisions[album.id];
+        const revision = artworkRevisions[album.id] ?? libraryArtworkRevision;
         const src = `${getCoverArtUrl(album.id)}${revision ? `?v=${revision}` : ''}`;
         const key = savedAlbumKey(album.id);
         const pending = pendingSaves[key];
@@ -490,26 +599,34 @@ function App() {
               }}
             />
             <div className="relative z-20 mt-auto grid gap-1.5 p-2 pt-0">
-              {results ? (
-                <SaveDestinationActions
-                  albumTitle={album.title}
-                  preferred={viewMode}
-                  existingStatus={album.status}
-                  canMove={album.status === 'wishlist'}
-                  pending={pending === 'remove' ? undefined : pending}
-                  disabled={pending === 'remove'}
-                  onSelect={action => {
-                    if (action === 'move') void moveWishlistAlbum(album.id, album.title);
-                  }}
-                />
-              ) : renderShelfActions(album)}
-              {results && saveErrors[key] && <p role="alert" className="px-1 text-xs text-red-600">{saveErrors[key]}</p>}
+              {renderShelfActions(album)}
             </div>
           </article>
         );
       })}
     </div>
   );
+
+  const renderContinuation = (kind: ResultKind, data: SearchResult) => {
+    const count = kind === 'saved' ? data.local.length : data.discogs.length;
+    const more = data.nextOffset;
+    const state = loadingMore[kind];
+    const label = kind === 'saved' ? 'saved albums' : 'catalog albums';
+    return (
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-gray-600">
+        <p role="status">{more !== undefined ? `Showing the first ${count} matches. More are available.` : `Showing ${count} ${count === 1 ? 'match' : 'matches'}.`}
+          {kind === 'catalog' && data.catalogSampled && more === undefined && ' Refine your search for more catalog matches.'}
+        </p>
+        {more !== undefined && (
+          <button type="button" className={secondaryButton} disabled={state === 'pending' || (kind === 'saved' ? savedLoading : catalogLoading)}
+            onClick={() => void loadMore(kind, more)}>
+            {state === 'pending' ? 'Loading…' : state === 'error' ? `Retry loading ${label}` : `Load more ${label}`}
+          </button>
+        )}
+        {state === 'error' && <p role="alert">Could not load the next results. Try again.</p>}
+      </div>
+    );
+  };
 
   return (
     <div className="rh-app min-h-screen">
@@ -569,7 +686,7 @@ function App() {
                   <>
                     {searchState.status === 'pending' && 'Searching saved albums…'}
                     {searchState.status === 'error' && 'Saved search unavailable'}
-                    {results && <span>{savedCount} saved {savedCount === 1 ? 'match' : 'matches'}</span>}
+                    {results && <span>{savedCount}{results.nextOffset !== undefined ? '+' : ''} saved {savedCount === 1 ? 'match' : 'matches'}</span>}
                   </>
                 ) : currentShelf?.status === 'ready' && (
                   <span>{shelfAlbums.length} {shelfAlbums.length === 1 ? 'album' : 'albums'} in {shelfLabel[viewMode]}</span>
@@ -667,6 +784,15 @@ function App() {
           </form>
         </div>
 
+        <DiscogsImporter
+          open={showDiscogsImporter}
+          onOpen={() => setShowDiscogsImporter(true)}
+          onClose={() => setShowDiscogsImporter(false)}
+          onSuccess={refreshLibrary}
+          onImportingChange={setDiscogsImporting}
+          viewMode={viewMode}
+        />
+
         {lastShelfMove && (
           <aside className="mb-4 rounded-xl border border-gray-300 bg-white p-3" aria-label="Latest shelf move">
             <p role="status" className="text-sm font-medium [overflow-wrap:anywhere]">
@@ -733,9 +859,11 @@ function App() {
             <section className="mb-8" aria-labelledby="saved-results-title">
               <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <h2 id="saved-results-title" tabIndex={-1} className="rh-result-heading text-lg font-semibold">Saved albums</h2>
+                <p className="text-sm text-gray-600">{searchScope === 'shelf' ? shelfLabel[viewMode] : 'Both shelves'}</p>
                 {renderSort('Sort')}
               </div>
               {renderSavedAlbums()}
+              {renderContinuation('saved', results)}
             </section>
           ) : (
             <div className="py-6" role="status">
@@ -762,10 +890,14 @@ function App() {
               <label className="flex max-w-full flex-wrap items-center gap-2 text-sm text-gray-600">
                 Default save shelf
                 <select
-                  value={saveShelf}
-                  onChange={event => setSaveShelf(event.target.value as Shelf)}
+                  value={saveShelfOverride ?? 'shelf'}
+                  onChange={event => {
+                    const value = event.target.value;
+                    setSaveShelfOverride(value === 'collection' || value === 'wishlist' ? value : undefined);
+                  }}
                   className="min-h-11 rounded-lg border border-gray-300 px-2.5"
                 >
+                  <option value="shelf">Current shelf · {shelfLabel[viewMode]}</option>
                   {shelves.map(shelf => <option key={shelf} value={shelf}>{shelfLabel[shelf]}</option>)}
                 </select>
               </label>
@@ -815,6 +947,14 @@ function App() {
                           ) : source && (
                             <p className="px-3 pb-2 text-xs text-gray-600">Album information from {source.label}</p>
                           )}
+                          {!savedShelf && (
+                            <button type="button" className="block min-h-11 w-full px-3 text-left text-xs font-semibold text-gray-600 hover:bg-gray-100"
+                              disabled={!!pending}
+                              aria-label={`Add ${album.album} to ${shelfLabel[saveShelf === 'collection' ? 'wishlist' : 'collection']}`}
+                              onClick={() => void handleCatalogAdd(album, saveShelf === 'collection' ? 'wishlist' : 'collection')}>
+                              Add to {shelfLabel[saveShelf === 'collection' ? 'wishlist' : 'collection']}
+                            </button>
+                          )}
                         </details>
                         <div className="rh-catalog-actions grid gap-1.5 p-2 pt-0">
                           <SaveDestinationActions
@@ -822,8 +962,10 @@ function App() {
                             preferred={saveShelf}
                             existingStatus={savedShelf}
                             canMove={savedShelf === 'wishlist' && albumId != null}
+                            primaryOnly
                             pending={pending === 'remove' ? undefined : pending}
                             disabled={pending === 'remove'}
+                            onOpenSaved={albumId != null ? () => void openSavedAlbum(albumId) : undefined}
                             onSelect={action => {
                               if (action === 'move') {
                                 if (albumId != null) void moveWishlistAlbum(albumId, album.album);
@@ -841,6 +983,7 @@ function App() {
                   })}
                 </div>
             )}
+            {!!catalogCount && catalogResults && renderContinuation('catalog', catalogResults)}
           </section>
         )}
 
@@ -876,8 +1019,7 @@ function App() {
           }}
           onSearchClick={() => {
             setShowAddMenu(false);
-            changeScope('catalog');
-            focusSearch();
+            openNameSearch();
           }}
           onImportClick={() => {
             setShowAddMenu(false);
@@ -890,16 +1032,24 @@ function App() {
         />
       )}
 
-      <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />
+      {showSettings && <SettingsModal restoreBlocked={discogsImporting} onClose={() => setShowSettings(false)} onRestore={() => {
+        setLastShelfMove(null);
+        setArtworkRevisions({});
+        setLibraryArtworkRevision(Date.now());
+        setShelfResult(null);
+        setSaveErrors({});
+        refreshLibrary();
+      }} />}
 
       {showBarcodeScanner && (
         <BarcodeScanner
           onClose={() => setShowBarcodeScanner(false)}
           onSearchByName={() => {
             setShowBarcodeScanner(false);
-            changeScope('catalog');
-            focusSearch();
+            openNameSearch();
           }}
+          onMoveSaved={moveScannedAlbum}
+          onOpenSaved={id => openSavedAlbum(id, () => setShowBarcodeScanner(false))}
           onSuccess={() => {
             refreshLibrary();
             setShowBarcodeScanner(false);
@@ -911,6 +1061,12 @@ function App() {
       {showImageUploader && (
         <ImageUploader
           onClose={() => setShowImageUploader(false)}
+          onSearchByName={query => {
+            setShowImageUploader(false);
+            openNameSearch(query);
+          }}
+          onMoveSaved={moveScannedAlbum}
+          onOpenSaved={id => openSavedAlbum(id, () => setShowImageUploader(false))}
           onSuccess={() => {
             refreshLibrary();
             setShowImageUploader(false);
@@ -919,19 +1075,12 @@ function App() {
         />
       )}
 
-      <DiscogsImporter
-        open={showDiscogsImporter}
-        onClose={() => setShowDiscogsImporter(false)}
-        onSuccess={refreshLibrary}
-        viewMode={viewMode}
-      />
-
       {albumToRemove && (
-        <ModalDialog labelledBy="wishlist-removal-title" onClose={closeRemoval}>
+        <ModalDialog labelledBy="album-removal-title" onClose={closeRemoval}>
           <div className="rh-dialog-panel max-w-md p-4 sm:p-6">
-            <h2 id="wishlist-removal-title" className="text-lg font-semibold">Remove from Wishlist?</h2>
+            <h2 id="album-removal-title" className="text-lg font-semibold">Remove from {shelfLabel[albumToRemove.status]}?</h2>
             <p className="mt-2 text-sm text-gray-600 [overflow-wrap:anywhere]">
-              “{albumToRemove.title}” and any notes saved with it will be removed from your Wishlist.
+              “{albumToRemove.title}” and any notes saved with it will be removed from your {shelfLabel[albumToRemove.status]}.
             </p>
             {saveErrors[savedAlbumKey(albumToRemove.id)] && (
               <p className="mt-3 text-sm text-red-600" role="alert">{saveErrors[savedAlbumKey(albumToRemove.id)]}</p>
@@ -950,7 +1099,7 @@ function App() {
                 className="min-h-11 rounded-lg bg-red-600 px-3 text-sm font-semibold rh-filled-action"
                 aria-disabled={!!pendingSaves[savedAlbumKey(albumToRemove.id)]}
                 aria-busy={!!pendingSaves[savedAlbumKey(albumToRemove.id)]}
-                onClick={() => void removeWishlistAlbum(albumToRemove)}
+                onClick={() => void removeAlbum(albumToRemove)}
               >
                 {pendingSaves[savedAlbumKey(albumToRemove.id)] ? 'Removing…' : 'Remove album'}
               </button>

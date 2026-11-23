@@ -2,8 +2,11 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { getTestPool } from '../setup/testContainers';
 import request from 'supertest';
 import express from 'express';
+import AdmZip from 'adm-zip';
 import backupRoutes from '../../src/routes/backup';
 import * as albumController from '../../src/controllers/albumController';
+import { errorHandler } from '../../src/middleware/errorHandler';
+import storage from '../../src/services/storage';
 import fs from 'fs';
 import path from 'path';
 
@@ -25,6 +28,7 @@ describe('Backup and Restore', () => {
     app.post('/api/albums', albumController.addAlbum);
     app.get('/api/albums', albumController.getAllAlbums);
     app.use('/api/backup', backupRoutes);
+    app.use(errorHandler);
   });
 
   it('should export albums with cover art', async () => {
@@ -174,5 +178,68 @@ describe('Backup and Restore', () => {
 
     // Cleanup
     fs.unlinkSync(tempPath);
+  });
+
+  it('previews without modifying data and round-trips IDs, mappings, notes and artwork', async () => {
+    const { rows: [artist] } = await testPool.query("INSERT INTO artists (name, discogs_id) VALUES ('Test band', 654) RETURNING id");
+    const mbid = '59a5cdbc-55c5-48bc-a687-937638f96ad9';
+    const { rows: [album] } = await testPool.query(
+      "INSERT INTO albums (artist_id, title, discogs_id, musicbrainz_id) VALUES ($1, 'Test record', 987, $2) RETURNING id",
+      [artist.id, mbid],
+    );
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x01]);
+    const artwork = await storage.saveCoverArt(bytes, album.id);
+    await testPool.query('UPDATE albums SET local_cover_path = $1 WHERE id = $2', [artwork, album.id]);
+    await testPool.query("INSERT INTO collections (album_id, status, notes) VALUES ($1, 'wishlist', 'test notes')", [album.id]);
+    await testPool.query("INSERT INTO barcodes (album_id, barcode) VALUES ($1, '0123456789012')", [album.id]);
+    const exported = await request(app)
+      .get('/api/backup/export')
+      .buffer(true)
+      .parse((response, done) => {
+        const chunks: Buffer[] = [];
+        response.on('data', chunk => chunks.push(Buffer.from(chunk)));
+        response.on('end', () => done(null, Buffer.concat(chunks)));
+        response.on('error', done);
+      })
+      .expect(200);
+
+    const preview = await request(app).post('/api/backup/preview').attach('backup', exported.body, 'backup.zip').expect(200);
+    expect(preview.body).toMatchObject({ albums: 1, artwork: 1, wishlist: 1, collection: 0, barcodes: 1, warnings: [] });
+    expect((await testPool.query('SELECT id FROM barcodes')).rowCount).toBe(1);
+    await testPool.query('DELETE FROM artists');
+
+    const restored = await request(app).post('/api/backup/import').attach('backup', exported.body, 'backup.zip').expect(200);
+    expect(restored.body).toMatchObject({ stats: { albums: 1, artwork: 1, barcodes: 1 }, warnings: [], skippedArtwork: [] });
+    const { rows: [saved] } = await testPool.query(
+      'SELECT albums.*, collections.notes, collections.status, artists.discogs_id AS artist_discogs, barcodes.barcode FROM albums JOIN artists ON artists.id = albums.artist_id JOIN collections ON collections.album_id = albums.id JOIN barcodes ON barcodes.album_id = albums.id',
+    );
+    expect(saved).toMatchObject({ id: album.id, artist_discogs: 654, discogs_id: 987, musicbrainz_id: mbid, barcode: '0123456789012', status: 'wishlist', notes: 'test notes' });
+    expect(await storage.readCoverArt(saved.local_cover_path)).toEqual(bytes);
+    const inserted = await testPool.query("INSERT INTO artists (name) VALUES ('Next artist') RETURNING id");
+    expect(inserted.rows[0].id).toBeGreaterThan(artist.id);
+  });
+
+  it('reports legacy and missing artwork, and preserves the library when restore data is invalid', async () => {
+    const zip = new AdmZip();
+    const data = {
+      version: '1.1',
+      artists: [{ id: 43, name: 'Saved artist' }],
+      albums: [{ id: 25, artist_id: 43, title: 'Saved album', local_cover_path: 'missing.jpg' }],
+      collections: [{ id: 16, album_id: 25, status: 'collection' }],
+    };
+    zip.addFile('data.json', Buffer.from(JSON.stringify(data)));
+    const preview = await request(app).post('/api/backup/preview').attach('backup', zip.toBuffer(), 'older.zip').expect(200);
+    expect(preview.body.warnings).toHaveLength(2);
+    const restored = await request(app).post('/api/backup/import').attach('backup', zip.toBuffer(), 'older.zip').expect(200);
+    expect(restored.body).toMatchObject({
+      message: 'Backup restored with warnings',
+      skippedArtwork: [{ album: 'Saved album', reason: 'Missing from the archive' }],
+    });
+    zip.updateFile('data.json', Buffer.from(JSON.stringify({
+      ...data,
+      albums: [{ ...data.albums[0], musicbrainz_id: 'not a UUID' }],
+    })));
+    await request(app).post('/api/backup/import').attach('backup', zip.toBuffer(), 'invalid.zip').expect(400);
+    expect((await testPool.query('SELECT title, local_cover_path FROM albums')).rows).toEqual([{ title: 'Saved album', local_cover_path: null }]);
   });
 });

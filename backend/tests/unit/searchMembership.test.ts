@@ -46,9 +46,36 @@ describe('search result membership', () => {
       search(req, { json: resolve } as unknown as Response, reject);
     });
 
-    expect(query).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('collections.status = $2'), ['Coltrane', 'wishlist']);
+    expect(query).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('collections.status = $2'), ['Coltrane', 'wishlist', 20, 0, null]);
     expect(result).toEqual({ local: [savedAlbum], discogs: [], errors: [] });
     expect(searchByQuery).not.toHaveBeenCalled();
+  });
+
+  it('uses the requested saved offset and only returns a continuation when another row exists', async () => {
+    query.mockResolvedValueOnce({ rows: Array.from({ length: 21 }, (_, id) => ({ ...savedAlbum, id })) });
+    const result = await new Promise<{ local: typeof savedAlbum[]; nextOffset?: number }>((resolve, reject) => {
+      const req = { query: { q: 'Coltrane', scope: 'saved', offset: '20', sort: 'artist' } } as unknown as Request;
+      search(req, { json: resolve } as unknown as Response, reject);
+    });
+    expect(query).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('LIMIT $3 OFFSET $4'), ['Coltrane', null, 21, 20, 'artist']);
+    expect(result.local).toHaveLength(20);
+    expect(result.nextOffset).toBe(40);
+    expect(searchByQuery).not.toHaveBeenCalled();
+  });
+
+  it('returns the next catalog matches from the same provider window', async () => {
+    searchByQuery.mockResolvedValueOnce(Array.from({ length: 40 }, (_, id) => ({
+      ...catalogAlbum, id, discogsId: id, album: `Test album ${id}`,
+    })));
+    query.mockResolvedValue({ rows: [] });
+    const result = await new Promise<{ discogs: { id: number }[]; catalogSampled: boolean; nextOffset?: number }>((resolve, reject) => {
+      const req = { query: { q: 'Coltrane', scope: 'catalog', offset: '30' } } as unknown as Request;
+      search(req, { json: resolve } as unknown as Response, reject);
+    });
+    expect(searchByQuery).toHaveBeenCalledExactlyOnceWith('Coltrane', 40);
+    expect(result.discogs.map(album => album.id)).toEqual([30, 31, 32, 33, 34, 35, 36, 37, 38, 39]);
+    expect(result.catalogSampled).toBe(true);
+    expect(result.nextOffset).toBeUndefined();
   });
 
   it('links the exact Discogs match even when another name match is in Collection', async () => {

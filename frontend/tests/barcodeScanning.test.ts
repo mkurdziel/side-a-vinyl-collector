@@ -122,7 +122,7 @@ describe('barcode camera lifecycle', () => {
 });
 
 describe('barcode lookup requests', () => {
-  const props = { onClose: vi.fn(), onSuccess: vi.fn(), onSearchByName: vi.fn(), viewMode: 'collection' as const };
+  const props = { onClose: vi.fn(), onSuccess: vi.fn(), onSearchByName: vi.fn(), onMoveSaved: vi.fn(), onOpenSaved: vi.fn(), viewMode: 'collection' as const };
 
   it('sends one lookup when the camera reports repeated detections before the next render', async () => {
     let resolve!: (result: unknown) => void;
@@ -247,7 +247,7 @@ describe('barcode lookup requests', () => {
     await act(async () => quagga.onDetected.mock.calls[0]![0](result));
 
     await act(async () => renderer!.root.findByProps({ 'aria-label': 'Move Dummy to Collection' }).props.onClick());
-    expect(updateStatus).toHaveBeenCalledExactlyOnceWith(19, 'collection');
+    expect(props.onMoveSaved).toHaveBeenCalledExactlyOnceWith(19, 'Dummy');
     expect(addAlbum).not.toHaveBeenCalled();
   });
 });

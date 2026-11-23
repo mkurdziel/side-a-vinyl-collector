@@ -7,24 +7,33 @@ import { SaveDestinationActions, type DestinationAction } from './SaveDestinatio
 interface ImageUploaderProps {
   onClose: () => void;
   onSuccess: () => void;
+  onSearchByName: (query?: string) => void;
+  onMoveSaved: (id: number, title: string) => Promise<boolean>;
+  onOpenSaved: (id: number) => Promise<void>;
   viewMode: 'collection' | 'wishlist';
 }
 
-export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderProps) => {
+export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onMoveSaved, onOpenSaved, viewMode }: ImageUploaderProps) => {
   const [analyzing, setAnalyzing] = useState(false);
   const [matches, setMatches] = useState<DiscogsAlbum[]>([]);
   const [imagePreview, setImagePreview] = useState<string>('');
-  const [confidence, setConfidence] = useState<number>(0);
-  const [extractedInfo, setExtractedInfo] = useState<{ artist?: string; album?: string; year?: number; provider?: string; usedFallback?: boolean } | null>(null);
+  const [extractedInfo, setExtractedInfo] = useState<Awaited<ReturnType<typeof api.analyzeImage>>['extractedText'] | null>(null);
   const [saving, setSaving] = useState<{ id: number; action: DestinationAction }>();
   const saveInProgress = useRef(false);
   const [analysisError, setAnalysisError] = useState('');
+  const fileInput = useRef<HTMLInputElement>(null);
+  const clearPhoto = () => {
+    setImagePreview('');
+    setMatches([]);
+    setExtractedInfo(null);
+    setAnalysisError('');
+  };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
-    setAnalysisError('');
+    clearPhoto();
 
     // Validate file type
     const isHEIC = /\.(heic|heif)$/i.test(file.name) || /^image\/(heic|heif)$/i.test(file.type);
@@ -40,9 +49,6 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
     }
 
     // Convert to base64
-    setMatches([]);
-    setExtractedInfo(null);
-    setConfidence(0);
     setAnalyzing(true);
     const reader = new FileReader();
     reader.onerror = () => {
@@ -64,17 +70,15 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
       try {
         const result = await api.analyzeImage(base64);
 
-        const aiConfidence = result.extractedText.confidence || 0;
-        setConfidence(aiConfidence);
         setExtractedInfo(result.extractedText);
 
         if (result.discogsMatches.length === 0) {
-          setAnalysisError('No matching albums found. Try a clearer photo or search by name.');
+          setAnalysisError('No catalog albums matched the detected text.');
         } else {
           setMatches(result.discogsMatches);
         }
       } catch {
-        setAnalysisError('Could not identify this cover. Try another photo or search by name.');
+        setAnalysisError('Could not identify this cover.');
       } finally {
         setAnalyzing(false);
       }
@@ -93,8 +97,9 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
     setSaving({ id: match.discogsId, action });
     try {
       if (moveId) {
-        await api.updateStatus(moveId, 'collection');
-        toast.success(`Moved “${match.album}” to Collection.`);
+        if (!await onMoveSaved(moveId, match.album)) return;
+        onClose();
+        return;
       } else if (adding) {
         await api.addAlbum({
           artist: match.artist,
@@ -140,15 +145,11 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
         </div>
 
         <div className="mb-6">
+          <input ref={fileInput} id="cover-photo-file" type="file" accept="image/*,.heic,.heif"
+            onChange={handleFileChange} disabled={analyzing || !!saving} className={imagePreview ? 'hidden' : 'sr-only'}
+            aria-label="Choose a cover photo" />
           {!imagePreview ? (
-            <label className="rh-upload-label block w-full cursor-pointer rounded-2xl group">
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleFileChange}
-                disabled={analyzing}
-                className="sr-only"
-              />
+            <label htmlFor="cover-photo-file" className="rh-upload-label block w-full cursor-pointer rounded-2xl group">
               <div className="relative flex flex-col items-center justify-center w-full h-64 border-2 border-dashed border-gray-300 rounded-2xl bg-gray-50 group-hover:bg-purple-50 group-hover:border-purple-300 transition-all duration-200">
                 <div className="w-16 h-16 mb-4 flex items-center justify-center bg-white rounded-full shadow-sm group-hover:scale-110 transition-transform duration-200">
                   <svg className="w-8 h-8 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -177,13 +178,7 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
               </div>
               {!analyzing && (
                 <button 
-                  onClick={() => {
-                    setImagePreview('');
-                    setMatches([]);
-                    setExtractedInfo(null);
-                    setConfidence(0);
-                    setAnalysisError('');
-                  }}
+                  onClick={clearPhoto}
                   disabled={!!saving}
                   className="rh-dialog-close absolute top-4 right-4 bg-white/95 hover:text-red-600"
                   title="Remove image"
@@ -205,66 +200,38 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
           </div>
         )}
 
-        {analysisError && <p className="mb-4 text-sm text-red-600" role="alert">{analysisError}</p>}
+        {extractedInfo && (
+          <div className="mb-4 space-y-1 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
+            <p className="[overflow-wrap:anywhere]">
+              Detected text: <strong className="text-gray-900">{[extractedInfo.artist, extractedInfo.album].filter(Boolean).join(' · ')}</strong>
+            </p>
+            {typeof extractedInfo.confidence === 'number' && extractedInfo.confidence > 0 && (
+              <p>Text recognition confidence: {Math.round(extractedInfo.confidence)}%</p>
+            )}
+          </div>
+        )}
+
+        {analysisError && (
+          <div className="mb-4 space-y-2">
+            <p className="text-sm text-red-600" role="alert">{analysisError}</p>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="rh-primary-action px-3 text-sm font-semibold"
+                onClick={() => onSearchByName([extractedInfo?.artist, extractedInfo?.album].filter(Boolean).join(' '))}>
+                Search by name
+              </button>
+              <button type="button" className="min-h-11 rounded-lg border border-gray-300 px-3 text-sm font-semibold hover:bg-gray-100"
+                onClick={() => fileInput.current?.click()}>
+                Choose another photo
+              </button>
+            </div>
+          </div>
+        )}
 
         {matches.length > 0 && (
           <div className="mb-6">
-            <div className="mb-4">
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                <h3 className="text-xl font-bold text-gray-900" role="status">{matches.length === 1 ? '1 possible match' : `${matches.length} possible matches`}</h3>
-                {confidence > 0 && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-gray-600">Confidence:</span>
-                    <div className="flex items-center gap-2">
-                      <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
-                        <div
-                          className={`h-full transition-all ${
-                            confidence >= 70 ? 'bg-green-500' :
-                            confidence >= 50 ? 'bg-yellow-500' :
-                            'bg-red-500'
-                          }`}
-                          style={{ width: `${confidence}%` }}
-                        />
-                      </div>
-                      <span className={`text-sm font-bold ${
-                        confidence >= 70 ? 'text-green-600' :
-                        confidence >= 50 ? 'text-yellow-600' :
-                        'text-red-600'
-                      }`}>
-                        {confidence}%
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
-              {extractedInfo && (
-                <div className="text-sm text-gray-600 mb-3 bg-gray-50 p-3 rounded-lg border border-gray-200">
-                  <div className="flex items-center gap-2">
-                     <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                     </svg>
-                     <span>
-                        Detected: <span className="font-medium text-gray-900">{extractedInfo.artist || 'Unknown'}</span> - <span className="font-medium text-gray-900">{extractedInfo.album || 'Unknown'}</span>
-                        {extractedInfo.year && ` (${extractedInfo.year})`}
-                     </span>
-                  </div>
-                  {extractedInfo.provider && (
-                    <div className="text-xs text-gray-500 mt-1 ml-6">
-                      {extractedInfo.usedFallback ? (
-                        <>
-                          Provider: <span className="font-medium capitalize">{extractedInfo.provider}</span> <span className="text-yellow-600">(fallback)</span>
-                        </>
-                      ) : (
-                        <>
-                          Provider: <span className="font-medium capitalize">{extractedInfo.provider}</span>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-            <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Select the correct album:</h4>
+            <h3 className="mb-3 text-xl font-bold text-gray-900" role="status">
+              {matches.length === 1 ? '1 possible match' : `${matches.length} possible matches`}
+            </h3>
             <div className="space-y-3">
               {matches.map(match => {
                 const existingStatus = match.inCollection ? 'collection' : match.inWishlist ? 'wishlist' : undefined;
@@ -280,9 +247,6 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
                         <p className="text-sm text-gray-600 break-words">
                           {match.artist}{match.year ? ` · ${match.year}` : ''}
                         </p>
-                        {match.confidence !== undefined && (
-                          <p className="mt-1 text-xs text-gray-400">{match.confidence}% match</p>
-                        )}
                       </div>
                     </div>
                     <div className="mt-3">
@@ -291,6 +255,7 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
                         preferred={viewMode}
                         existingStatus={existingStatus}
                         canMove={Boolean(match.existingAlbumId)}
+                        onOpenSaved={match.existingAlbumId ? () => void onOpenSaved(match.existingAlbumId!) : undefined}
                         pending={saving?.id === match.discogsId ? saving.action : undefined}
                         disabled={!!saving}
                         onSelect={action => void saveMatch(match, action)}
