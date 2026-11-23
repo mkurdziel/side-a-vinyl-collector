@@ -97,6 +97,19 @@ describe('album image uploads', () => {
     expect(copy).not.toContain('% match');
     const search = renderer!.root.findAllByType('button').find(node => node.children.join('') === 'Search by name')!;
     await act(async () => search.props.onClick());
-    expect(props.onSearchByName).toHaveBeenCalledExactlyOnceWith('Portishead Dummy');
+    expect(props.onSearchByName).toHaveBeenCalledExactlyOnceWith('Portishead Dummy', { artist: 'Portishead', album: 'Dummy' });
+  });
+
+  it('keeps a pending photo save open until it finishes', async () => {
+    const pending = Promise.withResolvers<object>();
+    addAlbum.mockReturnValueOnce(pending.promise);
+    await upload({ name: 'cover.jpg', type: 'image/jpeg', size: 1024 });
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Add Dummy to Collection' }).props.onClick());
+    const cancel = renderer!.root.findAllByType('button').find(node => node.children.join('') === 'Cancel')!;
+    expect(cancel.props.disabled).toBe(true);
+    await act(async () => renderer!.root.findByProps({ labelledBy: 'identify-cover-title' }).props.onClose());
+    expect(props.onClose).not.toHaveBeenCalled();
+    await act(async () => pending.resolve({}));
+    expect(props.onClose).toHaveBeenCalledOnce();
   });
 });

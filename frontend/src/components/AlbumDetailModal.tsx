@@ -105,88 +105,48 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, shelfActions }: Al
           </button>
         </div>
 
-        {/* Content */}
-        <div className="p-4 sm:p-6 space-y-6">
-          {/* Album Artwork */}
-          <div className="flex flex-col items-center">
-            <div className="w-full max-w-md aspect-square bg-gray-50 rounded-xl overflow-hidden shadow-lg">
+        <div className="space-y-4 p-4 sm:space-y-5 sm:p-6">
+          <div className="rh-details-identity">
+            <div className="aspect-square overflow-hidden rounded-xl border border-gray-200 bg-gray-50">
               {failedCoverUrl !== coverUrl ? (
-                <img
-                  src={coverUrl}
-                  alt={currentAlbum.title}
-                  className="w-full h-full object-cover"
-                  onError={() => setFailedCoverUrl(coverUrl)}
-                />
+                <img src={coverUrl} alt="" className="size-full object-cover" onError={() => setFailedCoverUrl(coverUrl)} />
               ) : (
-                <div className="flex h-full items-center justify-center text-sm text-gray-400">Cover unavailable</div>
+                <div className="flex h-full items-center justify-center p-1 text-center text-xs text-gray-600">Cover unavailable</div>
               )}
+            </div>
+            <div className="min-w-0 [overflow-wrap:anywhere]">
+              <h3 className="text-xl font-bold text-gray-900 sm:text-2xl">{currentAlbum.title}</h3>
+              <p className="mt-1 text-base text-gray-600">{currentAlbum.artist_name}</p>
+              <p className="mt-2 text-sm font-medium text-gray-700">
+                {currentAlbum.status === 'wishlist' ? 'Wishlist' : 'Collection'}
+                {currentAlbum.year ? ` · ${currentAlbum.year}` : ''}
+              </p>
             </div>
           </div>
 
-          {/* Album Info */}
-          <div className="space-y-4">
+          {shelfActions && <div className="border-t border-gray-200 pt-3">{shelfActions}</div>}
+
+          <dl className="grid grid-cols-2 gap-3 border-t border-gray-200 pt-4">
             <div>
-              <h3 className="text-2xl font-bold text-gray-900">{currentAlbum.title}</h3>
-              <p className="text-lg text-gray-600 mt-1">{currentAlbum.artist_name}</p>
-              {currentAlbum.year && (
-                <p className="text-sm text-gray-500 mt-1">{currentAlbum.year}</p>
-              )}
+              <dt className="text-sm font-medium text-gray-700">First saved</dt>
+              <dd className="text-sm text-gray-600">{formatDate(currentAlbum.added_at)}</dd>
             </div>
-
-            <dl className="grid grid-cols-1 gap-3 border-t border-gray-200 pt-4 sm:grid-cols-3">
-              <div>
-                <dt className="text-sm font-medium text-gray-700">Shelf</dt>
-                <dd className="text-sm text-gray-600">{currentAlbum.status === 'wishlist' ? 'Wishlist' : 'Collection'}</dd>
+            <div>
+              <dt className="text-sm font-medium text-gray-700">Artwork</dt>
+              <dd className="text-sm text-gray-600">{artworkSource}</dd>
+            </div>
+            {currentAlbum.notes && (
+              <div className="col-span-full min-w-0">
+                <dt className="text-sm font-medium text-gray-700">Notes</dt>
+                <dd className="mt-1 whitespace-pre-wrap text-sm text-gray-600 [overflow-wrap:anywhere]">{currentAlbum.notes}</dd>
               </div>
-              <div>
-                <dt className="text-sm font-medium text-gray-700">First saved</dt>
-                <dd className="text-sm text-gray-600">{formatDate(currentAlbum.added_at)}</dd>
-              </div>
-              <div>
-                <dt className="text-sm font-medium text-gray-700">Artwork</dt>
-                <dd className="text-sm text-gray-600">{artworkSource}</dd>
-              </div>
-              {currentAlbum.notes && (
-                <div className="sm:col-span-3">
-                  <dt className="text-sm font-medium text-gray-700">Notes</dt>
-                  <dd className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-600">{currentAlbum.notes}</dd>
-                </div>
-              )}
-            </dl>
-          </div>
+            )}
+          </dl>
 
-          {/* Actions */}
-          <div className="pt-4 border-t border-gray-200 space-y-3">
-            {shelfActions}
-
-            <button
-              ref={artworkButtonRef}
-              onClick={handleSearchArtwork}
-              disabled={refetching}
-              className="w-full px-5 py-2.5 rh-filled-action text-sm font-medium bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {refetching ? (
-                <>
-                  <div className="rh-action-spinner" aria-hidden="true"></div>
-                  Searching for Artwork...
-                </>
-              ) : (
-                <>
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                  Refresh Artwork
-                </>
-              )}
-            </button>
-
-            <button
-              onClick={onClose}
-              className="w-full px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium transition-colors"
-            >
-              Close
-            </button>
-          </div>
+          <button ref={artworkButtonRef} type="button" onClick={handleSearchArtwork} disabled={refetching}
+            className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-gray-300 px-3 text-sm font-semibold text-gray-900 hover:bg-gray-100 disabled:opacity-60">
+            {refetching ? <><span className="rh-action-spinner" aria-hidden="true" />Searching for artwork…</> : 'Find different artwork'}
+          </button>
         </div>
       </div>
 

@@ -235,6 +235,9 @@ describe('barcode lookup requests', () => {
     expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       barcode: '0602537340436', discogsId: 17, status: 'wishlist',
     }));
+    expect(renderer!.root.findByProps({ 'aria-label': 'Close barcode lookup' }).props.disabled).toBe(true);
+    await act(async () => renderer!.root.findByProps({ labelledBy: 'barcode-title' }).props.onClose());
+    expect(props.onClose).not.toHaveBeenCalled();
     await act(async () => save.resolve());
     expect(props.onSuccess).toHaveBeenCalledOnce();
   });

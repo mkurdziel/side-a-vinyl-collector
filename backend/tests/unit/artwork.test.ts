@@ -58,7 +58,7 @@ beforeEach(() => {
     cover_image_url: fallbackUrl, local_cover_path: null, cover_art_fetched: false,
   }] });
   // Album already exists; adding it to the collection still starts the background lookup.
-  client.query.mockResolvedValue({ rows: [{ id: 42 }] });
+  client.query.mockResolvedValue({ rows: [{ id: 42 }], rowCount: 1 });
 });
 afterEach(() => vi.restoreAllMocks());
 

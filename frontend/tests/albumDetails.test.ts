@@ -38,7 +38,7 @@ describe('album details state', () => {
     const replacement = { ...album, id: 2, title: 'Third' };
     await act(async () => renderer!.update(renderAlbum(replacement)));
     expect(renderer!.root.findByType('h3').children).toEqual(['Third']);
-    expect(renderer!.root.findByType('img').props.alt).toBe('Third');
+    expect(renderer!.root.findByType('img').props.src).toBe('/api/cover-art/2');
     await act(async () => renderer!.update(renderAlbum(album)));
     expect(renderer!.root.findByType('h3').children).toEqual(['Dummy']);
   });
@@ -48,7 +48,7 @@ describe('album details state', () => {
     searchCoverArt.mockResolvedValue({ results: [{ source: 'Discogs', id: 1, title: 'Candidate', url: '/new.jpg' }] });
     updateCoverArt.mockResolvedValue({ album: { id: album.id, cover_image_url: '/new.jpg', local_cover_path: '1_new.jpg' } });
     await act(async () => { renderer = create(renderAlbum(album)); });
-    const search = renderer!.root.findAllByType('button').find(button => button.children.includes('Refresh Artwork'));
+    const search = renderer!.root.findAllByType('button').find(button => button.children.includes('Find different artwork'));
     await act(async () => search!.props.onClick());
     const useCover = renderer!.root.findByProps({ 'aria-label': 'Use Candidate cover from Discogs' });
     await act(async () => useCover.props.onClick());

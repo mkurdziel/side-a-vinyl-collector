@@ -108,10 +108,18 @@ export const getAlbumById = asyncHandler(async (req: Request, res: Response) => 
 });
 
 export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
-  const { artist, album, year, coverImageUrl, discogsId, barcode, status } = req.body;
+  const { artist: artistInput, album: albumInput, year, coverImageUrl, discogsId, barcode, status } = req.body;
+  const artist = typeof artistInput === 'string' ? artistInput.trim() : '';
+  const album = typeof albumInput === 'string' ? albumInput.trim() : '';
 
   if (!artist || !album) {
     throw new AppError('Artist and album are required', 400);
+  }
+  if (artist.length > 255 || album.length > 255) {
+    throw new AppError('Artist and album must each be 255 characters or fewer', 400);
+  }
+  if (status != null && !isShelf(status)) {
+    throw new AppError('Choose Collection or Wishlist', 400);
   }
 
   const client = await pool.connect();
@@ -119,54 +127,40 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
   try {
     await client.query('BEGIN');
 
-    // Check if artist exists, otherwise create
-    let artistResult = await client.query(
-      'SELECT id FROM artists WHERE LOWER(name) = LOWER($1)',
-      [artist]
-    );
+    // Serialize same-artist additions across requests. Artist names are not unique in older libraries.
+    if (discogsId) await client.query("SELECT pg_advisory_xact_lock(hashtextextended('discogs:' || $1::text, 0))", [discogsId]);
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended('artist:' || lower($1), 0))", [artist]);
+    const existing = await client.query<{ id: number }>(`
+      SELECT albums.id FROM albums JOIN artists ON artists.id = albums.artist_id
+      LEFT JOIN collections ON collections.album_id = albums.id
+      WHERE albums.discogs_id = $3 OR (lower(artists.name) = lower($1) AND lower(albums.title) = lower($2))
+      ORDER BY (albums.discogs_id = $3) DESC NULLS LAST, (collections.album_id IS NOT NULL) DESC, albums.id
+      LIMIT 1
+    `, [artist, album, discogsId || null]);
 
-    let artistId: number;
-    if (artistResult.rows.length === 0) {
-      // Note: discogsId from request is the album's ID, not the artist's ID
-      // So we don't set discogs_id for the artist here
-      const insertArtist = await client.query(
-        'INSERT INTO artists (name) VALUES ($1) RETURNING id',
-        [artist]
+    let albumId = existing.rows[0]?.id;
+    if (albumId === undefined) {
+      const artistResult = await client.query<{ id: number }>(
+        'SELECT id FROM artists WHERE lower(name) = lower($1) ORDER BY id LIMIT 1', [artist],
       );
-      artistId = insertArtist.rows[0].id;
-    } else {
-      artistId = artistResult.rows[0].id;
-    }
-
-    // Check if album exists, otherwise create
-    let albumResult = await client.query(
-      'SELECT id FROM albums WHERE artist_id = $1 AND LOWER(title) = LOWER($2)',
-      [artistId, album]
-    );
-
-    let albumId: number;
-    if (albumResult.rows.length === 0) {
-      const insertAlbum = await client.query(
+      const artistId = artistResult.rows[0]?.id ?? (await client.query<{ id: number }>(
+        'INSERT INTO artists (name) VALUES ($1) RETURNING id', [artist],
+      )).rows[0]?.id;
+      if (artistId === undefined) throw new Error('Artist insert did not return an ID');
+      albumId = (await client.query<{ id: number }>(
         `INSERT INTO albums (artist_id, title, year, cover_image_url, discogs_id)
-         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-        [artistId, album, year || null, coverImageUrl || null, discogsId || null]
-      );
-      albumId = insertAlbum.rows[0].id;
-    } else {
-      albumId = albumResult.rows[0].id;
+         VALUES ($1, $2, $3, $4, $5) RETURNING id`, [artistId, album, year || null, coverImageUrl || null, discogsId || null],
+      )).rows[0]?.id;
+      if (albumId === undefined) throw new Error('Album insert did not return an ID');
     }
 
-    // Add to collection (check for duplicates)
-    try {
-      await client.query(
-        'INSERT INTO collections (album_id, status) VALUES ($1, $2)',
-        [albumId, status || 'collection']
-      );
-    } catch (error: any) {
-      if (error.code === '23505') { // Unique violation
-        throw new AppError('Album already in collection/wishlist', 409);
-      }
-      throw error;
+    const membership = await client.query(
+      'INSERT INTO collections (album_id, status) VALUES ($1, $2) ON CONFLICT (album_id) DO NOTHING',
+      [albumId, status ?? 'collection'],
+    );
+    if (!membership.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'This album is already saved.', status: 'error', existingAlbumId: albumId });
     }
 
     // If barcode provided, store mapping

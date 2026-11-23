@@ -3,7 +3,8 @@ import { act, create } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Album, DiscogsAlbum, SearchResult } from '../src/services/api';
 
-const { getAlbums, search, addAlbum, updateStatus, deleteAlbum } = vi.hoisted(() => ({
+const { getAlbum, getAlbums, search, addAlbum, updateStatus, deleteAlbum } = vi.hoisted(() => ({
+  getAlbum: vi.fn(),
   getAlbums: vi.fn(),
   search: vi.fn(),
   addAlbum: vi.fn(),
@@ -11,7 +12,7 @@ const { getAlbums, search, addAlbum, updateStatus, deleteAlbum } = vi.hoisted(()
   deleteAlbum: vi.fn(),
 }));
 vi.mock('../src/services/api', () => ({
-  default: { getAlbums, search, addAlbum, updateStatus, deleteAlbum, checkDiscogsConfig: async () => ({ configured: true }) },
+  default: { getAlbum, getAlbums, search, addAlbum, updateStatus, deleteAlbum, checkDiscogsConfig: async () => ({ configured: true }) },
   getCoverArtUrl: (id: number) => `/api/cover-art/${id}`,
 }));
 vi.mock('react-hot-toast', () => ({
@@ -62,6 +63,7 @@ beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.stubGlobal('__APP_VERSION__', 'test');
   vi.stubGlobal('window', globalThis);
+  vi.stubGlobal('requestAnimationFrame', (fn: () => void) => fn());
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {} });
   vi.useFakeTimers();
   getAlbums.mockResolvedValue({ albums: [] });
@@ -260,7 +262,41 @@ describe('library and catalog search', () => {
     expect(deleteAlbum).not.toHaveBeenCalled();
     await act(async () => button('Remove album').props.onClick());
     expect(deleteAlbum).toHaveBeenCalledExactlyOnceWith(saved.id, 'collection');
-    expect(JSON.stringify(renderer.toJSON())).toContain('Check its current shelf');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Open the current record');
+    expect(button('Remove album').props['aria-disabled']).toBe(true);
+    getAlbum.mockResolvedValueOnce({ album: saved });
+    await act(async () => button('Open current album').props.onClick());
+    expect(getAlbum).toHaveBeenCalledExactlyOnceWith(saved.id);
+    expect(button('Remove album')).toBeUndefined();
+    expect(renderer.root.findByProps({ labelledBy: 'album-details-title' })
+      .findByProps({ 'aria-label': 'Remove from Wishlist — Blue Train' })).toBeDefined();
+  });
+
+  it('starts a catalog search on an empty shelf and prefills manual entry after a miss', async () => {
+    search.mockResolvedValue({ local: [], discogs: [] });
+    await renderLibrary();
+    await act(async () => button('Find a record to add').props.onClick());
+    expect(renderer.root.findByProps({ id: 'search-scope' }).props.value).toBe('catalog');
+    await editSearch('Unlisted record');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    await act(async () => button('Add album manually').props.onClick());
+    expect(renderer.root.findByProps({ name: 'album' }).props.defaultValue).toBe('Unlisted record');
+    expect(button('Add to Collection')).toBeDefined();
+  });
+
+  it('offers the existing saved album after a catalog add conflict', async () => {
+    search.mockResolvedValue({ local: [], discogs: [catalog] });
+    addAlbum.mockRejectedValueOnce(Object.assign(new Error('Already saved'), { status: 409, existingAlbumId: saved.id }));
+    getAlbum.mockResolvedValueOnce({ album: saved });
+    await renderLibrary();
+    await chooseScope('catalog');
+    await editSearch('Coltrane');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    await act(async () => button('Add Giant Steps to Collection').props.onClick());
+    expect(JSON.stringify(renderer.toJSON())).toContain('This album is already saved.');
+    expect(button('Add Giant Steps to Collection')).toBeUndefined();
+    await act(async () => button('Open saved album').props.onClick());
+    expect(getAlbum).toHaveBeenCalledExactlyOnceWith(saved.id);
   });
 
   it('appends saved matches and discards a catalog continuation after a new query', async () => {

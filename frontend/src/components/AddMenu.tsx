@@ -4,6 +4,7 @@ interface AddMenuProps {
   onBarcodeClick: () => void;
   onImageClick: () => void;
   onSearchClick: () => void;
+  onManualClick: () => void;
   onImportClick: () => void;
   onClose: () => void;
   discogsConfigured: boolean | null;
@@ -12,7 +13,7 @@ interface AddMenuProps {
 }
 
 export const AddMenu = ({
-  onBarcodeClick, onImageClick, onSearchClick, onImportClick, onClose, discogsConfigured, discogsCheckFailed, viewMode,
+  onBarcodeClick, onImageClick, onSearchClick, onManualClick, onImportClick, onClose, discogsConfigured, discogsCheckFailed, viewMode,
 }: AddMenuProps) => {
   const importIcon = (
     <span className={`shrink-0 rounded-lg p-3 ${discogsConfigured ? 'bg-blue-50 group-hover:bg-blue-100' : 'bg-gray-50'}`}>
@@ -116,6 +117,12 @@ export const AddMenu = ({
               </div>
             </div>
           )}
+        </div>
+        <div className="border-t border-gray-200 px-4 py-2 sm:px-6">
+          <button type="button" onClick={onManualClick}
+            className="min-h-11 rounded-lg px-2 text-sm font-semibold text-purple-600 hover:bg-gray-100">
+            Add album manually
+          </button>
         </div>
       </div>
     </ModalDialog>

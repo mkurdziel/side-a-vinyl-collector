@@ -73,6 +73,26 @@ describe('Album CRUD Operations', () => {
 
       expect(response.body.album.status).toBe('collection');
     });
+
+    it('returns the current record for concurrent manual duplicates without changing its shelf', async () => {
+      const record = { artist: ' Fixture Artist ', album: ' Fixture Album ', status: 'wishlist' };
+      const responses = await Promise.all([record, { ...record, artist: 'fixture artist', album: 'fixture album' }]
+        .map(data => request(app).post('/api/albums').send(data)));
+      const created = responses.find(response => response.status === 201);
+      const duplicate = responses.find(response => response.status === 409);
+      expect(created?.body.album.status).toBe('wishlist');
+      expect(duplicate?.body.existingAlbumId).toBe(created?.body.album.id);
+      expect((await request(app).get('/api/albums?status=wishlist')).body.albums).toHaveLength(1);
+      await request(app).post('/api/albums').send({ artist: ' ', album: 'Fixture Album' }).expect(400);
+    });
+
+    it('identifies an already saved Discogs release even if its listing title changes', async () => {
+      const created = await request(app).post('/api/albums')
+        .send({ artist: 'Original Artist', album: 'Original title', discogsId: 2219 }).expect(201);
+      const duplicate = await request(app).post('/api/albums')
+        .send({ artist: 'Different listing credit', album: 'Revised title', discogsId: 2219 }).expect(409);
+      expect(duplicate.body.existingAlbumId).toBe(created.body.album.id);
+    });
   });
 
   describe('GET /api/albums', () => {
