@@ -5,6 +5,10 @@ const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://l
 
 export type SavedMatch = 'title' | 'release' | 'barcode';
 
+export function isExactSavedMatch(match?: SavedMatch | null): boolean {
+  return match === 'release' || match === 'barcode';
+}
+
 /**
  * Get cover art URL for an album
  * This uses the backend endpoint which serves either:
@@ -39,6 +43,8 @@ export interface SearchResult {
   catalogSampled?: boolean;
 }
 
+export type SavedTitleMatch = Pick<Album, 'id' | 'title' | 'artist_name' | 'status' | 'year' | 'discogs_id'>;
+
 export interface BackupManifest {
   timestamp: string | null;
   albums: number;
@@ -70,6 +76,7 @@ export interface DiscogsAlbum {
   inWishlist?: boolean;
   existingAlbumId?: number | null;
   existingMatch?: SavedMatch | null;
+  titleMatches?: SavedTitleMatch[];
   fromProvider?: string;
 }
 
@@ -196,6 +203,7 @@ class ApiService {
     existingStatus?: 'collection' | 'wishlist' | null;
     existingAlbumId?: number | null;
     existingMatch?: SavedMatch | null;
+    titleMatches?: SavedTitleMatch[];
   }> {
     return this.request('/api/barcode/scan', {
       method: 'POST',

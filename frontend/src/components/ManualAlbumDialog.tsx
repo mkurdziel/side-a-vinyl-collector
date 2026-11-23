@@ -92,7 +92,7 @@ export function ManualAlbumDialog({ draft, initialShelf, onClose, onSaved, onOpe
             <button type="button" onClick={close} disabled={saving}
               className="min-h-11 rounded-lg border border-gray-300 px-3 text-sm font-semibold disabled:opacity-60">Cancel</button>
             {duplicateId !== undefined ? (
-              <button type="button" className="rh-primary-action px-3 text-sm font-semibold"
+              <button type="button" autoFocus className="rh-primary-action px-3 text-sm font-semibold"
                 onClick={() => void onOpenSaved(duplicateId)}>Open saved album</button>
             ) : (
               <button type="submit" disabled={saving} className="rh-primary-action px-3 text-sm font-semibold disabled:opacity-60">

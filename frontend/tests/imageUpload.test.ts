@@ -8,7 +8,10 @@ const { analyzeImage, addAlbum } = vi.hoisted(() => ({
 vi.mock('react-hot-toast', () => ({
   toast: Object.assign(vi.fn(), { loading: vi.fn(), success: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../src/services/api', () => ({ default: { analyzeImage, addAlbum } }));
+vi.mock('../src/services/api', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/services/api')>(),
+  default: { analyzeImage, addAlbum },
+}));
 import { ImageUploader } from '../src/components/ImageUploader';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -76,15 +79,15 @@ describe('album image uploads', () => {
     analyzeImage.mockResolvedValueOnce({
       extractedText: {},
       discogsMatches: [
-        { id: 1, discogsId: 1, artist: 'Portishead', album: 'Dummy', inWishlist: true, existingAlbumId: 23 },
-        { id: 2, discogsId: 2, artist: 'Portishead', album: 'Third', inWishlist: true },
+        { id: 1, discogsId: 1, artist: 'Portishead', album: 'Dummy', inWishlist: true, existingAlbumId: 23, existingMatch: 'release' },
+        { id: 2, discogsId: 2, artist: 'Portishead', album: 'Third', inWishlist: true, existingAlbumId: 24, existingMatch: 'title' },
         { id: 3, discogsId: 3, artist: 'Portishead', album: 'Roseland NYC Live', inCollection: true },
       ],
     });
     await upload({ name: 'cover.jpg', type: 'image/jpeg', size: 1024 });
     const labels = renderer!.root.findAllByType('button').map(button => button.props['aria-label']);
-    expect(labels).toContain('Third: Title in Wishlist');
-    expect(labels).toContain('Roseland NYC Live: Title in Collection');
+    expect(renderer!.root.findByProps({ 'aria-label': 'Saved title matches for Third' })).toBeDefined();
+    expect(renderer!.root.findByProps({ 'aria-label': 'Saved title matches for Roseland NYC Live' })).toBeDefined();
     expect(labels.filter(label => label?.startsWith('Move '))).toEqual(['Move Dummy to Collection']);
     await act(async () => renderer!.root.findByProps({ 'aria-label': 'Move Dummy to Collection' }).props.onClick());
     expect(props.onMoveSaved).toHaveBeenCalledExactlyOnceWith(23, 'Dummy');

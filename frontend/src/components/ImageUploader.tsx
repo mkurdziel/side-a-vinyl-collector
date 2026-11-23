@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { toast } from 'react-hot-toast';
-import api, { ApiError, type DiscogsAlbum } from '../services/api';
+import api, { ApiError, isExactSavedMatch, type DiscogsAlbum } from '../services/api';
 import { ModalDialog } from './ModalDialog';
 import { SaveDestinationActions, type DestinationAction } from './SaveDestinationActions';
 import { LookupRecovery } from './LookupRecovery';
@@ -105,7 +105,7 @@ export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onManual, on
 
   const saveMatch = async (match: DiscogsAlbum, action: DestinationAction) => {
     if (match.inCollection || saveInProgress.current) return;
-    const moveId = action === 'move' && match.inWishlist ? match.existingAlbumId : undefined;
+    const moveId = action === 'move' && match.inWishlist && isExactSavedMatch(match.existingMatch) ? match.existingAlbumId : undefined;
     const adding = action !== 'move' && !match.inWishlist;
     if (!moveId && !adding) return;
 
@@ -249,7 +249,7 @@ export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onManual, on
                         {duplicates[match.discogsId] !== undefined ? (
                           <div className="grid gap-1">
                             <p role="alert" className="text-sm">This album is already saved.</p>
-                            <button type="button" className="rh-primary-action px-3 text-sm font-semibold" disabled={!!saving}
+                          <button type="button" autoFocus className="rh-primary-action px-3 text-sm font-semibold" disabled={!!saving}
                               onClick={() => void onOpenSaved(duplicates[match.discogsId])}>Open saved album</button>
                           </div>
                         ) : <SaveDestinationActions
@@ -257,8 +257,10 @@ export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onManual, on
                           preferred={viewMode}
                           existingStatus={existingStatus}
                           existingMatch={match.existingMatch}
-                          canMove={Boolean(match.existingAlbumId)}
-                          onOpenSaved={match.existingAlbumId ? () => void onOpenSaved(match.existingAlbumId!) : undefined}
+                        existingAlbumId={match.existingAlbumId}
+                        titleMatches={match.titleMatches}
+                        lookupReleaseId={match.discogsListing === 'release' ? match.discogsId : undefined}
+                        onOpenSaved={id => void onOpenSaved(id)}
                           pending={saving?.id === match.discogsId ? saving.action : undefined}
                           disabled={!!saving}
                           onSelect={action => void saveMatch(match, action)}

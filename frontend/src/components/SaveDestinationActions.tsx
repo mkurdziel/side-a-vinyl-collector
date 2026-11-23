@@ -1,4 +1,4 @@
-import type { SavedMatch } from '../services/api';
+import { isExactSavedMatch, type SavedMatch, type SavedTitleMatch } from '../services/api';
 
 type Shelf = 'collection' | 'wishlist';
 export type DestinationAction = Shelf | 'move';
@@ -10,12 +10,14 @@ interface SaveDestinationActionsProps {
   preferred: Shelf;
   existingStatus?: Shelf;
   existingMatch?: SavedMatch | null;
-  canMove?: boolean;
+  existingAlbumId?: number | null;
+  titleMatches?: SavedTitleMatch[];
+  lookupReleaseId?: number;
   openingSaved?: boolean;
   pending?: DestinationAction;
   disabled?: boolean;
   onSelect: (action: DestinationAction) => void;
-  onOpenSaved?: () => void;
+  onOpenSaved?: (id: number) => void;
 }
 
 interface DestinationChoice {
@@ -24,19 +26,63 @@ interface DestinationChoice {
 }
 
 export function SaveDestinationActions({
-  albumTitle, preferred, existingStatus, existingMatch, canMove, openingSaved, pending, disabled, onSelect, onOpenSaved,
+  albumTitle, preferred, existingStatus, existingMatch, existingAlbumId, titleMatches, lookupReleaseId,
+  openingSaved, pending, disabled, onSelect, onOpenSaved,
 }: SaveDestinationActionsProps) {
+  const blocked = !!pending || !!disabled || !!openingSaved;
+  if (existingStatus && !isExactSavedMatch(existingMatch)) {
+    const canReview = onOpenSaved && (titleMatches?.length || existingAlbumId != null);
+    return (
+      <div className="rh-title-review" role="group" aria-label={`Saved title matches for ${albumTitle}`}>
+        <p className="px-2 text-xs font-semibold text-gray-600">Same artist and title</p>
+        {canReview && (
+          <details className="rh-lookup-recovery">
+            <summary>{titleMatches && titleMatches.length > 1 ? 'Compare saved albums' : 'Compare with saved album'}</summary>
+            <div className="space-y-2 px-2 pb-2 text-sm">
+              {lookupReleaseId != null && lookupReleaseId > 0 && (
+                <p className="text-xs text-gray-600">Lookup Discogs release ID {lookupReleaseId}</p>
+              )}
+              {titleMatches?.length ? (
+                <ul className="space-y-2">
+                  {titleMatches.map(album => (
+                    <li key={album.id} className="border-t border-gray-200 pt-2 leading-snug [overflow-wrap:anywhere]">
+                      <p className="font-semibold">{album.title}</p>
+                      <p className="text-xs text-gray-600">{album.artist_name}{album.year ? ` · ${album.year}` : ''}</p>
+                      <p className="mt-1 text-xs text-gray-600">
+                        {shelfNames[album.status]} · {album.discogs_id ? `Discogs release ID ${album.discogs_id}` : 'Release ID unavailable'}
+                      </p>
+                      <button type="button" className="rh-lookup-link" disabled={blocked}
+                        aria-label={`Open saved ${album.title} by ${album.artist_name} in ${shelfNames[album.status]}${album.discogs_id ? `, release ${album.discogs_id}` : ''}`}
+                        onClick={() => onOpenSaved(album.id)}>
+                        Open saved album
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : existingAlbumId != null && (
+                <button type="button" className="rh-lookup-link" disabled={blocked}
+                  onClick={() => onOpenSaved(existingAlbumId)}>Open saved album</button>
+              )}
+            </div>
+          </details>
+        )}
+      </div>
+    );
+  }
+
   const alternative = preferred === 'collection' ? 'wishlist' : 'collection';
   const choices: DestinationChoice[] = existingStatus
     ? [{ shelf: existingStatus }]
     : [{ shelf: preferred, action: preferred }];
 
-  if (existingStatus === 'wishlist' && canMove) choices.push({ shelf: 'collection', action: 'move' });
+  if (existingStatus === 'wishlist' && existingAlbumId != null && isExactSavedMatch(existingMatch)) {
+    choices.push({ shelf: 'collection', action: 'move' });
+  }
 
   const renderChoice = ({ shelf, action }: DestinationChoice) => {
     const name = shelfNames[shelf];
     const moving = action === 'move';
-    const blocked = !action || !!pending || !!disabled || !!openingSaved;
+    const unavailable = !action || blocked;
     const busy = !!action && pending === action;
     const matchLabel = existingMatch === 'release' ? 'Release ID' : existingMatch === 'barcode' ? 'Barcode' : 'Title';
     const label = action ? `${moving ? 'Move' : 'Add'} to ${name}` : `${matchLabel} in ${name}`;
@@ -55,11 +101,11 @@ export function SaveDestinationActions({
         key={shelf}
         type="button"
         aria-label={accessibleLabel}
-        aria-disabled={blocked}
+        aria-disabled={unavailable}
         aria-busy={busy}
         tabIndex={action ? undefined : -1}
         className={`min-h-11 rounded-lg border px-2 py-1.5 text-xs font-semibold transition-colors ${color}`}
-        onClick={() => { if (action && !blocked) onSelect(action); }}
+        onClick={() => { if (action && !unavailable) onSelect(action); }}
       >
         {busy ? `${moving ? 'Moving' : 'Adding'} to ${name}…` : label}
       </button>
@@ -75,10 +121,10 @@ export function SaveDestinationActions({
           <div className="grid">{renderChoice({ shelf: alternative, action: alternative })}</div>
         </details>
       )}
-      {onOpenSaved && (
-        <button type="button" disabled={!!pending || !!disabled || !!openingSaved} aria-busy={!!openingSaved}
+      {onOpenSaved && existingAlbumId != null && (
+        <button type="button" disabled={blocked} aria-busy={!!openingSaved}
           className="min-h-11 rounded-lg px-2 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-100"
-          aria-label={`Open saved album — ${albumTitle}`} onClick={onOpenSaved}>
+          aria-label={`Open saved album — ${albumTitle}`} onClick={() => onOpenSaved(existingAlbumId)}>
           {openingSaved ? 'Opening album…' : 'Open saved album'}
         </button>
       )}
