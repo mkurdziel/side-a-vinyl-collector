@@ -6,9 +6,10 @@ interface ModalDialogProps {
   onClose: () => void;
   children: ReactNode;
   returnFocusTo?: RefObject<HTMLElement | null>;
+  fallbackFocusTo?: RefObject<HTMLElement | null>;
 }
 
-export function ModalDialog({ labelledBy, onClose, children, returnFocusTo }: ModalDialogProps) {
+export function ModalDialog({ labelledBy, onClose, children, returnFocusTo, fallbackFocusTo }: ModalDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useLayoutEffect(() => {
@@ -16,15 +17,15 @@ export function ModalDialog({ labelledBy, onClose, children, returnFocusTo }: Mo
     if (!dialog?.showModal) return;
 
     const opener = returnFocusTo?.current ?? document.activeElement;
+    // The fallback can appear later if the action that opened this dialog is removed.
+    const returnTarget = () => opener instanceof HTMLElement && opener.isConnected ? opener : fallbackFocusTo?.current;
     dialog.showModal();
 
     return () => {
       dialog.close();
-      if (opener instanceof HTMLElement && opener.isConnected) {
-        opener.focus({ preventScroll: true });
-      }
+      returnTarget()?.focus({ preventScroll: true });
     };
-  }, [returnFocusTo]);
+  }, [returnFocusTo, fallbackFocusTo]);
 
   return (
     <dialog

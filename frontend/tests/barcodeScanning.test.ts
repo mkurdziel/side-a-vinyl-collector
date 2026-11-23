@@ -321,7 +321,7 @@ describe('barcode lookup requests', () => {
     expect(JSON.stringify(renderer!.toJSON())).toContain('one saved entry per artist and title');
     const open = renderer!.root.findByProps({ 'aria-label': 'Open saved album · Dummy by Portishead, Wishlist, Discogs release 20' });
     const opener = { isConnected: true };
-    props.onOpenSaved.mockResolvedValueOnce(true);
+    props.onOpenSaved.mockResolvedValueOnce('opened');
     await act(async () => open.props.onClick({ currentTarget: opener }));
     expect(props.onOpenSaved).toHaveBeenCalledExactlyOnceWith(19, opener, true);
     expect(props.onMoveSaved).not.toHaveBeenCalled();

@@ -6,6 +6,17 @@ export interface Artist {
   updated_at: Date;
 }
 
+export type CatalogListing =
+  | { source: 'discogs'; kind: 'master'; id: number }
+  | { source: 'musicbrainz'; kind: 'release-group'; id: string };
+
+export interface PressingDetails {
+  format?: string;
+  label?: string;
+  catalogNumber?: string;
+  country?: string;
+}
+
 export interface Album {
   id: number;
   artist_id: number;
@@ -13,6 +24,7 @@ export interface Album {
   year?: number;
   cover_image_url?: string;
   discogs_id?: number;
+  catalog_listing?: CatalogListing | null;
   musicbrainz_id?: string;
   local_cover_path?: string;
   cover_art_fetched?: boolean;
@@ -54,6 +66,7 @@ export interface DiscogsAlbum {
   coverImageUrl?: string;
   discogsId: number;
   discogsListing?: 'release' | 'master';
+  pressing?: PressingDetails;
 }
 
 export interface DiscogsSearchResponse {

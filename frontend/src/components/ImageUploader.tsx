@@ -271,6 +271,7 @@ export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onManual, on
                           lookup={{ artist: match.artist, year: match.year, source: catalogSource(match),
                             releaseId: match.discogsListing === 'release' ? match.discogsId : undefined }}
                           onSearch={() => onSearchByName(`${match.artist} ${match.album}`, { artist: match.artist, album: match.album })}
+                          searchLabel="Search catalogs by name"
                           onOpenSaved={onOpenSaved}
                           pending={saving?.id === match.discogsId ? saving.action : undefined}
                           disabled={!!saving}

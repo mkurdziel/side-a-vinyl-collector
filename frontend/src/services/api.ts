@@ -4,6 +4,16 @@
 const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:5001' : '');
 
 export type SavedMatch = 'title' | 'release' | 'barcode';
+export type CatalogListing =
+  | { source: 'discogs'; kind: 'master'; id: number }
+  | { source: 'musicbrainz'; kind: 'release-group'; id: string };
+
+export interface PressingDetails {
+  format?: string;
+  label?: string;
+  catalogNumber?: string;
+  country?: string;
+}
 
 export function isExactSavedMatch(match?: SavedMatch | null): boolean {
   return match === 'release' || match === 'barcode';
@@ -28,6 +38,7 @@ export interface Album {
   cover_image_url?: string;
   musicbrainz_id?: string;
   discogs_id?: number | null;
+  catalog_listing?: CatalogListing | null;
   local_cover_path?: string;
   cover_art_fetched?: boolean;
   notes?: string;
@@ -43,7 +54,7 @@ export interface SearchResult {
   catalogSampled?: boolean;
 }
 
-export type SavedTitleMatch = Pick<Album, 'id' | 'title' | 'artist_name' | 'status' | 'year' | 'discogs_id'>;
+export type SavedTitleMatch = Pick<Album, 'id' | 'title' | 'artist_name' | 'status' | 'year' | 'discogs_id' | 'catalog_listing'>;
 
 export interface BackupManifest {
   timestamp: string | null;
@@ -128,12 +139,17 @@ class ApiService {
     return this.request(`/api/albums/${id}`);
   }
 
+  async getPressingDetails(releaseId: number, signal: AbortSignal): Promise<{ pressing: PressingDetails | null }> {
+    return this.request(`/api/discogs/releases/${releaseId}/pressing`, { signal });
+  }
+
   async addAlbum(data: {
     artist: string;
     album: string;
     year?: number;
     coverImageUrl?: string;
     discogsId?: number;
+    catalogListing?: CatalogListing;
     barcode?: string;
     status?: 'collection' | 'wishlist';
   }): Promise<{ album: Album }> {

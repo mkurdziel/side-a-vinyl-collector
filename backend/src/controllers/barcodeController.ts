@@ -35,7 +35,7 @@ async function findExistingAlbum(artist: string, title: string, discogsId?: numb
   
   // Try artist + title match
   const titleResult = await pool.query<SavedTitleMatch>(`
-    SELECT albums.id, albums.title, albums.year, albums.discogs_id, artists.name AS artist_name, collections.status
+    SELECT albums.id, albums.title, albums.year, albums.discogs_id, albums.catalog_listing, artists.name AS artist_name, collections.status
     FROM albums
     JOIN artists ON albums.artist_id = artists.id
     JOIN collections ON collections.album_id = albums.id

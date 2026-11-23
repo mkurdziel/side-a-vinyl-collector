@@ -93,6 +93,21 @@ describe('Album CRUD Operations', () => {
         .send({ artist: 'Different listing credit', album: 'Revised title', discogsId: 2219 }).expect(409);
       expect(duplicate.body.existingAlbumId).toBe(created.body.album.id);
     });
+
+    it('preserves album-level sources without attaching a default release', async () => {
+      const catalogListing = { source: 'discogs', kind: 'master', id: 12345 };
+      const actualRelease = await request(app).post('/api/albums')
+        .send({ artist: 'Other Artist', album: 'Other record', discogsId: 2219 }).expect(201);
+      const albumOnly = await request(app).post('/api/albums')
+        .send({ artist: 'Fixture Artist', album: 'Album overview', discogsId: 2219, catalogListing }).expect(201);
+
+      expect(albumOnly.body.album.id).not.toBe(actualRelease.body.album.id);
+      const saved = await request(app).get(`/api/albums/${albumOnly.body.album.id}`).expect(200);
+      expect(saved.body.album).toMatchObject({ discogs_id: null, catalog_listing: catalogListing });
+      await request(app).post('/api/albums')
+        .send({ artist: 'Fixture Artist', album: 'Invalid overview', catalogListing: { ...catalogListing, id: '12345' } })
+        .expect(400);
+    });
   });
 
   describe('GET /api/albums', () => {

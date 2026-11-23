@@ -1,7 +1,7 @@
 import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers';
 import { Pool } from 'pg';
 import Redis from 'ioredis';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 
 let postgresContainer: StartedTestContainer;
 let redisContainer: StartedTestContainer;
@@ -81,8 +81,10 @@ export async function teardownTestContainers() {
 async function runMigrations(pool: Pool) {
   // Exercise the same schema and migrations as the deployed application.
   await pool.query(await readFile(new URL('../../src/db/schema.sql', import.meta.url), 'utf8'));
-  for (const migration of ['001_add_musicbrainz_and_local_cover.sql', '002_add_collection_status.sql']) {
-    await pool.query(await readFile(new URL(`../../src/db/migrations/${migration}`, import.meta.url), 'utf8'));
+  const migrationsDir = new URL('../../src/db/migrations/', import.meta.url);
+  const migrations = (await readdir(migrationsDir)).filter(file => file.endsWith('.sql')).sort();
+  for (const migration of migrations) {
+    await pool.query(await readFile(new URL(migration, migrationsDir), 'utf8'));
   }
 }
 

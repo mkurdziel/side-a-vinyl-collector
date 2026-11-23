@@ -102,7 +102,7 @@ describe('album image uploads', () => {
         titleMatches: [{ id: 23, title: 'Dummy', artist_name: 'Portishead', status: 'wishlist', year: 1994, discogs_id: 20 }],
       }],
     });
-    props.onOpenSaved.mockResolvedValueOnce(true);
+    props.onOpenSaved.mockResolvedValueOnce('opened');
     await upload({ name: 'cover.jpg', type: 'image/jpeg', size: 1024 });
     await act(async () => renderer!.root.findByProps({ 'aria-label': 'Compare pressings for Dummy' }).props.onClick());
     const opener = { isConnected: true };

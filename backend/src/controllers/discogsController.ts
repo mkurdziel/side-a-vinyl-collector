@@ -1,6 +1,16 @@
 import type { Request, Response } from 'express';
 import discogs from '../services/discogs';
 import pool from '../config/database';
+import { asyncHandler, AppError } from '../middleware/errorHandler';
+
+export const getPressingDetails = asyncHandler(async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!/^\d+$/.test(String(req.params.id)) || !Number.isSafeInteger(id) || id < 1) {
+    throw new AppError('Choose a valid Discogs release ID', 400);
+  }
+  const release = discogs.isEnabled() ? await discogs.getRelease(id) : null;
+  res.json({ pressing: release?.pressing ?? null });
+});
 
 export const checkDiscogsConfig = async (req: Request, res: Response) => {
   try {

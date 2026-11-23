@@ -1,7 +1,7 @@
 import axios, { type AxiosInstance } from 'axios';
 import redis from '../config/redis';
 import { RateLimiter } from '../utils/rateLimit';
-import type { DiscogsAlbum, DiscogsSearchResponse } from '../types';
+import type { DiscogsAlbum, DiscogsSearchResponse, PressingDetails } from '../types';
 import { AppError } from '../middleware/errorHandler';
 
 class DiscogsService {
@@ -124,7 +124,7 @@ class DiscogsService {
   }
 
   async getRelease(releaseId: number): Promise<DiscogsAlbum | null> {
-    const cacheKey = `release:${releaseId}`;
+    const cacheKey = `release:v2:${releaseId}`;
     const cached = await this.getCached<DiscogsAlbum>(cacheKey);
     if (cached) return cached;
 
@@ -135,6 +135,7 @@ class DiscogsService {
       });
 
       const album = this.parseDiscogsRelease(result);
+      album.pressing = this.parsePressingDetails(result);
       await this.setCache(cacheKey, album);
       return album;
     } catch (error) {
@@ -197,7 +198,7 @@ class DiscogsService {
   }
 
   async getArtistReleases(artistId: number, limit: number = 20): Promise<DiscogsAlbum[]> {
-    const cacheKey = `artist_releases:v2:${artistId}:${limit}`;
+    const cacheKey = `artist_releases:v3:${artistId}:${limit}`;
     const cached = await this.getCached<DiscogsAlbum[]>(cacheKey);
     if (cached) return cached;
 
@@ -237,7 +238,7 @@ class DiscogsService {
           album: release.title,
           year,
           coverImageUrl,
-          discogsId: release.type === 'master' ? release.main_release || 0 : release.id,
+          discogsId: release.type === 'release' ? release.id : 0,
           discogsListing: release.type === 'master' || release.type === 'release' ? release.type : undefined,
         });
         
@@ -318,7 +319,6 @@ class DiscogsService {
 
     // Discogs ID
     const discogsId = release.id;
-
     return {
       id: discogsId,
       artist,
@@ -326,6 +326,20 @@ class DiscogsService {
       year,
       coverImageUrl,
       discogsId,
+    };
+  }
+
+  private parsePressingDetails(release: { labels?: unknown; formats?: unknown; country?: unknown }): PressingDetails {
+    const join = (values: unknown[]) => [...new Set(values.filter(
+      (value): value is string => typeof value === 'string' && Boolean(value.trim()),
+    ).map(value => value.trim()))].join(' · ') || undefined;
+    const labels: Array<{ name?: unknown; catno?: unknown } | null> = Array.isArray(release.labels) ? release.labels : [];
+    const formats: Array<{ name?: unknown; descriptions?: unknown } | null> = Array.isArray(release.formats) ? release.formats : [];
+    return {
+      format: join(formats.map(format => join([format?.name, ...(Array.isArray(format?.descriptions) ? format.descriptions : [])]))),
+      label: join(labels.map(label => label?.name)),
+      catalogNumber: join(labels.map(label => label?.catno).filter(value => typeof value === 'string' && value.trim().toLowerCase() !== 'none')),
+      country: typeof release.country === 'string' ? release.country : undefined,
     };
   }
 }
