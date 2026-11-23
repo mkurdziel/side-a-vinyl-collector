@@ -3,6 +3,8 @@ import { toast } from 'react-hot-toast';
 import api, { ApiError, isExactSavedMatch, type DiscogsAlbum } from '../services/api';
 import { ModalDialog } from './ModalDialog';
 import { SaveDestinationActions, type DestinationAction } from './SaveDestinationActions';
+import { applyLookupShelfEdits, catalogSource, type LookupShelfEdits } from '../albumDisplay';
+import type { OpenSavedAlbum } from './PressingComparison';
 import { LookupRecovery } from './LookupRecovery';
 import type { ManualAlbumDraft } from './ManualAlbumDialog';
 
@@ -12,11 +14,12 @@ interface ImageUploaderProps {
   onSearchByName: (query?: string, draft?: ManualAlbumDraft) => void;
   onManual: (draft?: ManualAlbumDraft) => void;
   onMoveSaved: (id: number, title: string) => Promise<boolean>;
-  onOpenSaved: (id: number) => Promise<void>;
+  onOpenSaved: OpenSavedAlbum;
+  lookupShelfEdits?: LookupShelfEdits;
   viewMode: 'collection' | 'wishlist';
 }
 
-export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onManual, onMoveSaved, onOpenSaved, viewMode }: ImageUploaderProps) => {
+export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onManual, onMoveSaved, onOpenSaved, lookupShelfEdits, viewMode }: ImageUploaderProps) => {
   const [analyzing, setAnalyzing] = useState(false);
   const [matches, setMatches] = useState<DiscogsAlbum[]>([]);
   const [imagePreview, setImagePreview] = useState<string>('');
@@ -29,6 +32,10 @@ export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onManual, on
   const outcomeHeading = useRef<HTMLHeadingElement>(null);
   const focusUpload = useRef(false);
   const draft = extractedInfo ? { artist: extractedInfo.artist, album: extractedInfo.album } : undefined;
+  const results = matches.map(match => applyLookupShelfEdits({
+    ...match, existingStatus: match.inCollection ? 'collection' as const : match.inWishlist ? 'wishlist' as const : undefined,
+  }, lookupShelfEdits));
+  const allTitleOnly = results.every(match => match.existingStatus && !isExactSavedMatch(match.existingMatch));
 
   useLayoutEffect(() => {
     if (!analyzing && (analysisError || matches.length)) outcomeHeading.current?.focus();
@@ -225,12 +232,14 @@ export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onManual, on
                 <h3 ref={outcomeHeading} tabIndex={-1} className="py-2 text-lg font-semibold text-gray-900">
                   {matches.length === 1 ? '1 possible match' : `${matches.length} possible matches`}
                 </h3>
-                <LookupRecovery draft={draft} disabled={!!saving} onSearchByName={onSearchByName} onManual={onManual} />
+                {!allTitleOnly && <LookupRecovery draft={draft} disabled={!!saving} onSearchByName={onSearchByName} onManual={onManual} />}
               </div>
               {saving && <p role="status" className="text-sm text-gray-600">Saving this album…</p>}
               <div className="space-y-3">
-                {matches.map(match => {
-                  const existingStatus = match.inCollection ? 'collection' : match.inWishlist ? 'wishlist' : undefined;
+                {results.map(match => {
+                  const { existingStatus } = match;
+                  const duplicateId = duplicates[match.discogsId];
+                  const foundDuplicate = duplicateId !== undefined && lookupShelfEdits?.[duplicateId] !== null;
 
                   return (
                     <article key={match.discogsId} className="rounded-xl border border-gray-300 p-3">
@@ -246,24 +255,28 @@ export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onManual, on
                         </div>
                       </div>
                       <div className="mt-3">
-                        {duplicates[match.discogsId] !== undefined ? (
+                        {foundDuplicate ? (
                           <div className="grid gap-1">
                             <p role="alert" className="text-sm">This album is already saved.</p>
                           <button type="button" autoFocus className="rh-primary-action px-3 text-sm font-semibold" disabled={!!saving}
-                              onClick={() => void onOpenSaved(duplicates[match.discogsId])}>Open saved album</button>
+                              onClick={event => void onOpenSaved(duplicateId, event.currentTarget)}>Open saved album</button>
                           </div>
                         ) : <SaveDestinationActions
                           albumTitle={match.album}
                           preferred={viewMode}
                           existingStatus={existingStatus}
                           existingMatch={match.existingMatch}
-                        existingAlbumId={match.existingAlbumId}
-                        titleMatches={match.titleMatches}
-                        lookupReleaseId={match.discogsListing === 'release' ? match.discogsId : undefined}
-                        onOpenSaved={id => void onOpenSaved(id)}
+                          existingAlbumId={match.existingAlbumId}
+                          titleMatches={match.titleMatches}
+                          lookup={{ artist: match.artist, year: match.year, source: catalogSource(match),
+                            releaseId: match.discogsListing === 'release' ? match.discogsId : undefined }}
+                          onSearch={() => onSearchByName(`${match.artist} ${match.album}`, { artist: match.artist, album: match.album })}
+                          onOpenSaved={onOpenSaved}
                           pending={saving?.id === match.discogsId ? saving.action : undefined}
                           disabled={!!saving}
-                          onSelect={action => void saveMatch(match, action)}
+                          onSelect={action => void saveMatch({
+                            ...match, inCollection: existingStatus === 'collection', inWishlist: existingStatus === 'wishlist',
+                          }, action)}
                         />}
                       </div>
                     </article>

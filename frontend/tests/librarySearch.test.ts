@@ -99,10 +99,10 @@ describe('library and catalog search', () => {
     await act(async () => renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }));
     expect(search).toHaveBeenCalledTimes(2);
     expect(search.mock.calls[0][1].aborted).toBe(true);
-    expect(button('Open Blue Train by John Coltrane').type).toBe('button');
+    expect(button('Open Blue Train by John Coltrane, Wishlist, saved record 1').type).toBe('button');
 
     await act(async () => older.resolve({ local: [], discogs: [] }));
-    expect(button('Open Blue Train by John Coltrane')).toBeDefined();
+    expect(button('Open Blue Train by John Coltrane, Wishlist, saved record 1')).toBeDefined();
     expect(JSON.stringify(renderer.toJSON())).not.toContain('No matches');
   });
 
@@ -122,7 +122,7 @@ describe('library and catalog search', () => {
     await act(async () => collection.resolve({
       albums: [{ ...saved, id: 2, title: 'Late collection entry', status: 'collection' }],
     }));
-    expect(button('Open Blue Train by John Coltrane')).toBeDefined();
+    expect(button('Open Blue Train by John Coltrane, Wishlist, saved record 1')).toBeDefined();
     expect(JSON.stringify(renderer.toJSON())).not.toContain('Late collection entry');
   });
 
@@ -134,10 +134,10 @@ describe('library and catalog search', () => {
     await editSearch('Coltrane');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
     expect(search).toHaveBeenCalledExactlyOnceWith('Coltrane', expect.any(AbortSignal), 'saved', undefined, 0, 'title');
-    expect(button('Open Blue Train by John Coltrane')).toBeDefined();
+    expect(button('Open Blue Train by John Coltrane, Wishlist, saved record 1')).toBeDefined();
 
     await chooseScope('catalog');
-    expect(button('Open Blue Train by John Coltrane')).toBeDefined();
+    expect(button('Open Blue Train by John Coltrane, Wishlist, saved record 1')).toBeDefined();
     expect(button('Add Giant Steps to Wishlist')).toBeUndefined();
     const saveDefault = renderer.root.findByProps({ id: 'catalog-save-shelf' });
     await act(async () => button('Wishlist').props.onClick());
@@ -261,7 +261,7 @@ describe('library and catalog search', () => {
     deleteAlbum.mockRejectedValueOnce(Object.assign(new Error('Changed shelf'), { status: 409 }));
     await renderLibrary();
     expect(button('Move to Wishlist — Blue Train')).toBeDefined();
-    await act(async () => button('Open Blue Train by John Coltrane').props.onClick());
+    await act(async () => button('Open Blue Train by John Coltrane, Collection, saved record 1').props.onClick({ currentTarget: { isConnected: true } }));
     const details = renderer.root.findByProps({ labelledBy: 'album-details-title' });
     await act(async () => details.findByProps({ 'aria-label': 'Remove from Collection — Blue Train' }).props.onClick());
     expect(JSON.stringify(renderer.toJSON())).toContain('any notes saved with it');
@@ -329,17 +329,32 @@ describe('library and catalog search', () => {
       { ...saved, id: 81, title: 'Giant Steps', discogs_id: 104 },
       { ...saved, id: 82, title: 'Giant Steps', discogs_id: 105, status: 'collection' },
     ];
-    search.mockResolvedValue({ local: [], discogs: [{ ...catalog, existingMatch: 'title', inWishlist: true,
+    search.mockResolvedValue({ local: matches, discogs: [{ ...catalog, existingMatch: 'title', inWishlist: true,
       inCollection: true, titleMatches: matches }] });
-    getAlbum.mockResolvedValueOnce({ album: matches[1] });
+    const pendingDetails = Promise.withResolvers<{ album: Album }>();
+    getAlbum.mockReturnValueOnce(pendingDetails.promise).mockResolvedValueOnce({ album: matches[1] });
     await renderLibrary();
     await chooseScope('catalog');
     await editSearch('Giant Steps');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
     expect(button('Move Giant Steps to Collection')).toBeUndefined();
-    expect(button('Open saved Giant Steps by John Coltrane in Wishlist, release 104')).toBeDefined();
-    await act(async () => button('Open saved Giant Steps by John Coltrane in Collection, release 105').props.onClick());
-    expect(getAlbum).toHaveBeenCalledExactlyOnceWith(82);
+    expect(button('Open Giant Steps by John Coltrane, Wishlist, Discogs release 104')).toBeDefined();
+    expect(button('Open Giant Steps by John Coltrane, Collection, Discogs release 105')).toBeDefined();
+    await act(async () => button('Compare pressings for Giant Steps').props.onClick());
+    expect(button('Open saved album · Giant Steps by John Coltrane, Wishlist, Discogs release 104')).toBeDefined();
+    const opener = { isConnected: true };
+    const collectionCopy = ' · Giant Steps by John Coltrane, Collection, Discogs release 105';
+    await act(async () => button('Open saved album' + collectionCopy).props.onClick({ currentTarget: opener }));
+    expect(button('Opening saved copy…' + collectionCopy).props['aria-busy']).toBe(true);
+    await act(async () => pendingDetails.reject(new Error('Offline')));
+    expect(JSON.stringify(renderer.toJSON())).toContain('Couldn’t open this saved copy.');
+    await act(async () => button('Retry opening saved copy' + collectionCopy).props.onClick({ currentTarget: opener }));
+    expect(getAlbum.mock.calls).toEqual([[82], [82]]);
+    const details = renderer.root.findByProps({ labelledBy: 'album-details-title' });
+    expect(details.props.returnFocusTo.current).toBe(opener);
+    await act(async () => button('Back to matches').props.onClick());
+    expect(button('Open saved album' + collectionCopy)).toBeDefined();
+    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Giant Steps');
     expect(updateStatus).not.toHaveBeenCalled();
   });
 
@@ -357,8 +372,8 @@ describe('library and catalog search', () => {
     await editSearch('Coltrane');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
     await act(async () => button('Load more saved albums').props.onClick());
-    expect(button('Open Blue Train by John Coltrane')).toBeDefined();
-    expect(button('Open A Love Supreme by John Coltrane')).toBeDefined();
+    expect(button('Open Blue Train by John Coltrane, Wishlist, saved record 1')).toBeDefined();
+    expect(button('Open A Love Supreme by John Coltrane, Wishlist, saved record 22')).toBeDefined();
     await act(async () => button('Load more catalog albums').props.onClick());
     const catalogSignal = search.mock.lastCall![1];
     await editSearch('Parker');

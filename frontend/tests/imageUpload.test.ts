@@ -94,6 +94,27 @@ describe('album image uploads', () => {
     expect(addAlbum).not.toHaveBeenCalled();
   });
 
+  it('keeps the photo and candidate available while inspecting a saved pressing', async () => {
+    analyzeImage.mockResolvedValueOnce({
+      extractedText: { artist: 'Portishead', album: 'Dummy' },
+      discogsMatches: [{
+        id: 1, discogsId: 1, artist: 'Portishead', album: 'Dummy', inWishlist: true, existingMatch: 'title',
+        titleMatches: [{ id: 23, title: 'Dummy', artist_name: 'Portishead', status: 'wishlist', year: 1994, discogs_id: 20 }],
+      }],
+    });
+    props.onOpenSaved.mockResolvedValueOnce(true);
+    await upload({ name: 'cover.jpg', type: 'image/jpeg', size: 1024 });
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Compare pressings for Dummy' }).props.onClick());
+    const opener = { isConnected: true };
+    const copy = renderer!.root.findByProps({ 'aria-label': 'Open saved album · Dummy by Portishead, Wishlist, 1994, Discogs release 20' });
+    await act(async () => copy.props.onClick({ currentTarget: opener }));
+    expect(props.onOpenSaved).toHaveBeenCalledExactlyOnceWith(23, opener, true);
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Close pressing comparison' }).props.onClick());
+    expect(renderer!.root.findByProps({ alt: 'Uploaded cover' })).toBeDefined();
+    expect(renderer!.root.findByProps({ 'aria-label': 'Compare pressings for Dummy' })).toBeDefined();
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
   it('labels confidence once and prefills name search when no albums match', async () => {
     analyzeImage.mockResolvedValueOnce({
       extractedText: { artist: 'Portishead', album: 'Dummy', confidence: 95 },
