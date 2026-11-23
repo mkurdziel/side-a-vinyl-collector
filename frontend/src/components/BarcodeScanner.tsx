@@ -31,6 +31,7 @@ export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, onMoveSaved
   const [lookup, setLookup] = useState<Lookup>({ status: 'scanning' });
   const lookupInProgress = useRef(false);
   const [saving, setSaving] = useState<DestinationAction>();
+  const [duplicateId, setDuplicateId] = useState<number>();
   const saveInProgress = useRef(false);
   const [manualBarcode, setManualBarcode] = useState('');
   const scannedResult = lookup.status === 'found' ? lookup.match : null;
@@ -40,6 +41,7 @@ export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, onMoveSaved
 
   const lookUp = async (barcode: string) => {
     if (lookupInProgress.current) return;
+    setDuplicateId(undefined);
 
     setManualBarcode(barcode);
     if (!barcodePattern.test(barcode)) {
@@ -92,7 +94,11 @@ export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, onMoveSaved
       onSuccess();
       onClose();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not save the album. Try again.');
+      if (error instanceof ApiError && error.status === 409 && error.existingAlbumId !== undefined) {
+        setDuplicateId(error.existingAlbumId);
+      } else {
+        toast.error(error instanceof Error ? error.message : 'Could not save the album. Try again.');
+      }
     } finally {
       saveInProgress.current = false;
       setSaving(undefined);
@@ -102,13 +108,17 @@ export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, onMoveSaved
   const handleScanAnother = () => {
     setManualBarcode('');
     setLookup({ status: 'scanning' });
+    setDuplicateId(undefined);
     retryCamera();
   };
 
   const { scannerRef, error, cameras, cameraId, setCameraId, retryCamera } = useBarcodeScanner(lookUp, scanning);
+  const close = () => {
+    if (!saveInProgress.current) onClose();
+  };
 
   return (
-    <ModalDialog labelledBy="barcode-title" onClose={onClose}>
+    <ModalDialog labelledBy="barcode-title" onClose={close}>
       <div className="rh-dialog-panel max-w-lg flex flex-col">
         <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-white sticky top-0 z-20">
           <div className="flex items-center gap-2">
@@ -122,7 +132,8 @@ export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, onMoveSaved
           <button
             className="rh-dialog-close"
             aria-label="Close barcode lookup"
-            onClick={onClose}
+            disabled={!!saving}
+            onClick={close}
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -259,7 +270,14 @@ export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, onMoveSaved
               </div>
             </div>
             <div className="grid gap-2">
-              <SaveDestinationActions
+              {saving && <p role="status" className="text-sm text-gray-600">Saving this album…</p>}
+              {duplicateId !== undefined ? (
+                <div className="grid gap-1">
+                  <p role="alert" className="text-sm">This album is already saved.</p>
+                  <button type="button" className="rh-primary-action px-3 text-sm font-semibold"
+                    onClick={() => void onOpenSaved(duplicateId)}>Open saved album</button>
+                </div>
+              ) : <SaveDestinationActions
                 albumTitle={scannedResult.album}
                 preferred={viewMode}
                 existingStatus={scannedResult.existingStatus ?? undefined}
@@ -267,7 +285,7 @@ export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, onMoveSaved
                 onOpenSaved={scannedResult.existingAlbumId ? () => void onOpenSaved(scannedResult.existingAlbumId!) : undefined}
                 pending={saving}
                 onSelect={action => void saveMatch(action)}
-              />
+              />}
               <button
                 type="button"
                 onClick={handleScanAnother}

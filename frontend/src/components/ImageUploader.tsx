@@ -1,13 +1,14 @@
 import { useRef, useState } from 'react';
 import { toast } from 'react-hot-toast';
-import api, { type DiscogsAlbum } from '../services/api';
+import api, { ApiError, type DiscogsAlbum } from '../services/api';
 import { ModalDialog } from './ModalDialog';
 import { SaveDestinationActions, type DestinationAction } from './SaveDestinationActions';
+import type { ManualAlbumDraft } from './ManualAlbumDialog';
 
 interface ImageUploaderProps {
   onClose: () => void;
   onSuccess: () => void;
-  onSearchByName: (query?: string) => void;
+  onSearchByName: (query?: string, draft?: ManualAlbumDraft) => void;
   onMoveSaved: (id: number, title: string) => Promise<boolean>;
   onOpenSaved: (id: number) => Promise<void>;
   viewMode: 'collection' | 'wishlist';
@@ -19,12 +20,14 @@ export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onMoveSaved,
   const [imagePreview, setImagePreview] = useState<string>('');
   const [extractedInfo, setExtractedInfo] = useState<Awaited<ReturnType<typeof api.analyzeImage>>['extractedText'] | null>(null);
   const [saving, setSaving] = useState<{ id: number; action: DestinationAction }>();
+  const [duplicates, setDuplicates] = useState<Record<number, number>>({});
   const saveInProgress = useRef(false);
   const [analysisError, setAnalysisError] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
   const clearPhoto = () => {
     setImagePreview('');
     setMatches([]);
+    setDuplicates({});
     setExtractedInfo(null);
     setAnalysisError('');
   };
@@ -114,15 +117,24 @@ export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onMoveSaved,
       onSuccess();
       onClose();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not save the album. Try again.');
+      if (error instanceof ApiError && error.status === 409 && error.existingAlbumId !== undefined) {
+        const savedId = error.existingAlbumId;
+        setDuplicates(current => ({ ...current, [match.discogsId]: savedId }));
+      } else {
+        toast.error(error instanceof Error ? error.message : 'Could not save the album. Try again.');
+      }
     } finally {
       saveInProgress.current = false;
       setSaving(undefined);
     }
   };
 
+  const close = () => {
+    if (!saveInProgress.current) onClose();
+  };
+
   return (
-    <ModalDialog labelledBy="identify-cover-title" onClose={onClose}>
+    <ModalDialog labelledBy="identify-cover-title" onClose={close}>
       <div className="rh-dialog-panel max-w-2xl p-4 sm:p-6">
         <div className="flex justify-between items-center mb-6 border-b border-gray-100 pb-4">
           <div className="flex items-center gap-3">
@@ -136,7 +148,8 @@ export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onMoveSaved,
           <button
             className="rh-dialog-close"
             aria-label="Close cover identification"
-            onClick={onClose}
+            onClick={close}
+            disabled={!!saving}
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -216,7 +229,8 @@ export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onMoveSaved,
             <p className="text-sm text-red-600" role="alert">{analysisError}</p>
             <div className="flex flex-wrap gap-2">
               <button type="button" className="rh-primary-action px-3 text-sm font-semibold"
-                onClick={() => onSearchByName([extractedInfo?.artist, extractedInfo?.album].filter(Boolean).join(' '))}>
+                onClick={() => onSearchByName([extractedInfo?.artist, extractedInfo?.album].filter(Boolean).join(' '),
+                  extractedInfo ? { artist: extractedInfo.artist, album: extractedInfo.album } : undefined)}>
                 Search by name
               </button>
               <button type="button" className="min-h-11 rounded-lg border border-gray-300 px-3 text-sm font-semibold hover:bg-gray-100"
@@ -229,6 +243,7 @@ export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onMoveSaved,
 
         {matches.length > 0 && (
           <div className="mb-6">
+            {saving && <p role="status" className="mb-3 text-sm text-gray-600">Saving this album…</p>}
             <h3 className="mb-3 text-xl font-bold text-gray-900" role="status">
               {matches.length === 1 ? '1 possible match' : `${matches.length} possible matches`}
             </h3>
@@ -250,7 +265,13 @@ export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onMoveSaved,
                       </div>
                     </div>
                     <div className="mt-3">
-                      <SaveDestinationActions
+                      {duplicates[match.discogsId] !== undefined ? (
+                        <div className="grid gap-1">
+                          <p role="alert" className="text-sm">This album is already saved.</p>
+                          <button type="button" className="rh-primary-action px-3 text-sm font-semibold" disabled={!!saving}
+                            onClick={() => void onOpenSaved(duplicates[match.discogsId])}>Open saved album</button>
+                        </div>
+                      ) : <SaveDestinationActions
                         albumTitle={match.album}
                         preferred={viewMode}
                         existingStatus={existingStatus}
@@ -259,7 +280,7 @@ export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onMoveSaved,
                         pending={saving?.id === match.discogsId ? saving.action : undefined}
                         disabled={!!saving}
                         onSelect={action => void saveMatch(match, action)}
-                      />
+                      />}
                     </div>
                   </article>
                 );
@@ -271,7 +292,8 @@ export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onMoveSaved,
         <div className="flex justify-end pt-2">
             <button 
                 className="px-6 py-2.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium transition-colors" 
-                onClick={onClose}
+                onClick={close}
+                disabled={!!saving}
             >
             Cancel
             </button>

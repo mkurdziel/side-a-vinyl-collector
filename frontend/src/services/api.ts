@@ -79,10 +79,12 @@ export interface SearchCoverArtResult {
 
 export class ApiError extends Error {
   readonly status: number;
+  readonly existingAlbumId?: number;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, existingAlbumId?: number) {
     super(message);
     this.status = status;
+    this.existingAlbumId = existingAlbumId;
   }
 }
 
@@ -99,7 +101,9 @@ class ApiService {
     if (!response.ok) {
       const body = await response.json().catch(() => null);
       const message = typeof body?.error === 'string' && body.error ? body.error : 'Request failed';
-      throw new ApiError(message, response.status);
+      const existingAlbumId = typeof body?.existingAlbumId === 'number' && Number.isSafeInteger(body.existingAlbumId)
+        ? body.existingAlbumId : undefined;
+      throw new ApiError(message, response.status, existingAlbumId);
     }
 
     return response.json();

@@ -138,7 +138,7 @@ describe('Discogs import', () => {
   it('gives server setup instructions only when configuration is missing', async () => {
     const props = {
       onBarcodeClick: vi.fn(), onImageClick: vi.fn(), onSearchClick: vi.fn(),
-      onImportClick: vi.fn(), onClose: vi.fn(), viewMode: 'collection' as const,
+      onImportClick: vi.fn(), onManualClick: vi.fn(), onClose: vi.fn(), viewMode: 'collection' as const,
     };
     await act(async () => { renderer = create(createElement(AddMenu, { ...props, discogsConfigured: null })); });
     expect(content()).toContain('Checking the Discogs connection…');

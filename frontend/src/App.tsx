@@ -9,6 +9,7 @@ import { AlbumDetailModal } from './components/AlbumDetailModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SaveDestinationActions, type DestinationAction } from './components/SaveDestinationActions';
 import { ModalDialog } from './components/ModalDialog';
+import { ManualAlbumDialog, type ManualAlbumDraft } from './components/ManualAlbumDialog';
 
 type Shelf = Album['status'];
 type SortBy = 'title' | 'artist' | 'date';
@@ -24,6 +25,7 @@ type ResultKind = 'saved' | 'catalog';
 type SearchRequest = { controller: AbortController; pending: Set<ResultKind>; timer?: number };
 type SaveAction = DestinationAction | 'remove';
 type ShelfMove = { albumId: number; title: string; from: Shelf; to: Shelf };
+type SaveIssue = { message: string; albumId?: number; stale?: boolean };
 
 const shelves: Shelf[] = ['collection', 'wishlist'];
 const shelfLabel: Record<Shelf, string> = { collection: 'Collection', wishlist: 'Wishlist' };
@@ -43,15 +45,16 @@ function catalogKey(album: DiscogsAlbum) {
 
 const savedAlbumKey = (id: number) => `saved:${id}`;
 
-function catalogSource(album: DiscogsAlbum): { label: string; url?: string } | undefined {
+function catalogSource(album: DiscogsAlbum): { label: string; type?: string; url?: string } | undefined {
   if (album.source === 'musicbrainz') {
     const validId = album.mbid && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(album.mbid);
-    return { label: 'MusicBrainz', url: validId ? `https://musicbrainz.org/release-group/${album.mbid}` : undefined };
+    return { label: 'MusicBrainz', type: 'Release group', url: validId ? `https://musicbrainz.org/release-group/${album.mbid}` : undefined };
   }
   if (album.source === 'discogs') {
     const listing = album.discogsListing;
     return {
       label: 'Discogs',
+      type: listing === 'master' ? 'Master release' : listing === 'release' ? 'Release' : undefined,
       url: listing && Number.isSafeInteger(album.id) && album.id > 0
         ? `https://www.discogs.com/${listing}/${album.id}`
         : undefined,
@@ -88,6 +91,92 @@ function AlbumMeta({ title, artist, year }: { title: string; artist: string; yea
   );
 }
 
+function SortControl({ sort, onChange }: { sort: SortBy; onChange: (sort: SortBy) => void }) {
+  return (
+    <div className="ml-auto flex items-center gap-2">
+      <label htmlFor="sort-select" className="text-sm text-gray-600">Sort</label>
+      <select id="sort-select" value={sort} onChange={event => onChange(event.target.value as SortBy)}
+        className="min-h-11 rounded-lg border border-gray-300 bg-white px-2.5">
+        <option value="title">Album title</option>
+        <option value="artist">Artist name</option>
+        <option value="date">Date added</option>
+      </select>
+    </div>
+  );
+}
+
+function SaveIssueNotice({ issue, issueKey, loadingAlbumId, onOpen }: {
+  issue?: SaveIssue;
+  issueKey: string;
+  loadingAlbumId?: number;
+  onOpen: (id: number, key: string) => void;
+}) {
+  if (!issue) return null;
+  const id = issue.albumId;
+  return (
+    <div className="space-y-1">
+      <p role="alert" className="text-sm text-red-600">{issue.message}</p>
+      {id !== undefined && (
+        <button type="button" className={secondaryButton} disabled={loadingAlbumId !== undefined}
+          onClick={() => onOpen(id, issueKey)}>
+          {loadingAlbumId === id ? 'Opening album…' : issue.stale ? 'Open current album' : 'Open saved album'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ShelfActions({ album, detailed = false, showShelf, pending, issue, loadingAlbumId, onMove, onRemove, onOpenIssue }: {
+  album: Album;
+  detailed?: boolean;
+  showShelf?: boolean;
+  pending?: SaveAction;
+  issue?: SaveIssue;
+  loadingAlbumId?: number;
+  onMove: (album: Album, button: HTMLButtonElement, detailed: boolean) => Promise<void>;
+  onRemove: (album: Album) => void;
+  onOpenIssue: (id: number, key: string) => void;
+}) {
+  const inWishlist = album.status === 'wishlist';
+  const moveLabel = inWishlist ? 'Move to Collection' : 'Move to Wishlist';
+  const blocked = !!pending || !!issue?.stale;
+  const move = (
+    <button type="button" className={secondaryButton} aria-label={`${moveLabel} — ${album.title}`}
+      aria-disabled={blocked} aria-busy={!!pending && pending !== 'remove'}
+      onClick={event => void onMove(album, event.currentTarget, detailed)}>
+      {pending && pending !== 'remove' ? 'Moving…' : moveLabel}
+    </button>
+  );
+  const remove = (
+    <button type="button" className="min-h-11 rounded-lg px-2 text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+      aria-label={`Remove from ${shelfLabel[album.status]} — ${album.title}`} aria-haspopup="dialog"
+      aria-disabled={blocked} onClick={() => onRemove(album)}>
+      Remove from {shelfLabel[album.status]}
+    </button>
+  );
+  return (
+    <div className="grid gap-1.5">
+      {detailed ? <>{move}{remove}</> : (
+        <>
+          {showShelf && <p className="px-1 text-xs text-gray-600" aria-label={`${album.title} is in ${shelfLabel[album.status]}`}>{shelfLabel[album.status]}</p>}
+          {inWishlist && move}
+          <details className="min-w-0">
+            <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-1 rounded-lg px-1 text-xs font-semibold text-gray-600 hover:bg-gray-100"
+              aria-label={`Shelf actions for ${album.title}`}>
+              Actions
+              <svg aria-hidden="true" className="size-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path strokeLinecap="round" strokeWidth="2" d="m6 9 6 6 6-6" />
+              </svg>
+            </summary>
+            <div className="grid gap-1.5">{!inWishlist && move}{remove}</div>
+          </details>
+        </>
+      )}
+      <SaveIssueNotice issue={issue} issueKey={savedAlbumKey(album.id)} loadingAlbumId={loadingAlbumId} onOpen={onOpenIssue} />
+    </div>
+  );
+}
+
 function App() {
   const [shelfRequest, setShelfRequest] = useState<ShelfRequest>({ view: 'collection', revision: 0 });
   const [shelfResult, setShelfResult] = useState<ShelfResult | null>(null);
@@ -100,6 +189,8 @@ function App() {
   const [saveShelfOverride, setSaveShelfOverride] = useState<Shelf>();
   const [loadingMore, setLoadingMore] = useState<Partial<Record<ResultKind, 'pending' | 'error'>>>({});
   const [showAddMenu, setShowAddMenu] = useState(false);
+  const [manualEntry, setManualEntry] = useState<{ draft: ManualAlbumDraft; shelf: Shelf }>();
+  const [detectedDraft, setDetectedDraft] = useState<ManualAlbumDraft>();
   const [showBarcodeScanner, setShowBarcodeScanner] = useState(false);
   const [showImageUploader, setShowImageUploader] = useState(false);
   const [showDiscogsImporter, setShowDiscogsImporter] = useState(false);
@@ -111,8 +202,9 @@ function App() {
   const [discogsConfigured, setDiscogsConfigured] = useState<boolean | null>(null);
   const [discogsCheckFailed, setDiscogsCheckFailed] = useState(false);
   const [pendingSaves, setPendingSaves] = useState<Partial<Record<string, SaveAction>>>({});
-  const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
-  const [artworkRevisions, setArtworkRevisions] = useState<Record<number, number>>({});
+  const [saveErrors, setSaveErrors] = useState<Partial<Record<string, SaveIssue>>>({});
+  const [loadingAlbumId, setLoadingAlbumId] = useState<number>();
+  const [artworkRevisions, setArtworkRevisions] = useState<Partial<Record<number, string>>>({});
   const [libraryArtworkRevision, setLibraryArtworkRevision] = useState<number>();
   const [sortBy, setSortBy] = useState<SortBy>(() => {
     const saved = localStorage.getItem('albumSortBy');
@@ -257,6 +349,7 @@ function App() {
   const changeSearch = (value: string) => {
     latestQuery.current = value;
     setSearchQuery(value);
+    setDetectedDraft(undefined);
     setSaveErrors({});
     runSearch(value, { delay: 400 });
   };
@@ -280,11 +373,12 @@ function App() {
     window.requestAnimationFrame(() => searchInput.current?.focus());
   };
 
-  const openNameSearch = (query?: string) => {
+  const openNameSearch = (query?: string, draft?: ManualAlbumDraft) => {
     if (query) {
       searchSettings.current.scope = 'catalog';
       setSearchScope('catalog');
       changeSearch(query);
+      setDetectedDraft(draft);
     } else {
       changeScope('catalog');
     }
@@ -292,8 +386,8 @@ function App() {
   };
 
   const refreshLibrary = (updatedArtwork?: Album) => {
-    if (updatedArtwork) {
-      const revision = Date.now();
+    if (updatedArtwork?.local_cover_path) {
+      const revision = updatedArtwork.local_cover_path;
       setArtworkRevisions(prev => ({ ...prev, [updatedArtwork.id]: revision }));
     }
     refreshShelf();
@@ -331,11 +425,11 @@ function App() {
     });
   };
 
-  const saveRecord = async (key: string, action: SaveAction, save: () => Promise<void>) => {
-    if (inFlightSaves.current.has(key)) return false;
+  const saveRecord = async (key: string, action: SaveAction, save: () => Promise<void>, savedId?: number) => {
+    if (inFlightSaves.current.has(key) || saveErrors[key]?.stale) return false;
     inFlightSaves.current.add(key);
     setPendingSaves(prev => ({ ...prev, [key]: action }));
-    setSaveErrors(prev => ({ ...prev, [key]: '' }));
+    setSaveErrors(prev => ({ ...prev, [key]: undefined }));
     try {
       await save();
       refreshShelf();
@@ -346,18 +440,15 @@ function App() {
       }
       return true;
     } catch (error) {
-      const stale = error instanceof Error && 'status' in error && error.status === 409;
-      setSaveErrors(prev => ({
-        ...prev,
-        [key]: stale
-          ? 'This album changed since you opened it. Check its current shelf and try again.'
-          : error instanceof Error ? error.message : 'Could not save this change. Try again.',
-      }));
-      if (stale) {
-        setLastShelfMove(current => current && savedAlbumKey(current.albumId) === key ? null : current);
-        toast.error('This album changed since you opened it. Check its current shelf.');
-        refreshLibrary();
-      }
+      const conflict = error instanceof Error && 'status' in error && error.status === 409;
+      const duplicateId = conflict && 'existingAlbumId' in error && typeof error.existingAlbumId === 'number'
+        ? error.existingAlbumId : undefined;
+      const issue: SaveIssue = conflict
+        ? savedId !== undefined
+          ? { message: 'This album’s shelf changed. Open the current record before trying again.', albumId: savedId, stale: true }
+          : { message: 'This album is already saved.', albumId: duplicateId }
+        : { message: error instanceof Error ? error.message : 'Could not save this change. Try again.' };
+      setSaveErrors(prev => ({ ...prev, [key]: issue }));
       return false;
     } finally {
       inFlightSaves.current.delete(key);
@@ -397,7 +488,7 @@ function App() {
       await api.updateStatus(albumId, to, from);
       excludeFromShelf(albumId, to);
       updateSearchMembership(albumId, to);
-    });
+    }, albumId);
     if (!saved) return false;
 
     if (undoOf) {
@@ -420,17 +511,35 @@ function App() {
     return moved;
   };
 
-  const openSavedAlbum = async (albumId: number, closeLookup?: () => void) => {
+  const openSavedAlbum = async (albumId: number, closeLookup?: () => void, issueKey?: string) => {
     if (openingSavedAlbum.current) return;
     openingSavedAlbum.current = true;
+    setLoadingAlbumId(albumId);
     try {
       const { album } = await api.getAlbum(albumId);
       closeLookup?.();
       setSelectedAlbum(album);
-    } catch {
-      toast.error('Could not open this saved album. Check its shelf and try again.');
+      if (issueKey || saveErrors[savedAlbumKey(albumId)]?.stale) {
+        setAlbumToRemove(current => current?.id === albumId ? null : current);
+        setLastShelfMove(current => current?.albumId === albumId ? null : current);
+        setSaveErrors(current => ({ ...current, [issueKey ?? savedAlbumKey(albumId)]: undefined }));
+        refreshLibrary();
+      }
+    } catch (error) {
+      if (issueKey && error instanceof Error && 'status' in error && error.status === 404) {
+        setAlbumToRemove(current => current?.id === albumId ? null : current);
+        setSelectedAlbum(current => current?.id === albumId ? null : current);
+        setLastShelfMove(current => current?.albumId === albumId ? null : current);
+        setSaveErrors(current => ({ ...current, [issueKey]: undefined }));
+        refreshLibrary();
+        toast.error('This album is no longer saved.');
+        focusSearch();
+      } else {
+        toast.error('Could not open this saved album. Try again.');
+      }
     } finally {
       openingSavedAlbum.current = false;
+      setLoadingAlbumId(undefined);
     }
   };
 
@@ -449,7 +558,7 @@ function App() {
   };
 
   const closeRemoval = () => {
-    if (!albumToRemove || inFlightSaves.current.has(savedAlbumKey(albumToRemove.id))) return;
+    if (!albumToRemove || loadingAlbumId === albumToRemove.id || inFlightSaves.current.has(savedAlbumKey(albumToRemove.id))) return;
     setAlbumToRemove(null);
   };
 
@@ -461,7 +570,7 @@ function App() {
       setSearchState(current => current.status === 'ready'
         ? { ...current, results: { ...current.results, local: current.results.local.filter(result => result.id !== album.id) } }
         : current);
-    });
+    }, album.id);
     if (!removed) return;
 
     setAlbumToRemove(null);
@@ -487,91 +596,26 @@ function App() {
     return first.title.localeCompare(second.title);
   });
 
-  const renderSort = (label: string) => (
-    <div className="ml-auto flex items-center gap-2">
-      <label htmlFor="sort-select" className="text-sm text-gray-600">{label}</label>
-      <select
-        id="sort-select"
-        value={sortBy}
-        onChange={event => {
-          const next = event.target.value as SortBy;
-          searchSort.current = next;
-          setSortBy(next);
-          if (searchActive) runSearch(latestQuery.current, { keepResults: true });
-        }}
-        className="min-h-11 rounded-lg border border-gray-300 bg-white px-2.5"
-      >
-        <option value="title">Album title</option>
-        <option value="artist">Artist name</option>
-        <option value="date">Date added</option>
-      </select>
-    </div>
-  );
-
-  const renderShelfActions = (album: Album, fromDetails = false) => {
-    const key = savedAlbumKey(album.id);
-    const pending = pendingSaves[key];
-    const inWishlist = album.status === 'wishlist';
-    const moveLabel = inWishlist ? 'Move to Collection' : 'Move to Wishlist';
-    const move = (
-      <button
-          type="button"
-          className={inWishlist && !fromDetails ? 'min-h-11 rounded-lg border border-gray-300 px-2 py-1.5 text-xs font-semibold text-gray-900 hover:bg-gray-100' : secondaryButton}
-          aria-label={`${moveLabel} — ${album.title}`}
-          aria-disabled={!!pending}
-          aria-busy={!!pending && pending !== 'remove'}
-          onClick={event => void moveAlbum(album, event.currentTarget, fromDetails)}
-        >
-          {pending && pending !== 'remove' ? 'Moving…' : moveLabel}
-      </button>
-    );
-    const remove = (
-      <button
-            type="button"
-            className="min-h-11 rounded-lg px-2 text-xs font-semibold text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-            aria-label={`Remove from ${shelfLabel[album.status]} — ${album.title}`}
-            aria-haspopup="dialog"
-            aria-disabled={!!pending}
-            onClick={() => {
-              if (inFlightSaves.current.has(key)) return;
-              setSaveErrors(prev => ({ ...prev, [key]: '' }));
-              setAlbumToRemove(album);
-            }}
-          >
-            Remove from {shelfLabel[album.status]}
-      </button>
-    );
-    return (
-      <div className="grid gap-1.5">
-        {fromDetails ? <>{move}{remove}</> : (
-          <>
-            <p className="px-1 text-xs text-gray-600" aria-label={`${album.title} is in ${shelfLabel[album.status]}`}>{shelfLabel[album.status]}</p>
-            {inWishlist && move}
-            <details className="min-w-0">
-              <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-1 rounded-lg px-1 text-xs font-semibold text-gray-600 hover:bg-gray-100"
-                aria-label={`Shelf actions for ${album.title}`}>
-                Actions
-                <svg aria-hidden="true" className="size-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path strokeLinecap="round" strokeWidth="2" d="m6 9 6 6 6-6" />
-                </svg>
-              </summary>
-              <div className="grid gap-1.5">
-                {!inWishlist && move}
-                {remove}
-              </div>
-            </details>
-          </>
-        )}
-        {saveErrors[key] && <p role="alert" className="px-1 text-xs text-red-600">{saveErrors[key]}</p>}
-      </div>
-    );
+  const changeSort = (next: SortBy) => {
+    searchSort.current = next;
+    setSortBy(next);
+    if (searchActive) runSearch(latestQuery.current, { keepResults: true });
   };
 
-  const renderSavedAlbums = () => (
+  const startRemoval = (album: Album) => {
+    const key = savedAlbumKey(album.id);
+    if (inFlightSaves.current.has(key) || saveErrors[key]?.stale) return;
+    setSaveErrors(prev => ({ ...prev, [key]: undefined }));
+    setAlbumToRemove(album);
+  };
+
+  const openSaveIssue = (id: number, key: string) => void openSavedAlbum(id, undefined, key);
+
+  const savedGrid = (savedCount > 0 || (!searchActive && currentShelf?.status === 'ready')) && (
     <div className={albumGrid}>
       {sortedAlbums.map(album => {
-        const revision = artworkRevisions[album.id] ?? libraryArtworkRevision;
-        const src = `${getCoverArtUrl(album.id)}${revision ? `?v=${revision}` : ''}`;
+        const revision = artworkRevisions[album.id] ?? album.local_cover_path ?? libraryArtworkRevision;
+        const src = `${getCoverArtUrl(album.id)}${revision ? `?v=${encodeURIComponent(revision)}` : ''}`;
         const key = savedAlbumKey(album.id);
         const pending = pendingSaves[key];
         return (
@@ -595,11 +639,13 @@ function App() {
               aria-haspopup="dialog"
               aria-disabled={!!pending}
               onClick={() => {
-                if (!inFlightSaves.current.has(key)) setSelectedAlbum(album);
+                if (!pending) setSelectedAlbum(album);
               }}
             />
             <div className="relative z-20 mt-auto grid gap-1.5 p-2 pt-0">
-              {renderShelfActions(album)}
+              <ShelfActions album={album} pending={pending} issue={saveErrors[key]}
+                showShelf={searchActive} loadingAlbumId={loadingAlbumId}
+                onMove={moveAlbum} onRemove={startRemoval} onOpenIssue={openSaveIssue} />
             </div>
           </article>
         );
@@ -703,7 +749,7 @@ function App() {
                 >
                   Back to {shelfLabel[viewMode]}
                 </button>
-              ) : renderSort('Sort')}
+              ) : <SortControl sort={sortBy} onChange={changeSort} />}
             </div>
           </div>
         </div>
@@ -713,13 +759,13 @@ function App() {
         <div className="rh-command-bar" id="search-controls">
           <form
             role="search"
-            className="min-w-0 flex-1"
+            className="rh-search-form min-w-0 flex-1"
             onSubmit={event => {
               event.preventDefault();
               runSearch(searchQuery);
             }}
           >
-            <div className="mb-1.5 flex flex-wrap items-center gap-2">
+            <div className="rh-search-scope flex flex-wrap items-center gap-2">
               <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">Search in</label>
               <select
                 id="search-scope"
@@ -733,7 +779,7 @@ function App() {
               </select>
             </div>
             <label htmlFor="album-search" className="sr-only">Search albums</label>
-            <div className="flex gap-1.5 sm:gap-2">
+            <div className="flex min-w-0 gap-1.5 sm:gap-2">
               <div className="rh-search relative min-w-0 flex-1">
                 <input
                   ref={searchInput}
@@ -798,15 +844,13 @@ function App() {
             <p role="status" className="text-sm font-medium [overflow-wrap:anywhere]">
               “{lastShelfMove.title}” moved to {shelfLabel[lastShelfMove.to]}.
             </p>
-            {saveErrors[savedAlbumKey(lastShelfMove.albumId)] && (
-              <p role="alert" className="mt-1 text-xs text-red-600">{saveErrors[savedAlbumKey(lastShelfMove.albumId)]}</p>
-            )}
+            <SaveIssueNotice issue={saveErrors[savedAlbumKey(lastShelfMove.albumId)]} issueKey={savedAlbumKey(lastShelfMove.albumId)} loadingAlbumId={loadingAlbumId} onOpen={openSaveIssue} />
             <div className="mt-2 flex items-center gap-2">
               <button
                 ref={undoButton}
                 type="button"
                 className={secondaryButton}
-                aria-disabled={!!pendingSaves[savedAlbumKey(lastShelfMove.albumId)]}
+                aria-disabled={!!pendingSaves[savedAlbumKey(lastShelfMove.albumId)] || !!saveErrors[savedAlbumKey(lastShelfMove.albumId)]?.stale}
                 aria-busy={!!pendingSaves[savedAlbumKey(lastShelfMove.albumId)]}
                 onClick={() => void moveRecord({
                   ...lastShelfMove,
@@ -860,9 +904,9 @@ function App() {
               <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <h2 id="saved-results-title" tabIndex={-1} className="rh-result-heading text-lg font-semibold">Saved albums</h2>
                 <p className="text-sm text-gray-600">{searchScope === 'shelf' ? shelfLabel[viewMode] : 'Both shelves'}</p>
-                {renderSort('Sort')}
+                {<SortControl sort={sortBy} onChange={changeSort} />}
               </div>
-              {renderSavedAlbums()}
+              {savedGrid}
               {renderContinuation('saved', results)}
             </section>
           ) : (
@@ -885,7 +929,7 @@ function App() {
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div className="min-w-0">
                 <h2 id="catalog-results-title" tabIndex={-1} className="rh-result-heading text-lg font-semibold">Catalog albums</h2>
-                <p className="text-sm text-gray-600">Save an album to your library. Open its source listing for pressing details.</p>
+                <p className="text-sm text-gray-600">Open a source listing to check release details.</p>
               </div>
               <label className="flex max-w-full flex-wrap items-center gap-2 text-sm text-gray-600">
                 Default save shelf
@@ -912,8 +956,16 @@ function App() {
                 }}>Retry catalogs</button>
               </div>
             )}
-            {catalogResults && !catalogCount && !catalogResults.errors?.length && (
-              <p role="status" className="mb-3 text-sm text-gray-600">No catalog albums match “{searchQuery.trim()}”.</p>
+            {!catalogLoading && !catalogCount && (catalogResults || catalogState.status === 'error') && (
+              <div className="rounded-xl border border-gray-300 px-4 py-5">
+                {catalogResults && !catalogResults.errors?.length && (
+                  <p role="status" className="mb-2 text-sm text-gray-600">No catalog albums match “{searchQuery.trim()}”.</p>
+                )}
+                <button type="button" className={secondaryButton}
+                  onClick={() => setManualEntry({ draft: detectedDraft ?? { album: searchQuery.trim().slice(0, 255) }, shelf: saveShelf })}>
+                  Add album manually
+                </button>
+              </div>
             )}
             {!!catalogCount && catalogResults && (
                 <div className={`rh-catalog-grid ${albumGrid}`}>
@@ -935,6 +987,7 @@ function App() {
                               <span className="rh-catalog-title line-clamp-2 text-sm font-semibold">{album.album}</span>
                               <span className="rh-catalog-artist mt-0.5 block truncate text-xs text-gray-600">{album.artist}</span>
                               {album.year ? <span className="mt-0.5 block text-xs text-gray-400">{album.year}</span> : null}
+                              {source && <span className="mt-1 block text-xs text-gray-600">{source.label}{source.type && ` · ${source.type}`}</span>}
                             </span>
                             <svg aria-hidden="true" className="rh-catalog-chevron size-4 shrink-0 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m6 9 6 6 6-6" />
@@ -944,28 +997,18 @@ function App() {
                             <a href={source.url} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center px-3 text-sm text-purple-600 underline underline-offset-4">
                               View on {source.label}
                             </a>
-                          ) : source && (
-                            <p className="px-3 pb-2 text-xs text-gray-600">Album information from {source.label}</p>
-                          )}
-                          {!savedShelf && (
-                            <button type="button" className="block min-h-11 w-full px-3 text-left text-xs font-semibold text-gray-600 hover:bg-gray-100"
-                              disabled={!!pending}
-                              aria-label={`Add ${album.album} to ${shelfLabel[saveShelf === 'collection' ? 'wishlist' : 'collection']}`}
-                              onClick={() => void handleCatalogAdd(album, saveShelf === 'collection' ? 'wishlist' : 'collection')}>
-                              Add to {shelfLabel[saveShelf === 'collection' ? 'wishlist' : 'collection']}
-                            </button>
-                          )}
+                          ) : null}
                         </details>
                         <div className="rh-catalog-actions grid gap-1.5 p-2 pt-0">
-                          <SaveDestinationActions
+                          {(saveErrors[saveKey]?.albumId === undefined || savedShelf) && <SaveDestinationActions
                             albumTitle={album.album}
                             preferred={saveShelf}
                             existingStatus={savedShelf}
                             canMove={savedShelf === 'wishlist' && albumId != null}
-                            primaryOnly
                             pending={pending === 'remove' ? undefined : pending}
-                            disabled={pending === 'remove'}
-                            onOpenSaved={albumId != null ? () => void openSavedAlbum(albumId) : undefined}
+                            disabled={pending === 'remove' || !!saveErrors[saveKey]?.stale}
+                            openingSaved={albumId != null && loadingAlbumId === albumId}
+                            onOpenSaved={albumId != null && !saveErrors[saveKey]?.stale ? () => void openSavedAlbum(albumId) : undefined}
                             onSelect={action => {
                               if (action === 'move') {
                                 if (albumId != null) void moveWishlistAlbum(albumId, album.album);
@@ -973,10 +1016,8 @@ function App() {
                                 void handleCatalogAdd(album, action);
                               }
                             }}
-                          />
-                          {saveErrors[saveKey] && (
-                            <p role="alert" className="px-1 text-xs text-red-600">{saveErrors[saveKey]}</p>
-                          )}
+                          />}
+                          <SaveIssueNotice issue={saveErrors[saveKey]} issueKey={saveKey} loadingAlbumId={loadingAlbumId} onOpen={openSaveIssue} />
                         </div>
                       </article>
                     );
@@ -994,10 +1035,11 @@ function App() {
           </div>
         )}
         {!searchActive && currentShelf?.status === 'ready' && (
-          sortedAlbums.length ? renderSavedAlbums() : (
+          sortedAlbums.length ? savedGrid : (
             <div className="py-10 text-center">
               <h2 className="text-lg font-semibold">Your {shelfLabel[viewMode].toLowerCase()} is empty</h2>
-              <p className="mt-1 text-sm text-gray-600">Search for a record or choose Add Album to get started.</p>
+              <button type="button" className="rh-primary-action mt-3 px-4 text-sm font-semibold"
+                onClick={() => openNameSearch()}>Find a record to add</button>
             </div>
           )
         )}
@@ -1021,6 +1063,10 @@ function App() {
             setShowAddMenu(false);
             openNameSearch();
           }}
+          onManualClick={() => {
+            setShowAddMenu(false);
+            setManualEntry({ draft: {}, shelf: viewMode });
+          }}
           onImportClick={() => {
             setShowAddMenu(false);
             setShowDiscogsImporter(true);
@@ -1029,6 +1075,17 @@ function App() {
           discogsConfigured={discogsConfigured}
           discogsCheckFailed={discogsCheckFailed}
           viewMode={viewMode}
+        />
+      )}
+
+      {manualEntry && (
+        <ManualAlbumDialog draft={manualEntry.draft} initialShelf={manualEntry.shelf}
+          onClose={() => setManualEntry(undefined)}
+          onSaved={() => {
+            setManualEntry(undefined);
+            refreshLibrary();
+          }}
+          onOpenSaved={id => openSavedAlbum(id, () => setManualEntry(undefined))}
         />
       )}
 
@@ -1061,9 +1118,9 @@ function App() {
       {showImageUploader && (
         <ImageUploader
           onClose={() => setShowImageUploader(false)}
-          onSearchByName={query => {
+          onSearchByName={(query, draft) => {
             setShowImageUploader(false);
-            openNameSearch(query);
+            openNameSearch(query, draft);
           }}
           onMoveSaved={moveScannedAlbum}
           onOpenSaved={id => openSavedAlbum(id, () => setShowImageUploader(false))}
@@ -1082,14 +1139,12 @@ function App() {
             <p className="mt-2 text-sm text-gray-600 [overflow-wrap:anywhere]">
               “{albumToRemove.title}” and any notes saved with it will be removed from your {shelfLabel[albumToRemove.status]}.
             </p>
-            {saveErrors[savedAlbumKey(albumToRemove.id)] && (
-              <p className="mt-3 text-sm text-red-600" role="alert">{saveErrors[savedAlbumKey(albumToRemove.id)]}</p>
-            )}
+            <div className="mt-3"><SaveIssueNotice issue={saveErrors[savedAlbumKey(albumToRemove.id)]} issueKey={savedAlbumKey(albumToRemove.id)} loadingAlbumId={loadingAlbumId} onOpen={openSaveIssue} /></div>
             <div className="mt-4 flex flex-wrap justify-end gap-2">
               <button
                 type="button"
                 className={secondaryButton}
-                aria-disabled={!!pendingSaves[savedAlbumKey(albumToRemove.id)]}
+                aria-disabled={!!pendingSaves[savedAlbumKey(albumToRemove.id)] || loadingAlbumId === albumToRemove.id}
                 onClick={closeRemoval}
               >
                 Cancel
@@ -1097,7 +1152,7 @@ function App() {
               <button
                 type="button"
                 className="min-h-11 rounded-lg bg-red-600 px-3 text-sm font-semibold rh-filled-action"
-                aria-disabled={!!pendingSaves[savedAlbumKey(albumToRemove.id)]}
+                aria-disabled={!!pendingSaves[savedAlbumKey(albumToRemove.id)] || !!saveErrors[savedAlbumKey(albumToRemove.id)]?.stale}
                 aria-busy={!!pendingSaves[savedAlbumKey(albumToRemove.id)]}
                 onClick={() => void removeAlbum(albumToRemove)}
               >
@@ -1115,7 +1170,9 @@ function App() {
             if (!inFlightSaves.current.has(savedAlbumKey(selectedAlbum.id))) setSelectedAlbum(null);
           }}
           onRefresh={refreshLibrary}
-          shelfActions={renderShelfActions(selectedAlbum, true)}
+          shelfActions={<ShelfActions album={selectedAlbum} detailed
+            pending={pendingSaves[savedAlbumKey(selectedAlbum.id)]} issue={saveErrors[savedAlbumKey(selectedAlbum.id)]}
+            loadingAlbumId={loadingAlbumId} onMove={moveAlbum} onRemove={startRemoval} onOpenIssue={openSaveIssue} />}
         />
       )}
     </div>
