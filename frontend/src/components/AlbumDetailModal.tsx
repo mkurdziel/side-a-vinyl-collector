@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode, type RefObject } from 'react';
 import { toast } from 'react-hot-toast';
 import api, { type Album, type SearchCoverArtResult, getCoverArtUrl } from '../services/api';
 import { ModalDialog } from './ModalDialog';
@@ -8,9 +8,11 @@ interface AlbumDetailModalProps {
   onClose: () => void;
   shelfActions?: ReactNode;
   onRefresh: (updatedAlbum?: Album) => void;
+  backToMatches?: boolean;
+  returnFocusTo?: RefObject<HTMLElement | null>;
 }
 
-export const AlbumDetailModal = ({ album, onClose, onRefresh, shelfActions }: AlbumDetailModalProps) => {
+export const AlbumDetailModal = ({ album, onClose, onRefresh, shelfActions, backToMatches, returnFocusTo }: AlbumDetailModalProps) => {
   const [refetching, setRefetching] = useState(false);
   const [currentAlbum, setCurrentAlbum] = useState<Album>(album);
   const [receivedAlbum, setReceivedAlbum] = useState(album);
@@ -89,12 +91,14 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, shelfActions }: Al
         : currentAlbum.local_cover_path ? 'Saved artwork' : 'No cover art';
 
   return (
-    <ModalDialog labelledBy="album-details-title" onClose={onClose}>
+    <ModalDialog labelledBy="album-details-title" onClose={onClose} returnFocusTo={returnFocusTo}>
       <div className="rh-dialog-panel max-w-2xl">
         {/* Header */}
-        <div className="rh-dialog-header flex items-center justify-between p-4 sm:p-6 border-b border-gray-200">
+        <div className="rh-dialog-header flex flex-wrap items-center justify-between gap-x-2 border-b border-gray-200 p-4 sm:p-6">
           <h2 id="album-details-title" className="text-xl font-bold text-gray-900">Album details</h2>
-          <button
+          {backToMatches ? (
+            <button type="button" onClick={onClose} className="rh-lookup-link">Back to matches</button>
+          ) : <button
             onClick={onClose}
             className="rh-dialog-close"
             aria-label="Close album details"
@@ -102,7 +106,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, shelfActions }: Al
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
-          </button>
+          </button>}
         </div>
 
         <div className="space-y-4 p-4 sm:space-y-5 sm:p-6">
@@ -134,6 +138,17 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, shelfActions }: Al
             <div>
               <dt className="text-sm font-medium text-gray-700">Artwork</dt>
               <dd className="text-sm text-gray-600">{artworkSource}</dd>
+            </div>
+            <div>
+              <dt className="text-sm font-medium text-gray-700">Discogs release</dt>
+              <dd className="text-sm text-gray-600">
+                {currentAlbum.discogs_id ? (
+                  <a className="rh-lookup-link inline-flex items-center" href={`https://www.discogs.com/release/${currentAlbum.discogs_id}`}
+                    target="_blank" rel="noreferrer">
+                    {currentAlbum.discogs_id}<span className="sr-only"> on Discogs (opens in a new tab)</span>
+                  </a>
+                ) : 'Unavailable'}
+              </dd>
             </div>
             {currentAlbum.notes && (
               <div className="col-span-full min-w-0">

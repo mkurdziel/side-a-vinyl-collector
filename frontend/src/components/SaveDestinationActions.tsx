@@ -1,4 +1,6 @@
+import { useRef, useState } from 'react';
 import { isExactSavedMatch, type SavedMatch, type SavedTitleMatch } from '../services/api';
+import { PressingComparison, type LookupPressing, type OpenSavedAlbum } from './PressingComparison';
 
 type Shelf = 'collection' | 'wishlist';
 export type DestinationAction = Shelf | 'move';
@@ -12,12 +14,13 @@ interface SaveDestinationActionsProps {
   existingMatch?: SavedMatch | null;
   existingAlbumId?: number | null;
   titleMatches?: SavedTitleMatch[];
-  lookupReleaseId?: number;
+  lookup?: LookupPressing;
+  onSearch?: () => void;
   openingSaved?: boolean;
   pending?: DestinationAction;
   disabled?: boolean;
   onSelect: (action: DestinationAction) => void;
-  onOpenSaved?: (id: number) => void;
+  onOpenSaved?: OpenSavedAlbum;
 }
 
 interface DestinationChoice {
@@ -26,45 +29,29 @@ interface DestinationChoice {
 }
 
 export function SaveDestinationActions({
-  albumTitle, preferred, existingStatus, existingMatch, existingAlbumId, titleMatches, lookupReleaseId,
+  albumTitle, preferred, existingStatus, existingMatch, existingAlbumId, titleMatches, lookup, onSearch,
   openingSaved, pending, disabled, onSelect, onOpenSaved,
 }: SaveDestinationActionsProps) {
+  const [comparing, setComparing] = useState(false);
+  const compareButton = useRef<HTMLButtonElement>(null);
   const blocked = !!pending || !!disabled || !!openingSaved;
   if (existingStatus && !isExactSavedMatch(existingMatch)) {
-    const canReview = onOpenSaved && (titleMatches?.length || existingAlbumId != null);
+    const matches = titleMatches?.length ? titleMatches : existingAlbumId == null ? [] : [{
+      id: existingAlbumId, title: albumTitle, artist_name: lookup?.artist ?? '', status: existingStatus,
+    }];
     return (
       <div className="rh-title-review" role="group" aria-label={`Saved title matches for ${albumTitle}`}>
-        <p className="px-2 text-xs font-semibold text-gray-600">Same artist and title</p>
-        {canReview && (
-          <details className="rh-lookup-recovery">
-            <summary>{titleMatches && titleMatches.length > 1 ? 'Compare saved albums' : 'Compare with saved album'}</summary>
-            <div className="space-y-2 px-2 pb-2 text-sm">
-              {lookupReleaseId != null && lookupReleaseId > 0 && (
-                <p className="text-xs text-gray-600">Lookup Discogs release ID {lookupReleaseId}</p>
-              )}
-              {titleMatches?.length ? (
-                <ul className="space-y-2">
-                  {titleMatches.map(album => (
-                    <li key={album.id} className="border-t border-gray-200 pt-2 leading-snug [overflow-wrap:anywhere]">
-                      <p className="font-semibold">{album.title}</p>
-                      <p className="text-xs text-gray-600">{album.artist_name}{album.year ? ` · ${album.year}` : ''}</p>
-                      <p className="mt-1 text-xs text-gray-600">
-                        {shelfNames[album.status]} · {album.discogs_id ? `Discogs release ID ${album.discogs_id}` : 'Release ID unavailable'}
-                      </p>
-                      <button type="button" className="rh-lookup-link" disabled={blocked}
-                        aria-label={`Open saved ${album.title} by ${album.artist_name} in ${shelfNames[album.status]}${album.discogs_id ? `, release ${album.discogs_id}` : ''}`}
-                        onClick={() => onOpenSaved(album.id)}>
-                        Open saved album
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : existingAlbumId != null && (
-                <button type="button" className="rh-lookup-link" disabled={blocked}
-                  onClick={() => onOpenSaved(existingAlbumId)}>Open saved album</button>
-              )}
-            </div>
-          </details>
+        <p className="px-2 text-xs font-medium text-gray-600">Same artist and title</p>
+        {onOpenSaved && matches.length > 0 && (
+          <>
+            <button ref={compareButton} type="button" className="rh-lookup-link text-left" disabled={blocked}
+              aria-haspopup="dialog" aria-label={`Compare pressings for ${albumTitle}`} onClick={() => setComparing(true)}>
+              Compare pressings
+            </button>
+            {comparing && <PressingComparison title={albumTitle} lookup={lookup} matches={matches}
+              returnFocusTo={compareButton} onClose={() => setComparing(false)} onOpenSaved={onOpenSaved}
+              onSearch={onSearch && (() => { setComparing(false); onSearch(); })} />}
+          </>
         )}
       </div>
     );
@@ -122,9 +109,10 @@ export function SaveDestinationActions({
         </details>
       )}
       {onOpenSaved && existingAlbumId != null && (
-        <button type="button" disabled={blocked} aria-busy={!!openingSaved}
+        <button type="button" aria-disabled={blocked} aria-busy={!!openingSaved}
           className="min-h-11 rounded-lg px-2 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-100"
-          aria-label={`Open saved album — ${albumTitle}`} onClick={() => onOpenSaved(existingAlbumId)}>
+          aria-haspopup="dialog" aria-label={`Open saved album — ${albumTitle}`}
+          onClick={event => { if (!blocked) void onOpenSaved(existingAlbumId, event.currentTarget); }}>
           {openingSaved ? 'Opening album…' : 'Open saved album'}
         </button>
       )}

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Toaster, toast } from 'react-hot-toast';
 import api, { type Album, type DiscogsAlbum, type SearchResult, getCoverArtUrl, isExactSavedMatch } from './services/api';
+import { catalogSource, savedCopyLabel, type LookupShelfEdits } from './albumDisplay';
+import type { OpenSavedAlbum } from './components/PressingComparison';
 import { AddMenu } from './components/AddMenu';
 import { BarcodeScanner } from './components/BarcodeScanner';
 import { ImageUploader } from './components/ImageUploader';
@@ -53,23 +55,6 @@ function draftForSearch(query: string, detected?: ManualAlbumDraft): ManualAlbum
     return { artist, album: text.slice(artist.length).trim().slice(0, 255) };
   }
   return { album: text.slice(0, 255) };
-}
-
-function catalogSource(album: DiscogsAlbum): { label: string; type?: string; url?: string } | undefined {
-  if (album.source === 'musicbrainz') {
-    const validId = album.mbid && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(album.mbid);
-    return { label: 'MusicBrainz', type: 'Release group', url: validId ? `https://musicbrainz.org/release-group/${album.mbid}` : undefined };
-  }
-  if (album.source === 'discogs') {
-    const listing = album.discogsListing;
-    return {
-      label: 'Discogs',
-      type: listing === 'master' ? 'Master release' : listing === 'release' ? 'Release' : undefined,
-      url: listing && Number.isSafeInteger(album.id) && album.id > 0
-        ? `https://www.discogs.com/${listing}/${album.id}`
-        : undefined,
-    };
-  }
 }
 
 function AlbumCover({ src }: { src?: string }) {
@@ -172,7 +157,7 @@ function ShelfActions({ album, detailed = false, showShelf, pending, issue, load
           {inWishlist && move}
           <details className="min-w-0">
             <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-1 rounded-lg px-1 text-xs font-semibold text-gray-600 hover:bg-gray-100"
-              aria-label={`Shelf actions for ${album.title} by ${album.artist_name}`}>
+              aria-label={`Shelf actions for ${savedCopyLabel(album)}`}>
               Actions
               <svg aria-hidden="true" className="size-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                 <path strokeLinecap="round" strokeWidth="2" d="m6 9 6 6 6-6" />
@@ -206,6 +191,9 @@ function App() {
   const [showDiscogsImporter, setShowDiscogsImporter] = useState(false);
   const [discogsImporting, setDiscogsImporting] = useState(false);
   const [selectedAlbum, setSelectedAlbum] = useState<Album | null>(null);
+  const [detailBackToMatches, setDetailBackToMatches] = useState(false);
+  const [lookupShelfEdits, setLookupShelfEdits] = useState<LookupShelfEdits>({});
+  const albumDetailOpener = useRef<HTMLButtonElement | null>(null);
   const [albumToRemove, setAlbumToRemove] = useState<Album | null>(null);
   const [lastShelfMove, setLastShelfMove] = useState<ShelfMove | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -508,6 +496,9 @@ function App() {
       await api.updateStatus(albumId, to, from);
       excludeFromShelf(albumId, to);
       updateSearchMembership(albumId, to);
+      if (showBarcodeScanner || showImageUploader) {
+        setLookupShelfEdits(current => ({ ...current, [albumId]: to }));
+      }
     }, albumId);
     if (!saved) return false;
 
@@ -546,20 +537,36 @@ function App() {
     shelf: saveShelf,
   });
 
-  const openSavedAlbum = async (albumId: number, closeLookup?: () => void, issueKey?: string) => {
-    if (openingSavedAlbum.current) return;
+  const showAlbumDetails = (album: Album, opener?: HTMLButtonElement, backToMatches = false) => {
+    albumDetailOpener.current = opener ?? null;
+    setDetailBackToMatches(backToMatches);
+    setSelectedAlbum(album);
+  };
+
+  const openSavedAlbum = async (albumId: number, {
+    closeLookup, issueKey, opener, fromLookup, inlineError,
+  }: {
+    closeLookup?: () => void;
+    issueKey?: string;
+    opener?: HTMLButtonElement;
+    fromLookup?: boolean;
+    inlineError?: boolean;
+  } = {}) => {
+    if (openingSavedAlbum.current) return false;
     openingSavedAlbum.current = true;
     setLoadingAlbumId(albumId);
     try {
       const { album } = await api.getAlbum(albumId);
+      if (opener && !opener.isConnected) return false;
       closeLookup?.();
-      setSelectedAlbum(album);
+      showAlbumDetails(album, opener, fromLookup);
       if (issueKey || saveErrors[savedAlbumKey(albumId)]?.stale) {
         setAlbumToRemove(current => current?.id === albumId ? null : current);
         setLastShelfMove(current => current?.albumId === albumId ? null : current);
         setSaveErrors(current => ({ ...current, [issueKey ?? savedAlbumKey(albumId)]: undefined }));
         refreshLibrary();
       }
+      return true;
     } catch (error) {
       if (issueKey && error instanceof Error && 'status' in error && error.status === 404) {
         setAlbumToRemove(current => current?.id === albumId ? null : current);
@@ -569,14 +576,18 @@ function App() {
         refreshLibrary();
         toast.error('This album is no longer saved.');
         focusSearch();
-      } else {
+      } else if (!inlineError) {
         toast.error('Could not open this saved album. Try again.');
       }
+      return false;
     } finally {
       openingSavedAlbum.current = false;
       setLoadingAlbumId(undefined);
     }
   };
+
+  const inspectSavedAlbum: OpenSavedAlbum = (id, opener, inlineError) =>
+    openSavedAlbum(id, { opener, inlineError, fromLookup: true });
 
   const moveAlbum = async (album: Album, button: HTMLButtonElement, fromDetails: boolean) => {
     const hadFocus = button.ownerDocument.activeElement === button;
@@ -584,6 +595,11 @@ function App() {
     const saved = await moveRecord({ albumId: album.id, title: album.title, from: album.status, to });
     if (!saved) return;
 
+    if (fromDetails && detailBackToMatches) {
+      setSelectedAlbum(current => current?.id === album.id ? { ...current, status: to } : current);
+      toast.success(`Moved to ${shelfLabel[to]}.`);
+      return;
+    }
     if (fromDetails) setSelectedAlbum(current => current?.id === album.id ? null : current);
     if (hadFocus || fromDetails) {
       window.requestAnimationFrame(() => {
@@ -601,6 +617,9 @@ function App() {
     const key = savedAlbumKey(album.id);
     const removed = await saveRecord(key, 'remove', async () => {
       await api.deleteAlbum(album.id, album.status);
+      if (showBarcodeScanner || showImageUploader) {
+        setLookupShelfEdits(current => ({ ...current, [album.id]: null }));
+      }
       excludeFromShelf(album.id);
       setSearchState(current => current.status === 'ready'
         ? { ...current, results: { ...current.results, local: current.results.local.filter(result => result.id !== album.id) } }
@@ -644,7 +663,7 @@ function App() {
     setAlbumToRemove(album);
   };
 
-  const openSaveIssue = (id: number, key: string) => void openSavedAlbum(id, undefined, key);
+  const openSaveIssue = (id: number, key: string) => void openSavedAlbum(id, { issueKey: key });
 
   const savedGrid = (savedCount > 0 || (!searchActive && currentShelf?.status === 'ready')) && (
     <div className={albumGrid}>
@@ -670,11 +689,11 @@ function App() {
             <button
               type="button"
               className="absolute inset-0 z-10 cursor-pointer rounded-[inherit]"
-              aria-label={`Open ${album.title} by ${album.artist_name}`}
+              aria-label={`Open ${savedCopyLabel(album)}`}
               aria-haspopup="dialog"
               aria-disabled={!!pending}
-              onClick={() => {
-                if (!pending) setSelectedAlbum(album);
+              onClick={event => {
+                if (!pending) showAlbumDetails(album, event.currentTarget);
               }}
             />
             <div className="relative z-20 mt-auto grid gap-1.5 p-2 pt-0">
@@ -1044,12 +1063,14 @@ function App() {
                             existingMatch={album.existingMatch}
                             existingAlbumId={albumId}
                             titleMatches={album.titleMatches}
-                            lookupReleaseId={album.discogsListing === 'release' ? album.discogsId : undefined}
+                            lookup={{ artist: album.artist, year: album.year, source,
+                              releaseId: album.discogsListing === 'release' ? album.discogsId : undefined }}
+                            onSearch={focusSearch}
                             pending={pending === 'remove' ? undefined : pending}
                             disabled={pending === 'remove' || !!saveErrors[saveKey]?.stale}
                             openingSaved={loadingAlbumId !== undefined && (loadingAlbumId === albumId ||
                               album.titleMatches?.some(match => match.id === loadingAlbumId))}
-                            onOpenSaved={!saveErrors[saveKey]?.stale ? id => void openSavedAlbum(id) : undefined}
+                            onOpenSaved={saveErrors[saveKey]?.stale ? undefined : inspectSavedAlbum}
                             onSelect={action => {
                               if (action === 'move') {
                                 if (albumId != null && isExactSavedMatch(album.existingMatch)) void moveWishlistAlbum(albumId, album.album);
@@ -1094,10 +1115,12 @@ function App() {
         <AddMenu
           onBarcodeClick={() => {
             setShowAddMenu(false);
+            setLookupShelfEdits({});
             setShowBarcodeScanner(true);
           }}
           onImageClick={() => {
             setShowAddMenu(false);
+            setLookupShelfEdits({});
             setShowImageUploader(true);
           }}
           onSearchClick={() => {
@@ -1126,7 +1149,7 @@ function App() {
             setManualEntry(undefined);
             refreshLibrary();
           }}
-          onOpenSaved={id => openSavedAlbum(id, () => setManualEntry(undefined))}
+          onOpenSaved={async id => { await openSavedAlbum(id, { closeLookup: () => setManualEntry(undefined) }); }}
         />
       )}
 
@@ -1152,7 +1175,8 @@ function App() {
           }}
           onMoveSaved={moveLookupAlbum}
           onUndoMove={undoShelfMove}
-          onOpenSaved={id => openSavedAlbum(id, () => setShowBarcodeScanner(false))}
+          onOpenSaved={inspectSavedAlbum}
+          lookupShelfEdits={lookupShelfEdits}
           onSuccess={refreshLibrary}
           viewMode={viewMode}
         />
@@ -1170,12 +1194,28 @@ function App() {
             setManualEntry({ draft: draft ?? {}, shelf: viewMode });
           }}
           onMoveSaved={moveScannedAlbum}
-          onOpenSaved={id => openSavedAlbum(id, () => setShowImageUploader(false))}
+          onOpenSaved={inspectSavedAlbum}
+          lookupShelfEdits={lookupShelfEdits}
           onSuccess={() => {
             refreshLibrary();
             setShowImageUploader(false);
           }}
           viewMode={viewMode}
+        />
+      )}
+
+      {selectedAlbum && (
+        <AlbumDetailModal
+          album={selectedAlbum}
+          returnFocusTo={albumDetailOpener}
+          backToMatches={detailBackToMatches}
+          onClose={() => {
+            if (!inFlightSaves.current.has(savedAlbumKey(selectedAlbum.id))) setSelectedAlbum(null);
+          }}
+          onRefresh={refreshLibrary}
+          shelfActions={<ShelfActions album={selectedAlbum} detailed
+            pending={pendingSaves[savedAlbumKey(selectedAlbum.id)]} issue={saveErrors[savedAlbumKey(selectedAlbum.id)]}
+            loadingAlbumId={loadingAlbumId} onMove={moveAlbum} onRemove={startRemoval} onOpenIssue={openSaveIssue} />}
         />
       )}
 
@@ -1210,18 +1250,6 @@ function App() {
         </ModalDialog>
       )}
 
-      {selectedAlbum && (
-        <AlbumDetailModal
-          album={selectedAlbum}
-          onClose={() => {
-            if (!inFlightSaves.current.has(savedAlbumKey(selectedAlbum.id))) setSelectedAlbum(null);
-          }}
-          onRefresh={refreshLibrary}
-          shelfActions={<ShelfActions album={selectedAlbum} detailed
-            pending={pendingSaves[savedAlbumKey(selectedAlbum.id)]} issue={saveErrors[savedAlbumKey(selectedAlbum.id)]}
-            loadingAlbumId={loadingAlbumId} onMove={moveAlbum} onRemove={startRemoval} onOpenIssue={openSaveIssue} />}
-        />
-      )}
     </div>
   );
 }

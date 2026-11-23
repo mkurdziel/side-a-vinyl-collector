@@ -4,6 +4,8 @@ import api, { ApiError, isExactSavedMatch } from '../services/api';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 import { ModalDialog } from './ModalDialog';
 import { SaveDestinationActions, type DestinationAction } from './SaveDestinationActions';
+import { applyLookupShelfEdits, type LookupShelfEdits } from '../albumDisplay';
+import type { OpenSavedAlbum } from './PressingComparison';
 import { LookupRecovery } from './LookupRecovery';
 import type { ManualAlbumDraft } from './ManualAlbumDialog';
 
@@ -28,12 +30,13 @@ interface BarcodeScannerProps {
   onManual: (draft?: ManualAlbumDraft) => void;
   onMoveSaved: (id: number, title: string) => Promise<boolean>;
   onUndoMove: (id: number) => Promise<boolean>;
-  onOpenSaved: (id: number) => Promise<void>;
+  onOpenSaved: OpenSavedAlbum;
+  lookupShelfEdits?: LookupShelfEdits;
   viewMode: 'collection' | 'wishlist';
 }
 
 export const BarcodeScanner = ({
-  onClose, onSuccess, onSearchByName, onManual, onMoveSaved, onUndoMove, onOpenSaved, viewMode,
+  onClose, onSuccess, onSearchByName, onManual, onMoveSaved, onUndoMove, onOpenSaved, lookupShelfEdits, viewMode,
 }: BarcodeScannerProps) => {
   const [lookup, setLookup] = useState<Lookup>({ status: 'scanning' });
   const [cameraEnabled, setCameraEnabled] = useState(false);
@@ -50,7 +53,9 @@ export const BarcodeScanner = ({
   const focusNextScan = useRef(false);
   const completedBarcode = useRef<string | undefined>(undefined);
   const [manualBarcode, setManualBarcode] = useState('');
-  const scannedResult = lookup.status === 'found' ? lookup.match : null;
+  const scannedResult = lookup.status === 'found' ? applyLookupShelfEdits(lookup.match, lookupShelfEdits) : null;
+  const titleOnly = scannedResult?.existingStatus && !isExactSavedMatch(scannedResult.existingMatch);
+  const foundDuplicate = duplicateId !== undefined && lookupShelfEdits?.[duplicateId] !== null ? duplicateId : undefined;
   const scanning = lookup.status === 'scanning';
   const lookingUp = lookup.status === 'looking-up';
   const failure = lookup.status === 'failed' && manualBarcode.trim() === lookup.barcode ? lookup.reason : undefined;
@@ -160,6 +165,11 @@ export const BarcodeScanner = ({
   };
 
   const { scannerRef, error, cameras, cameraId, setCameraId, retryCamera } = useBarcodeScanner(lookUp, scanning && cameraEnabled);
+  const editMatchedSearch = () => {
+    if (!scannedResult) return;
+    const { artist, album } = scannedResult;
+    onSearchByName(`${artist} ${album}`, { artist, album });
+  };
   const toggleCamera = () => {
     if (cameraEnabled) {
       setCameraEnabled(false);
@@ -334,11 +344,11 @@ export const BarcodeScanner = ({
               </div>
               <div className="grid gap-2">
                 {saving && <p role="status" className="text-sm text-gray-600">Saving this album…</p>}
-                {duplicateId !== undefined ? (
+                {foundDuplicate !== undefined ? (
                   <div className="grid gap-1">
                     <p role="alert" className="text-sm">This album is already saved.</p>
                     <button type="button" autoFocus className="rh-primary-action px-3 text-sm font-semibold"
-                      onClick={() => void onOpenSaved(duplicateId)}>Open saved album</button>
+                      onClick={event => void onOpenSaved(foundDuplicate, event.currentTarget)}>Open saved album</button>
                   </div>
                 ) : <SaveDestinationActions
                   albumTitle={scannedResult.album}
@@ -347,14 +357,20 @@ export const BarcodeScanner = ({
                   existingMatch={scannedResult.existingMatch}
                   existingAlbumId={scannedResult.existingAlbumId}
                   titleMatches={scannedResult.titleMatches}
-                  lookupReleaseId={scannedResult.discogsId}
-                  onOpenSaved={id => void onOpenSaved(id)}
+                  lookup={{
+                    artist: scannedResult.artist, year: scannedResult.year, releaseId: scannedResult.discogsId,
+                    source: scannedResult.discogsId > 0
+                      ? { label: 'Discogs', url: `https://www.discogs.com/release/${scannedResult.discogsId}` }
+                      : undefined,
+                  }}
+                  onSearch={editMatchedSearch}
+                  onOpenSaved={onOpenSaved}
                   pending={saving}
                   onSelect={action => void saveMatch(action)}
                 />}
                 <div className="flex flex-wrap items-start justify-between gap-x-2">
-                  <LookupRecovery draft={{ artist: scannedResult.artist, album: scannedResult.album }}
-                    disabled={!!saving} onSearchByName={onSearchByName} onManual={onManual} />
+                  {!titleOnly && <LookupRecovery draft={{ artist: scannedResult.artist, album: scannedResult.album }}
+                    disabled={!!saving} onSearchByName={onSearchByName} onManual={onManual} />}
                   <button type="button" onClick={handleScanAnother} disabled={!!saving} className="rh-lookup-link">
                     Scan a different barcode
                   </button>
@@ -384,7 +400,7 @@ export const BarcodeScanner = ({
                 <div>
                   <p role="alert" className="text-sm text-red-600">Could not undo this move. Check the album’s current shelf.</p>
                   <button type="button" className="rh-lookup-link"
-                    onClick={() => void onOpenSaved(lookup.movedId!)}>Open saved album</button>
+                    onClick={event => void onOpenSaved(lookup.movedId!, event.currentTarget)}>Open saved album</button>
                 </div>
               )}
             </div>

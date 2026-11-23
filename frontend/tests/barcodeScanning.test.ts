@@ -316,9 +316,14 @@ describe('barcode lookup requests', () => {
     await startBarcodeCamera();
     await act(async () => quagga.onDetected.mock.calls[0]![0](result));
     expect(renderer!.root.findAllByProps({ 'aria-label': 'Move Dummy to Collection' })).toHaveLength(0);
-    const open = renderer!.root.findByProps({ 'aria-label': 'Open saved Dummy by Portishead in Wishlist, release 20' });
-    await act(async () => open.props.onClick());
-    expect(props.onOpenSaved).toHaveBeenCalledExactlyOnceWith(19);
+    expect(renderer!.root.findAllByType('summary').filter(node => node.children.includes('None of these'))).toHaveLength(0);
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Compare pressings for Dummy' }).props.onClick());
+    expect(JSON.stringify(renderer!.toJSON())).toContain('one saved entry per artist and title');
+    const open = renderer!.root.findByProps({ 'aria-label': 'Open saved album · Dummy by Portishead, Wishlist, Discogs release 20' });
+    const opener = { isConnected: true };
+    props.onOpenSaved.mockResolvedValueOnce(true);
+    await act(async () => open.props.onClick({ currentTarget: opener }));
+    expect(props.onOpenSaved).toHaveBeenCalledExactlyOnceWith(19, opener, true);
     expect(props.onMoveSaved).not.toHaveBeenCalled();
   });
 
