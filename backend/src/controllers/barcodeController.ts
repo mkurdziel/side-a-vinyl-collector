@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import pool from '../config/database';
 import discogsService from '../services/discogs';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
+import type { SavedTitleMatch } from '../services/catalogMembership';
 
 // Helper to check if an album exists in collections and return its status
 async function getExistingAlbumStatus(albumId: number): Promise<{ status: string; albumId: number } | null> {
@@ -17,7 +18,7 @@ async function getExistingAlbumStatus(albumId: number): Promise<{ status: string
 
 // Helper to check if an album exists by discogs_id or artist+title
 async function findExistingAlbum(artist: string, title: string, discogsId?: number): Promise<{
-  status: string; albumId: number | null; match: 'release' | 'title';
+  status: string; albumId: number | null; match: 'release' | 'title'; titleMatches?: SavedTitleMatch[];
 } | null> {
   // Try discogs_id first (most reliable)
   if (discogsId) {
@@ -33,20 +34,21 @@ async function findExistingAlbum(artist: string, title: string, discogsId?: numb
   }
   
   // Try artist + title match
-  const titleResult = await pool.query(`
-    SELECT albums.id as album_id, collections.status
+  const titleResult = await pool.query<SavedTitleMatch>(`
+    SELECT albums.id, albums.title, albums.year, albums.discogs_id, artists.name AS artist_name, collections.status
     FROM albums
     JOIN artists ON albums.artist_id = artists.id
     JOIN collections ON collections.album_id = albums.id
     WHERE LOWER(artists.name) = LOWER($1) AND LOWER(albums.title) = LOWER($2)
     ORDER BY (collections.status = 'collection') DESC, albums.id
-    LIMIT 2
   `, [artist, title]);
-  if (titleResult.rows.length > 0) {
+  const first = titleResult.rows[0];
+  if (first) {
     return {
-      status: titleResult.rows[0].status,
-      albumId: titleResult.rows.length === 1 ? titleResult.rows[0].album_id : null,
+      status: first.status,
+      albumId: titleResult.rows.length === 1 ? first.id : null,
       match: 'title',
+      titleMatches: titleResult.rows,
     };
   }
   
@@ -107,5 +109,6 @@ export const scanBarcode = asyncHandler(async (req: Request, res: Response) => {
     existingStatus: existing?.status || null,
     existingAlbumId: existing?.albumId || null,
     existingMatch: existing?.match ?? null,
+    ...(existing?.titleMatches ? { titleMatches: existing.titleMatches } : {}),
   });
 });

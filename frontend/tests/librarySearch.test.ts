@@ -11,7 +11,8 @@ const { getAlbum, getAlbums, search, addAlbum, updateStatus, deleteAlbum } = vi.
   updateStatus: vi.fn(),
   deleteAlbum: vi.fn(),
 }));
-vi.mock('../src/services/api', () => ({
+vi.mock('../src/services/api', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/services/api')>(),
   default: { getAlbum, getAlbums, search, addAlbum, updateStatus, deleteAlbum, checkDiscogsConfig: async () => ({ configured: true }) },
   getCoverArtUrl: (id: number) => `/api/cover-art/${id}`,
 }));
@@ -185,7 +186,7 @@ describe('library and catalog search', () => {
     expect(button('Add Giant Steps to Collection').props['aria-disabled']).toBe(true);
     await act(async () => add.resolve({ album: { ...saved, id: 2, title: 'Giant Steps' } }));
     expect(renderer.root.findByProps({ 'aria-label': 'Giant Steps is in Wishlist' })).toBeDefined();
-    expect(button('Giant Steps: Title in Wishlist')).toBeDefined();
+    expect(renderer.root.findByProps({ 'aria-label': 'Saved title matches for Giant Steps' })).toBeDefined();
     expect(button('Add Giant Steps to Collection')).toBeUndefined();
   });
 
@@ -216,7 +217,7 @@ describe('library and catalog search', () => {
 
     await act(async () => staleSearch.resolve(match));
     expect(renderer.root.findByProps({ 'aria-label': 'Giant Steps is in Wishlist' })).toBeDefined();
-    expect(button('Giant Steps: Title in Wishlist')).toBeDefined();
+    expect(renderer.root.findByProps({ 'aria-label': 'Saved title matches for Giant Steps' })).toBeDefined();
     expect(button('Add Giant Steps to Collection')).toBeUndefined();
   });
 
@@ -225,7 +226,7 @@ describe('library and catalog search', () => {
     const album = { ...saved, id: 42, title: 'Giant Steps' };
     search.mockResolvedValue({
       local: [album],
-      discogs: [{ ...catalog, inWishlist: true, existingAlbumId: album.id }],
+      discogs: [{ ...catalog, inWishlist: true, existingAlbumId: album.id, existingMatch: 'release' }],
     });
     updateStatus.mockReturnValueOnce(moving.promise);
     await renderLibrary();
@@ -246,7 +247,7 @@ describe('library and catalog search', () => {
 
     expect(moveButtons()).toHaveLength(0);
     expect(renderer.root.findByProps({ 'aria-label': 'Giant Steps is in Collection' })).toBeDefined();
-    expect(button('Giant Steps: Title in Collection')).toBeDefined();
+    expect(button('Giant Steps: Release ID in Collection')).toBeDefined();
     expect(getAlbums).toHaveBeenCalledTimes(2);
 
     await act(async () => button('Undo').props.onClick());
@@ -318,8 +319,28 @@ describe('library and catalog search', () => {
     await act(async () => button('Add Giant Steps to Collection').props.onClick());
     expect(JSON.stringify(renderer.toJSON())).toContain('This album is already saved.');
     expect(button('Add Giant Steps to Collection')).toBeUndefined();
+    expect(button('Open saved album').props.autoFocus).toBe(true);
     await act(async () => button('Open saved album').props.onClick());
     expect(getAlbum).toHaveBeenCalledExactlyOnceWith(saved.id);
+  });
+
+  it('shows every matching saved album for an ambiguous catalog title without offering a transfer', async () => {
+    const matches: Album[] = [
+      { ...saved, id: 81, title: 'Giant Steps', discogs_id: 104 },
+      { ...saved, id: 82, title: 'Giant Steps', discogs_id: 105, status: 'collection' },
+    ];
+    search.mockResolvedValue({ local: [], discogs: [{ ...catalog, existingMatch: 'title', inWishlist: true,
+      inCollection: true, titleMatches: matches }] });
+    getAlbum.mockResolvedValueOnce({ album: matches[1] });
+    await renderLibrary();
+    await chooseScope('catalog');
+    await editSearch('Giant Steps');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(button('Move Giant Steps to Collection')).toBeUndefined();
+    expect(button('Open saved Giant Steps by John Coltrane in Wishlist, release 104')).toBeDefined();
+    await act(async () => button('Open saved Giant Steps by John Coltrane in Collection, release 105').props.onClick());
+    expect(getAlbum).toHaveBeenCalledExactlyOnceWith(82);
+    expect(updateStatus).not.toHaveBeenCalled();
   });
 
   it('appends saved matches and discards a catalog continuation after a new query', async () => {

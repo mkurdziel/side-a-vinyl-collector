@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Toaster, toast } from 'react-hot-toast';
-import api, { type Album, type DiscogsAlbum, type SearchResult, getCoverArtUrl } from './services/api';
+import api, { type Album, type DiscogsAlbum, type SearchResult, getCoverArtUrl, isExactSavedMatch } from './services/api';
 import { AddMenu } from './components/AddMenu';
 import { BarcodeScanner } from './components/BarcodeScanner';
 import { ImageUploader } from './components/ImageUploader';
@@ -127,7 +127,7 @@ function SaveIssueNotice({ issue, issueKey, loadingAlbumId, onOpen }: {
     <div className="space-y-1">
       <p role="alert" className="text-sm text-red-600">{issue.message}</p>
       {id !== undefined && (
-        <button type="button" className={secondaryButton} disabled={loadingAlbumId !== undefined}
+        <button type="button" autoFocus={!issue.stale} className={secondaryButton} disabled={loadingAlbumId !== undefined}
           onClick={() => onOpen(id, issueKey)}>
           {loadingAlbumId === id ? 'Opening album…' : issue.stale ? 'Open current album' : 'Open saved album'}
         </button>
@@ -423,18 +423,23 @@ function App() {
         status: 'ready',
         results: {
           ...current.results,
-          discogs: current.results.discogs.map(match =>
-            match.existingAlbumId === albumId || (addition && catalogKey(match) === addition.key)
-              ? {
-                  ...match,
-                  existingAlbumId: albumId,
-                  inCollection: status === 'collection',
-                  inWishlist: status === 'wishlist',
-                  existingMatch: match.existingAlbumId === albumId ? match.existingMatch
-                    : match.discogsListing === 'release' && match.discogsId > 0 && match.discogsId === addition?.album.discogs_id
-                      ? 'release' : 'title',
-                }
-              : match),
+          discogs: current.results.discogs.map(match => {
+            if (addition && catalogKey(match) === addition.key) {
+              const exact = match.discogsListing === 'release' && match.discogsId > 0 && match.discogsId === addition.album.discogs_id;
+              return { ...match, existingAlbumId: albumId, existingMatch: exact ? 'release' : 'title',
+                inCollection: status === 'collection', inWishlist: status === 'wishlist',
+                titleMatches: exact ? undefined : [addition.album] };
+            }
+            if (match.titleMatches?.some(album => album.id === albumId)) {
+              const titleMatches = match.titleMatches.map(album => album.id === albumId ? { ...album, status } : album);
+              return { ...match, titleMatches, inCollection: titleMatches.some(album => album.status === 'collection'),
+                inWishlist: titleMatches.some(album => album.status === 'wishlist') };
+            }
+            if (match.existingAlbumId === albumId) {
+              return { ...match, inCollection: status === 'collection', inWishlist: status === 'wishlist' };
+            }
+            return match;
+          }),
         },
       };
     });
@@ -741,7 +746,8 @@ function App() {
 
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
             <div className="rh-shelf-controls flex items-center gap-2">
-              <div className="rh-view-switcher flex" role="group" aria-label="Library view">
+              {searchActive && <span className="text-xs font-medium text-gray-600">Browse</span>}
+              <div className="rh-view-switcher flex" role="group" aria-label="Browse shelf">
                 {shelves.map(shelf => (
                   <button
                     key={shelf}
@@ -756,6 +762,10 @@ function App() {
                 ))}
               </div>
             </div>
+            {searchActive && <p className="text-xs text-gray-600">
+              {searchScope === 'shelf' ? `Searching ${shelfLabel[viewMode]}`
+                : searchScope === 'catalog' ? 'Searching both shelves and catalogs' : 'Searching both shelves'}
+            </p>}
             <div className="flex flex-wrap items-center justify-between gap-2 sm:flex-1">
               <div className="rh-library-count text-sm" role="status" aria-atomic="true">
                 {searchActive ? (
@@ -929,8 +939,8 @@ function App() {
             <section className="mb-8" aria-labelledby="saved-results-title">
               <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <h2 id="saved-results-title" tabIndex={-1} className="rh-result-heading text-lg font-semibold">Saved albums</h2>
-                <p className="text-sm text-gray-600">{searchScope === 'shelf' ? shelfLabel[viewMode] : 'Both shelves'}</p>
-                {<SortControl sort={sortBy} onChange={changeSort} />}
+                {searchScope !== 'catalog' && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search catalogs too</button>}
+                <SortControl sort={sortBy} onChange={changeSort} />
               </div>
               {savedGrid}
               {renderContinuation('saved', results)}
@@ -957,17 +967,21 @@ function App() {
                 <h2 id="catalog-results-title" tabIndex={-1} className="rh-result-heading text-lg font-semibold">Catalog albums</h2>
                 <p className="text-sm text-gray-600">Open a source listing to check release details.</p>
               </div>
-              <div className="rh-catalog-toolbar">
-                <label className="flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-600">
-                  Save catalog albums to
-                  <select id="catalog-save-shelf" value={saveShelf} onChange={event => setSaveShelf(event.target.value as Shelf)}
-                    className="min-h-11 rounded-lg border border-gray-300 px-2.5">
-                    {shelves.map(shelf => <option key={shelf} value={shelf}>{shelfLabel[shelf]}</option>)}
-                  </select>
-                </label>
-                {catalogCount > 0 && (
-                  <button type="button" className="rh-lookup-link" onClick={openCatalogManualEntry}>Add album manually</button>
-                )}
+              <div className="rh-catalog-save-context">
+                <div className="rh-catalog-toolbar">
+                  <label className="flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-600">
+                    Save catalog albums to
+                    <select id="catalog-save-shelf" aria-describedby="catalog-save-hint" value={saveShelf}
+                      onChange={event => setSaveShelf(event.target.value as Shelf)}
+                      className="min-h-11 rounded-lg border border-gray-300 px-2.5">
+                      {shelves.map(shelf => <option key={shelf} value={shelf}>{shelfLabel[shelf]}</option>)}
+                    </select>
+                  </label>
+                  {catalogCount > 0 && (
+                    <button type="button" className="rh-lookup-link" onClick={openCatalogManualEntry}>Add album manually</button>
+                  )}
+                </div>
+                <p id="catalog-save-hint" className="text-xs text-gray-600">Switching browse shelves keeps this destination.</p>
               </div>
             </div>
             {catalogLoading && <p role="status" className="mb-3 text-sm text-gray-600">Searching catalogs…</p>}
@@ -1028,14 +1042,17 @@ function App() {
                             preferred={saveShelf}
                             existingStatus={savedShelf}
                             existingMatch={album.existingMatch}
-                            canMove={savedShelf === 'wishlist' && albumId != null}
+                            existingAlbumId={albumId}
+                            titleMatches={album.titleMatches}
+                            lookupReleaseId={album.discogsListing === 'release' ? album.discogsId : undefined}
                             pending={pending === 'remove' ? undefined : pending}
                             disabled={pending === 'remove' || !!saveErrors[saveKey]?.stale}
-                            openingSaved={albumId != null && loadingAlbumId === albumId}
-                            onOpenSaved={albumId != null && !saveErrors[saveKey]?.stale ? () => void openSavedAlbum(albumId) : undefined}
+                            openingSaved={loadingAlbumId !== undefined && (loadingAlbumId === albumId ||
+                              album.titleMatches?.some(match => match.id === loadingAlbumId))}
+                            onOpenSaved={!saveErrors[saveKey]?.stale ? id => void openSavedAlbum(id) : undefined}
                             onSelect={action => {
                               if (action === 'move') {
-                                if (albumId != null) void moveWishlistAlbum(albumId, album.album);
+                                if (albumId != null && isExactSavedMatch(album.existingMatch)) void moveWishlistAlbum(albumId, album.album);
                               } else {
                                 void handleCatalogAdd(album, action);
                               }

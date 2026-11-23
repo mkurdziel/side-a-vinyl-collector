@@ -435,6 +435,30 @@ summary:focus-visible,
   gap: 4px 12px;
 }
 
+.rh-catalog-save-context {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.rh-catalog-save-context > p { margin-top: 4px; }
+
+.rh-title-review {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding-block-start: 4px;
+}
+
+.rh-title-review .rh-lookup-recovery[open] {
+  border-top: 1px solid var(--rh-edge);
+  border-radius: 0;
+  background: transparent;
+}
+
+.rh-camera-options {
+  border-top: 1px solid var(--rh-edge);
+  padding-top: 8px;
+}
+
 .rh-details-identity {
   display: grid;
   grid-template-columns: clamp(76px, 26vw, 152px) minmax(0, 1fr);

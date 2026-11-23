@@ -84,9 +84,13 @@ describe('barcode match evidence', () => {
   it('labels a name match as a title match and never chooses among ambiguous saved entries', async () => {
     get.mockResolvedValueOnce({ data: { results: [{ id: 91, title: 'Artist - Fixture' }] } });
     query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ album_id: 44, status: 'collection' }, { album_id: 45, status: 'wishlist' }] });
+      .mockResolvedValueOnce({ rows: [
+        { id: 44, status: 'collection', title: 'Fixture', artist_name: 'Artist', discogs_id: 120 },
+        { id: 45, status: 'wishlist', title: 'Fixture', artist_name: 'Artist', discogs_id: 121 },
+      ] });
     await expect(lookup()).resolves.toMatchObject({
-      status: 200, body: { existingMatch: 'title', existingStatus: 'collection', existingAlbumId: null },
+      status: 200, body: { existingMatch: 'title', existingStatus: 'collection', existingAlbumId: null,
+        titleMatches: [{ id: 44, discogs_id: 120 }, { id: 45, discogs_id: 121 }] },
     });
   });
 });

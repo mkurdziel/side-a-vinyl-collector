@@ -124,6 +124,12 @@ describe('barcode camera lifecycle', () => {
   });
 });
 
+
+async function startBarcodeCamera() {
+  const start = renderer!.root.findAllByType('button').find(button => button.children.join('') === 'Scan with camera')!;
+  await act(async () => start.props.onClick());
+}
+
 describe('barcode lookup requests', () => {
   const props = {
     onClose: vi.fn(), onSuccess: vi.fn(), onSearchByName: vi.fn(), onManual: vi.fn(),
@@ -134,6 +140,7 @@ describe('barcode lookup requests', () => {
     let resolve!: (result: unknown) => void;
     scanBarcode.mockReturnValue(new Promise(done => { resolve = done; }));
     await mount(createElement(BarcodeScanner, props));
+    await startBarcodeCamera();
     const detect = quagga.onDetected.mock.calls[0]![0];
     await act(async () => { detect(result); detect(result); detect(result); });
     expect(scanBarcode).toHaveBeenCalledOnce();
@@ -145,6 +152,7 @@ describe('barcode lookup requests', () => {
     async error => {
       scanBarcode.mockRejectedValueOnce(error).mockResolvedValueOnce({ artist: 'Portishead', album: 'Dummy' });
       await mount(createElement(BarcodeScanner, props));
+      await startBarcodeCamera();
       const detect = quagga.onDetected.mock.calls[0]![0];
       await act(async () => detect(result));
       expect(renderer!.root.findByProps({ role: 'alert' }).children).toContain(
@@ -165,6 +173,7 @@ describe('barcode lookup requests', () => {
   it('offers an editable barcode, camera restart, and name search after a genuine miss', async () => {
     scanBarcode.mockRejectedValueOnce(new ApiError('No album found for this barcode', 404));
     await mount(createElement(BarcodeScanner, props));
+    await startBarcodeCamera();
     await act(async () => quagga.onDetected.mock.calls[0]![0](result));
     expect(renderer!.root.findByProps({ role: 'alert' }).children).toContain(
       'No release matched this barcode. Check the digits or search by name.',
@@ -179,6 +188,7 @@ describe('barcode lookup requests', () => {
 
   it('explains invalid manual input before making a lookup request', async () => {
     await mount(createElement(BarcodeScanner, props));
+    expect(quagga.init).not.toHaveBeenCalled();
     await act(async () => renderer!.root.findByType('input').props.onChange({ target: { value: '123z' } }));
     await act(async () => renderer!.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() }));
     expect(scanBarcode).not.toHaveBeenCalled();
@@ -191,6 +201,7 @@ describe('barcode lookup requests', () => {
   it('announces camera failures and lets the user retry the camera', async () => {
     quagga.init.mockImplementationOnce((_config, callback) => callback(new Error('Camera unavailable')));
     await mount(createElement(BarcodeScanner, props));
+    await startBarcodeCamera();
     expect(renderer!.root.findByProps({ role: 'alert' }).children[0]).toMatch(/Unable to start camera/);
     const retry = renderer!.root.findAllByType('button').find(button => button.children.includes('Retry camera'));
     await act(async () => retry!.props.onClick());
@@ -202,6 +213,7 @@ describe('barcode lookup requests', () => {
     quagga.init.mockImplementationOnce((_config, callback) => callback(new Error('Camera unavailable')));
     scanBarcode.mockResolvedValue({ artist: 'Portishead', album: 'Dummy' });
     await mount(createElement(BarcodeScanner, props));
+    await startBarcodeCamera();
     await act(async () => renderer!.root.findByType('input').props.onChange({ target: { value: '0602537340436' } }));
     const preventDefault = vi.fn();
     await act(async () => renderer!.root.findByType('form').props.onSubmit({ preventDefault }));
@@ -211,12 +223,26 @@ describe('barcode lookup requests', () => {
     expect(JSON.stringify(renderer!.toJSON())).toContain('Dummy');
   });
 
+  it('keeps manual entry active on Scan next without initializing the camera', async () => {
+    scanBarcode.mockResolvedValue({ artist: 'Portishead', album: 'Dummy', discogsId: 19 });
+    addAlbum.mockResolvedValue({});
+    await mount(createElement(BarcodeScanner, props));
+    await act(async () => renderer!.root.findByType('input').props.onChange({ target: { value: '0602537340436' } }));
+    await act(async () => renderer!.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() }));
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Add Dummy to Collection' }).props.onClick());
+    const next = renderer!.root.findAllByType('button').find(button => button.children.join('') === 'Scan next')!;
+    await act(async () => next.props.onClick());
+    expect(quagga.init).not.toHaveBeenCalled();
+    expect(focused).toHaveBeenLastCalledWith('manual-barcode');
+  });
+
   it('shows available camera labels and lets the user switch lenses', async () => {
     quagga.CameraAccess.enumerateVideoDevices.mockResolvedValue([
       { deviceId: 'rear-main', label: 'Back Camera' },
       { deviceId: 'rear-wide', label: 'Back Ultra Wide Camera' },
     ]);
     await mount(createElement(BarcodeScanner, props));
+    await startBarcodeCamera();
     expect(JSON.stringify(renderer!.toJSON())).toContain('Back Ultra Wide Camera');
     await act(async () => renderer!.root.findByType('select').props.onChange({ target: { value: 'rear-main' } }));
     expect(quagga.init.mock.calls.at(-1)![0].inputStream.constraints.deviceId).toEqual({ exact: 'rear-main' });
@@ -227,6 +253,7 @@ describe('barcode lookup requests', () => {
     const save = Promise.withResolvers<void>();
     addAlbum.mockReturnValueOnce(save.promise);
     await mount(createElement(BarcodeScanner, { ...props, viewMode: 'wishlist' }));
+    await startBarcodeCamera();
     await act(async () => quagga.onDetected.mock.calls[0]![0](result));
 
     const addButtons = renderer!.root.findAllByType('button')
@@ -261,11 +288,12 @@ describe('barcode lookup requests', () => {
 
   it('moves and undoes a wishlisted barcode match inside the open scanner', async () => {
     scanBarcode.mockResolvedValue({
-      artist: 'Portishead', album: 'Dummy', existingStatus: 'wishlist', existingAlbumId: 19, existingMatch: 'title',
+      artist: 'Portishead', album: 'Dummy', existingStatus: 'wishlist', existingAlbumId: 19, existingMatch: 'release',
     });
     props.onMoveSaved.mockResolvedValueOnce(true);
     props.onUndoMove.mockResolvedValueOnce(true);
     await mount(createElement(BarcodeScanner, props));
+    await startBarcodeCamera();
     await act(async () => quagga.onDetected.mock.calls[0]![0](result));
 
     await act(async () => renderer!.root.findByProps({ 'aria-label': 'Move Dummy to Collection' }).props.onClick());
@@ -278,9 +306,26 @@ describe('barcode lookup requests', () => {
     expect(props.onClose).not.toHaveBeenCalled();
   });
 
+  it('requires reviewing a saved record before moving a title-only barcode match', async () => {
+    scanBarcode.mockResolvedValue({
+      artist: 'Portishead', album: 'Dummy', discogsId: 18, existingStatus: 'wishlist', existingMatch: 'title',
+      existingAlbumId: 19,
+      titleMatches: [{ id: 19, title: 'Dummy', artist_name: 'Portishead', status: 'wishlist', discogs_id: 20 }],
+    });
+    await mount(createElement(BarcodeScanner, props));
+    await startBarcodeCamera();
+    await act(async () => quagga.onDetected.mock.calls[0]![0](result));
+    expect(renderer!.root.findAllByProps({ 'aria-label': 'Move Dummy to Collection' })).toHaveLength(0);
+    const open = renderer!.root.findByProps({ 'aria-label': 'Open saved Dummy by Portishead in Wishlist, release 20' });
+    await act(async () => open.props.onClick());
+    expect(props.onOpenSaved).toHaveBeenCalledExactlyOnceWith(19);
+    expect(props.onMoveSaved).not.toHaveBeenCalled();
+  });
+
   it('offers manual and name-search recovery after a barcode result', async () => {
     scanBarcode.mockResolvedValue({ artist: 'Portishead', album: 'Dummy', discogsId: 17 });
     await mount(createElement(BarcodeScanner, props));
+    await startBarcodeCamera();
     await act(async () => quagga.onDetected.mock.calls[0]![0](result));
     const controls = renderer!.root.findAllByType('details').find(node => node.findByType('summary').children.join('') === 'None of these')!;
     expect(JSON.stringify(renderer!.toJSON())).toContain('None of these');

@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { toast } from 'react-hot-toast';
-import api, { ApiError } from '../services/api';
+import api, { ApiError, isExactSavedMatch } from '../services/api';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 import { ModalDialog } from './ModalDialog';
 import { SaveDestinationActions, type DestinationAction } from './SaveDestinationActions';
@@ -36,6 +36,7 @@ export const BarcodeScanner = ({
   onClose, onSuccess, onSearchByName, onManual, onMoveSaved, onUndoMove, onOpenSaved, viewMode,
 }: BarcodeScannerProps) => {
   const [lookup, setLookup] = useState<Lookup>({ status: 'scanning' });
+  const [cameraEnabled, setCameraEnabled] = useState(false);
   const lookupInProgress = useRef(false);
   const [saving, setSaving] = useState<DestinationAction>();
   const [undoing, setUndoing] = useState(false);
@@ -45,7 +46,7 @@ export const BarcodeScanner = ({
   const manualInput = useRef<HTMLInputElement>(null);
   const scannerTitle = useRef<HTMLHeadingElement>(null);
   const resultTitle = useRef<HTMLHeadingElement>(null);
-  const lastInput = useRef<'camera' | 'manual'>('camera');
+  const lastInput = useRef<'camera' | 'manual'>('manual');
   const focusNextScan = useRef(false);
   const completedBarcode = useRef<string | undefined>(undefined);
   const [manualBarcode, setManualBarcode] = useState('');
@@ -66,6 +67,7 @@ export const BarcodeScanner = ({
   const lookUp = async (barcode: string, source: 'camera' | 'manual' = 'camera') => {
     if (lookupInProgress.current || (source === 'camera' && completedBarcode.current === barcode)) return;
     lastInput.current = source;
+    if (source === 'manual') setCameraEnabled(false);
     setDuplicateId(undefined);
 
     setManualBarcode(barcode);
@@ -92,8 +94,8 @@ export const BarcodeScanner = ({
 
   const saveMatch = async (action: DestinationAction) => {
     if (!scannedResult || saveInProgress.current) return;
-    const { existingStatus, existingAlbumId } = scannedResult;
-    const moveId = action === 'move' && existingStatus === 'wishlist' ? existingAlbumId : undefined;
+    const { existingStatus, existingAlbumId, existingMatch } = scannedResult;
+    const moveId = action === 'move' && existingStatus === 'wishlist' && isExactSavedMatch(existingMatch) ? existingAlbumId : undefined;
     const adding = action !== 'move' && !existingStatus;
     if (!moveId && !adding) return;
 
@@ -136,7 +138,8 @@ export const BarcodeScanner = ({
     setLookup({ status: 'scanning' });
     setDuplicateId(undefined);
     setUndoFailed(false);
-    retryCamera();
+    setCameraEnabled(lastInput.current === 'camera');
+    if (lastInput.current === 'camera') retryCamera();
   };
 
   const undoSavedMove = async () => {
@@ -156,7 +159,16 @@ export const BarcodeScanner = ({
     }
   };
 
-  const { scannerRef, error, cameras, cameraId, setCameraId, retryCamera } = useBarcodeScanner(lookUp, scanning);
+  const { scannerRef, error, cameras, cameraId, setCameraId, retryCamera } = useBarcodeScanner(lookUp, scanning && cameraEnabled);
+  const toggleCamera = () => {
+    if (cameraEnabled) {
+      setCameraEnabled(false);
+      lastInput.current = 'manual';
+    } else {
+      lastInput.current = 'camera';
+      setCameraEnabled(true);
+    }
+  };
   const close = () => {
     if (!saveInProgress.current) onClose();
   };
@@ -242,12 +254,20 @@ export const BarcodeScanner = ({
                     onClick={handleScanAnother}
                     className="min-h-11 rounded-lg px-2 text-sm font-medium text-purple-600 hover:bg-gray-100"
                   >
-                    Scan again
+                    {cameraEnabled ? 'Scan again' : 'Try another barcode'}
                   </button>
                 )}
               </div>
 
               {scanning && (
+                <div className="rh-camera-options">
+                  <button type="button" className="rh-lookup-link" onClick={toggleCamera} aria-expanded={cameraEnabled}>
+                    {cameraEnabled ? 'Stop camera' : 'Scan with camera'}
+                  </button>
+                </div>
+              )}
+
+              {scanning && cameraEnabled && (
                 <>
                   {cameras.length > 1 && (
                     <label className="mb-3 block text-sm font-medium text-gray-700">
@@ -317,7 +337,7 @@ export const BarcodeScanner = ({
                 {duplicateId !== undefined ? (
                   <div className="grid gap-1">
                     <p role="alert" className="text-sm">This album is already saved.</p>
-                    <button type="button" className="rh-primary-action px-3 text-sm font-semibold"
+                    <button type="button" autoFocus className="rh-primary-action px-3 text-sm font-semibold"
                       onClick={() => void onOpenSaved(duplicateId)}>Open saved album</button>
                   </div>
                 ) : <SaveDestinationActions
@@ -325,8 +345,10 @@ export const BarcodeScanner = ({
                   preferred={viewMode}
                   existingStatus={scannedResult.existingStatus ?? undefined}
                   existingMatch={scannedResult.existingMatch}
-                  canMove={Boolean(scannedResult.existingAlbumId)}
-                  onOpenSaved={scannedResult.existingAlbumId ? () => void onOpenSaved(scannedResult.existingAlbumId!) : undefined}
+                  existingAlbumId={scannedResult.existingAlbumId}
+                  titleMatches={scannedResult.titleMatches}
+                  lookupReleaseId={scannedResult.discogsId}
+                  onOpenSaved={id => void onOpenSaved(id)}
                   pending={saving}
                   onSelect={action => void saveMatch(action)}
                 />}
