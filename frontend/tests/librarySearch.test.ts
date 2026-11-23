@@ -3,14 +3,15 @@ import { act, create } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Album, DiscogsAlbum, SearchResult } from '../src/services/api';
 
-const { getAlbums, search, addAlbum, updateStatus } = vi.hoisted(() => ({
+const { getAlbums, search, addAlbum, updateStatus, deleteAlbum } = vi.hoisted(() => ({
   getAlbums: vi.fn(),
   search: vi.fn(),
   addAlbum: vi.fn(),
   updateStatus: vi.fn(),
+  deleteAlbum: vi.fn(),
 }));
 vi.mock('../src/services/api', () => ({
-  default: { getAlbums, search, addAlbum, updateStatus, checkDiscogsConfig: async () => ({ configured: true }) },
+  default: { getAlbums, search, addAlbum, updateStatus, deleteAlbum, checkDiscogsConfig: async () => ({ configured: true }) },
   getCoverArtUrl: (id: number) => `/api/cover-art/${id}`,
 }));
 vi.mock('react-hot-toast', () => ({
@@ -45,6 +46,10 @@ async function editSearch(value: string) {
   await act(async () => {
     renderer.root.findByProps({ id: 'album-search' }).props.onChange({ target: { value } });
   });
+}
+
+async function chooseScope(value: 'saved' | 'shelf' | 'catalog') {
+  await act(async () => renderer.root.findByProps({ id: 'search-scope' }).props.onChange({ target: { value } }));
 }
 
 function button(name: string) {
@@ -82,8 +87,8 @@ describe('library and catalog search', () => {
 
     await editSearch('old');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
-    expect(search).toHaveBeenCalledWith('old', expect.any(AbortSignal));
-    expect(JSON.stringify(renderer.toJSON())).toContain('Searching your library and catalogs');
+    expect(search).toHaveBeenCalledWith('old', expect.any(AbortSignal), 'saved', undefined);
+    expect(JSON.stringify(renderer.toJSON())).toContain('Searching saved albums');
 
     await editSearch('Coltrane');
     await act(async () => renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }));
@@ -116,27 +121,42 @@ describe('library and catalog search', () => {
     expect(JSON.stringify(renderer.toJSON())).not.toContain('Late collection entry');
   });
 
-  it('keeps a global query and matches visible when switching the default shelf', async () => {
-    search.mockResolvedValue({ local: [saved], discogs: [catalog] });
+  it('shows saved matches before catalogs and keeps the save default separate from shelf browsing', async () => {
+    const discovery = Promise.withResolvers<SearchResult>();
+    search.mockImplementation((_, __, scope) => scope === 'catalog' ? discovery.promise : Promise.resolve({ local: [saved], discogs: [] }));
     getAlbums.mockImplementation(async (shelf: string) => ({ albums: shelf === 'wishlist' ? [saved] : [] }));
     await renderLibrary();
     await editSearch('Coltrane');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
-
-    await act(async () => button('Wishlist').props.onClick());
-    await act(async () => button('Wishlist').props.onClick());
-
-    expect(search).toHaveBeenCalledTimes(1);
-    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Coltrane');
-    expect(button('Wishlist').props['aria-pressed']).toBe(true);
+    expect(search).toHaveBeenCalledExactlyOnceWith('Coltrane', expect.any(AbortSignal), 'saved', undefined);
     expect(button('Open Blue Train by John Coltrane')).toBeDefined();
+
+    await chooseScope('catalog');
+    expect(button('Open Blue Train by John Coltrane')).toBeDefined();
+    expect(button('Add Giant Steps to Wishlist')).toBeUndefined();
+    const saveDefault = renderer.root.findAllByType('select').find(node => node.props.value === 'collection')!;
+    await act(async () => button('Wishlist').props.onClick());
+    expect(search).toHaveBeenCalledTimes(3);
+    expect(saveDefault.props.value).toBe('collection');
+    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Coltrane');
+    await act(async () => discovery.resolve({ local: [], discogs: [catalog] }));
     expect(button('Add Giant Steps to Wishlist')).toBeDefined();
-    const status = renderer.root.findByType('header').findByProps({ role: 'status' });
-    expect(status.findByType('span').children.join('')).toBe('1 saved album · 1 catalog match');
 
     await act(async () => button('Back to Wishlist').props.onClick());
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('');
+    const status = renderer.root.findByType('header').findByProps({ role: 'status' });
     expect(status.findByType('span').children.join('')).toBe('1 album in Wishlist');
+  });
+
+  it('filters This shelf searches when the user changes shelves', async () => {
+    search.mockResolvedValue({ local: [], discogs: [] });
+    await renderLibrary();
+    await chooseScope('shelf');
+    await editSearch('Coltrane');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(search).toHaveBeenLastCalledWith('Coltrane', expect.any(AbortSignal), 'saved', 'collection');
+    await act(async () => button('Wishlist').props.onClick());
+    expect(search).toHaveBeenLastCalledWith('Coltrane', expect.any(AbortSignal), 'saved', 'wishlist');
   });
 
   it('serializes the two add destinations for the same catalog record', async () => {
@@ -144,6 +164,7 @@ describe('library and catalog search', () => {
     search.mockResolvedValue({ local: [], discogs: [catalog] });
     addAlbum.mockReturnValueOnce(add.promise);
     await renderLibrary();
+    await chooseScope('catalog');
     await editSearch('steps');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
 
@@ -164,11 +185,16 @@ describe('library and catalog search', () => {
     const add = Promise.withResolvers<{ album: Album }>();
     const added = { ...saved, id: 2, title: 'Giant Steps' };
     const match = { local: [], discogs: [catalog] };
-    search.mockResolvedValueOnce(match)
-      .mockReturnValueOnce(staleSearch.promise)
-      .mockResolvedValueOnce({ local: [added], discogs: [{ ...catalog, inWishlist: true }] });
+    let catalogRequests = 0;
+    search.mockImplementation(async (_, __, scope) => {
+      if (scope === 'saved') return { local: catalogRequests >= 2 ? [added] : [], discogs: [] };
+      catalogRequests += 1;
+      if (catalogRequests === 2) return staleSearch.promise;
+      return catalogRequests === 1 ? match : { local: [], discogs: [{ ...catalog, inWishlist: true, existingAlbumId: added.id }] };
+    });
     addAlbum.mockReturnValueOnce(add.promise);
     await renderLibrary();
+    await chooseScope('catalog');
     await editSearch('steps');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
     await act(async () => button('Add Giant Steps to Wishlist').props.onClick());
@@ -176,8 +202,8 @@ describe('library and catalog search', () => {
     await editSearch('Coltrane');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
     await act(async () => add.resolve({ album: added }));
-    expect(search.mock.calls[1][1].aborted).toBe(true);
-    expect(search.mock.calls[2][0]).toBe('Coltrane');
+    expect(search.mock.calls[3][1].aborted).toBe(true);
+    expect(search.mock.calls[5][0]).toBe('Coltrane');
 
     await act(async () => staleSearch.resolve(match));
     expect(renderer.root.findAllByProps({ 'aria-label': 'Giant Steps is in Wishlist' })).toHaveLength(2);
@@ -193,6 +219,7 @@ describe('library and catalog search', () => {
     });
     updateStatus.mockReturnValueOnce(moving.promise);
     await renderLibrary();
+    await chooseScope('catalog');
     await editSearch('Coltrane');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
 
@@ -215,5 +242,21 @@ describe('library and catalog search', () => {
     expect(updateStatus).toHaveBeenLastCalledWith(album.id, 'wishlist', 'collection');
     expect(moveButtons()).toHaveLength(2);
     expect(button('Undo')).toBeUndefined();
+  });
+
+  it('uses the guarded notes-aware removal confirmation from album details', async () => {
+    getAlbums.mockImplementation(async shelf => ({ albums: shelf === 'wishlist' ? [saved] : [] }));
+    deleteAlbum.mockRejectedValueOnce(Object.assign(new Error('Changed shelf'), { status: 409 }));
+    await renderLibrary();
+    await act(async () => button('Wishlist').props.onClick());
+    expect(button('Move to Collection — Blue Train')).toBeDefined();
+    await act(async () => button('Open Blue Train by John Coltrane').props.onClick());
+    const details = renderer.root.findByProps({ labelledBy: 'album-details-title' });
+    await act(async () => details.findByProps({ 'aria-label': 'Remove from Wishlist — Blue Train' }).props.onClick());
+    expect(JSON.stringify(renderer.toJSON())).toContain('any notes saved with it');
+    expect(deleteAlbum).not.toHaveBeenCalled();
+    await act(async () => button('Remove album').props.onClick());
+    expect(deleteAlbum).toHaveBeenCalledExactlyOnceWith(saved.id, 'wishlist');
+    expect(JSON.stringify(renderer.toJSON())).toContain('Check its current shelf');
   });
 });

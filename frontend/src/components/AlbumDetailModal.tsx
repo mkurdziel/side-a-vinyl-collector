@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { toast } from 'react-hot-toast';
 import api, { type Album, type SearchCoverArtResult, getCoverArtUrl } from '../services/api';
 import { ModalDialog } from './ModalDialog';
@@ -6,10 +6,11 @@ import { ModalDialog } from './ModalDialog';
 interface AlbumDetailModalProps {
   album: Album;
   onClose: () => void;
+  shelfActions?: ReactNode;
   onRefresh: (updatedAlbum?: Album) => void;
 }
 
-export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModalProps) => {
+export const AlbumDetailModal = ({ album, onClose, onRefresh, shelfActions }: AlbumDetailModalProps) => {
   const [refetching, setRefetching] = useState(false);
   const [currentAlbum, setCurrentAlbum] = useState<Album>(album);
   const [receivedAlbum, setReceivedAlbum] = useState(album);
@@ -66,17 +67,6 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
       toast.error(error instanceof Error ? error.message : 'Could not update the artwork. Try another cover.', { id: 'update-art' });
     } finally {
       setSavingArtwork(false);
-    }
-  };
-
-  const handleAddToCollection = async () => {
-    try {
-      await api.updateStatus(currentAlbum.id, 'collection');
-      toast.success('Moved to collection');
-      onRefresh();
-      onClose();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to move to Collection');
     }
   };
 
@@ -167,61 +157,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
 
           {/* Actions */}
           <div className="pt-4 border-t border-gray-200 space-y-3">
-            {currentAlbum.status === 'wishlist' && (
-              <button
-                onClick={handleAddToCollection}
-                className="w-full px-5 py-2.5 rh-filled-action text-sm font-medium bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors flex items-center justify-center gap-2"
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-                Move to Collection
-              </button>
-            )}
-
-            {currentAlbum.status === 'collection' && (
-              <button
-                onClick={async () => {
-                  if (!confirm('Move this album from your collection to your wishlist?')) return;
-                  try {
-                    await api.updateStatus(currentAlbum.id, 'wishlist');
-                    toast.success('Moved to wishlist');
-                    onRefresh();
-                    onClose();
-                  } catch (error) {
-                    toast.error(error instanceof Error ? error.message : 'Failed to move to Wishlist');
-                  }
-                }}
-                className="w-full px-5 py-2.5 text-sm font-medium text-purple-600 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 transition-colors flex items-center justify-center gap-2"
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-                </svg>
-                Move to Wishlist
-              </button>
-            )}
-
-            {currentAlbum.status === 'wishlist' && (
-              <button
-                onClick={async () => {
-                  if (!confirm('Remove this album from your wishlist entirely?')) return;
-                  try {
-                    await api.deleteAlbum(currentAlbum.id);
-                    toast.success('Album removed entirely');
-                    onRefresh();
-                    onClose();
-                  } catch (error) {
-                    toast.error(error instanceof Error ? error.message : 'Failed to remove album');
-                  }
-                }}
-                className="w-full px-5 py-2.5 text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-                Remove from Wishlist
-              </button>
-            )}
+            {shelfActions}
 
             <button
               ref={artworkButtonRef}

@@ -58,7 +58,7 @@ describe('Discogs import', () => {
       .mockRejectedValueOnce(new ApiError('Album already in collection/wishlist', 409))
       .mockRejectedValueOnce(new ApiError('Service unavailable', 503));
     await loadCollection();
-    await act(async () => findButton('Import all').props.onClick());
+    await act(async () => findButton('Import 3 records to Collection').props.onClick());
 
     expect(content()).toContain('1 imported · 1 already in your library · 1 failed');
     expect(content()).toContain('Imported to Collection');
@@ -83,7 +83,7 @@ describe('Discogs import', () => {
     const firstAlbum = Promise.withResolvers<object>();
     addAlbum.mockReturnValueOnce(firstAlbum.promise);
     await loadCollection();
-    const run = findButton('Import all').props.onClick;
+    const run = findButton('Import 3 records to Collection').props.onClick;
     await act(async () => {
       void run();
       void run();
@@ -102,6 +102,20 @@ describe('Discogs import', () => {
     ]);
     expect(content()).toContain('3 imported');
     expect(importerProps.onSuccess).toHaveBeenCalledOnce();
+  });
+
+  it('stops before the next queued record and preserves the first outcome', async () => {
+    const first = Promise.withResolvers<object>();
+    addAlbum.mockReturnValueOnce(first.promise);
+    await loadCollection();
+    await act(async () => { void findButton('Import 3 records to Collection').props.onClick(); });
+    await act(async () => findButton('Stop after current record').props.onClick());
+    await act(async () => first.resolve({}));
+
+    expect(addAlbum).toHaveBeenCalledOnce();
+    expect(content()).toContain('Import stopped.');
+    expect(content()).toContain('Imported to Collection');
+    expect(findButton('Import 2 records to Collection').props.disabled).toBe(false);
   });
 
   it('gives server setup instructions only when configuration is missing', async () => {

@@ -39,6 +39,18 @@ beforeEach(() => {
 });
 
 describe('search result membership', () => {
+  it('returns saved search results for the requested shelf without waiting for a catalog', async () => {
+    query.mockResolvedValueOnce({ rows: [savedAlbum] });
+    const result = await new Promise<{ local: typeof savedAlbum[]; discogs: unknown[] }>((resolve, reject) => {
+      const req = { query: { q: 'Coltrane', scope: 'saved', shelf: 'wishlist' } } as unknown as Request;
+      search(req, { json: resolve } as unknown as Response, reject);
+    });
+
+    expect(query).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('collections.status = $2'), ['Coltrane', 'wishlist']);
+    expect(result).toEqual({ local: [savedAlbum], discogs: [], errors: [] });
+    expect(searchByQuery).not.toHaveBeenCalled();
+  });
+
   it('links the exact Discogs match even when another name match is in Collection', async () => {
     const collectionMatch = { ...savedAlbum, status: 'collection' };
     query.mockResolvedValueOnce({ rows: [collectionMatch] }).mockResolvedValueOnce({ rows: [

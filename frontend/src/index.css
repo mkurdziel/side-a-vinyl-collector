@@ -345,14 +345,7 @@ summary:focus-visible,
 .rh-catalog-details[open] .rh-catalog-chevron { transform: rotate(180deg); }
 .rh-catalog-actions { margin-top: auto; }
 
-.rh-shelf-notice {
-  position: fixed;
-  z-index: 30;
-  inset-inline-end: 16px;
-  inset-block-end: max(16px, env(safe-area-inset-bottom));
-  width: min(23rem, calc(100% - 32px));
-  box-shadow: var(--rh-shadow-panel);
-}
+.rh-result-nav { display: none; }
 
 .rh-album-meta {
   min-height: 82px;
@@ -493,6 +486,26 @@ html:has(.rh-dialog[open]) .rh-page-toaster { display: none; }
     border-radius: 14px;
     box-shadow: none;
   }
+  .rh-result-nav {
+    position: sticky;
+    z-index: 15;
+    inset-block-start: 0;
+    display: flex;
+    flex-wrap: wrap;
+    margin-block: 0 12px;
+    gap: 2px;
+    background: var(--rh-bg);
+    border-bottom: 1px solid var(--rh-edge);
+  }
+  .rh-result-nav a, .rh-result-nav button {
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+    padding-inline: 6px;
+    color: var(--rh-info);
+    font-size: 0.75rem;
+  }
+  .rh-result-heading { scroll-margin-block-start: 56px; }
   .rh-album-meta { min-height: 78px; }
   .rh-catalog-grid { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .rh-catalog-card {

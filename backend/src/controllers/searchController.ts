@@ -10,16 +10,22 @@ import type { AlbumWithArtist } from '../types';
 const normalize = (str: string) => str.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 export const search = asyncHandler(async (req: Request, res: Response) => {
-  const { q } = req.query;
+  const { q, scope, shelf } = req.query;
 
-  if (!q || typeof q !== 'string') {
+  if (typeof q !== 'string' || !q.trim()) {
     throw new AppError('Search query is required', 400);
+  }
+  if (scope !== undefined && scope !== 'saved' && scope !== 'catalog') {
+    throw new AppError('Invalid search scope', 400);
+  }
+  if (shelf !== undefined && shelf !== 'collection' && shelf !== 'wishlist') {
+    throw new AppError('Invalid search shelf', 400);
   }
 
   const query = q.trim();
 
-  // 1. Search local collection
-  const localResult = await pool.query<AlbumWithArtist>(`
+  // Saved-album searches must not wait for an external provider.
+  const local = scope === 'catalog' ? [] : (await pool.query<AlbumWithArtist>(`
     SELECT
       albums.*,
       artists.name as artist_name,
@@ -33,16 +39,19 @@ export const search = asyncHandler(async (req: Request, res: Response) => {
     FROM collections
     JOIN albums ON collections.album_id = albums.id
     JOIN artists ON albums.artist_id = artists.id
-    WHERE
+    WHERE ($2::text IS NULL OR collections.status = $2) AND (
       artists.name ILIKE '%' || $1 || '%'
       OR albums.title ILIKE '%' || $1 || '%'
       OR similarity(artists.name, $1) > 0.3
       OR similarity(albums.title, $1) > 0.3
+    )
     ORDER BY match_score DESC
     LIMIT 20
-  `, [query]);
+  `, [query, shelf ?? null])).rows;
 
-  const local = localResult.rows;
+  if (scope === 'saved') {
+    return res.json({ local, discogs: [], errors: [] });
+  }
 
   // 2. Search MusicBrainz & Discogs
   let externalResults: any[] = [];
@@ -116,7 +125,7 @@ export const search = asyncHandler(async (req: Request, res: Response) => {
           };
 
           artistReleases.forEach(r => addUniqueDiscogs(r, true));
-          generalResults.forEach(r => addUniqueDiscogs(r, false));
+          generalResults.forEach(r => addUniqueDiscogs({ ...r, discogsListing: 'release' }, false));
           return mergedDiscogs;
         };
         discogsResults = await withTimeout(discogsSearchPromise(), 5000, 'Discogs');
