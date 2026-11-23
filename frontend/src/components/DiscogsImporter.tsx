@@ -13,18 +13,22 @@ const secondaryAction = 'rounded-lg border border-gray-300 bg-gray-100 px-3 py-2
 
 interface DiscogsImporterProps {
   open: boolean;
+  onOpen: () => void;
   onClose: () => void;
   onSuccess: () => void;
+  onImportingChange: (importing: boolean) => void;
   viewMode: Shelf;
 }
 
-export const DiscogsImporter = ({ open, onClose, onSuccess, viewMode }: DiscogsImporterProps) => {
+export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingChange, viewMode }: DiscogsImporterProps) => {
   const [fetchStatus, setFetchStatus] = useState<'idle' | 'loading' | 'ready' | 'error' | 'connection-error'>('idle');
   const [albums, setAlbums] = useState<DiscogsAlbum[]>([]);
   const [outcomes, setOutcomes] = useState<Partial<Record<number, ImportOutcome>>>({});
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [stopping, setStopping] = useState(false);
   const [stopped, setStopped] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(new Set<number>());
+  const [showBackgroundStatus, setShowBackgroundStatus] = useState(false);
   const operationInProgress = useRef(false);
   const stopRequested = useRef(false);
   const busy = fetchStatus === 'loading' || progress !== null;
@@ -35,6 +39,8 @@ export const DiscogsImporter = ({ open, onClose, onSuccess, viewMode }: DiscogsI
     setFetchStatus('loading');
     try {
       const result = await api.importDiscogsCollection();
+      const availableIds = new Set(result.albums.map(album => album.discogsId));
+      setSelectedIds(previous => new Set([...previous].filter(id => availableIds.has(id))));
       setAlbums(previous => {
         const rows = new Map<number, DiscogsAlbum>();
         for (const album of previous) {
@@ -54,6 +60,7 @@ export const DiscogsImporter = ({ open, onClose, onSuccess, viewMode }: DiscogsI
   const importRecords = async (jobs: ImportJob[]) => {
     if (operationInProgress.current || jobs.length === 0) return;
     operationInProgress.current = true;
+    onImportingChange(true);
     stopRequested.current = false;
     setStopped(false);
     let refreshLibrary = false;
@@ -82,18 +89,23 @@ export const DiscogsImporter = ({ open, onClose, onSuccess, viewMode }: DiscogsI
           if (status === 'skipped') refreshLibrary = true;
         }
         setOutcomes(previous => ({ ...previous, [albumId]: { destination, status } }));
+        setSelectedIds(previous => {
+          const next = new Set(previous);
+          next.delete(albumId);
+          return next;
+        });
       }
     } finally {
       operationInProgress.current = false;
       setProgress(null);
       setStopping(false);
+      onImportingChange(false);
       if (refreshLibrary) onSuccess();
     }
   };
 
-  if (!open) return null;
-
   const remaining = albums.filter(album => !outcomes[album.discogsId]);
+  const selected = remaining.filter(album => selectedIds.has(album.discogsId));
   const retryJobs = albums.flatMap(album => {
     const outcome = outcomes[album.discogsId];
     return outcome?.status === 'failed' ? [{ album, destination: outcome.destination }] : [];
@@ -106,13 +118,36 @@ export const DiscogsImporter = ({ open, onClose, onSuccess, viewMode }: DiscogsI
     retryJobs.length ? `${retryJobs.length} failed` : null,
   ].filter(Boolean).join(' · ');
   const destination = shelfNames[viewMode];
+  const progressText = progress
+    ? `Importing ${progress.current} of ${progress.total} to ${shelfNames[progress.destination]}…`
+    : null;
+  const close = () => {
+    setShowBackgroundStatus(progress !== null);
+    onClose();
+  };
+
+  if (!open) {
+    if (!showBackgroundStatus) return null;
+    return (
+      <aside className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-gray-300 bg-white p-3" aria-label="Discogs import status">
+        <p className="min-w-0 flex-1 basis-44 text-sm font-medium" role="status">
+          {progressText ?? (stopped ? 'Discogs import stopped' : 'Discogs import finished')}
+          {!progress && summary ? ` · ${summary}` : ''}
+        </p>
+        <button type="button" className={secondaryAction} onClick={onOpen}>Reopen Discogs import</button>
+        {!progress && (
+          <button type="button" className="min-h-11 px-2 text-sm text-gray-600" onClick={() => setShowBackgroundStatus(false)}>Dismiss</button>
+        )}
+      </aside>
+    );
+  }
 
   return (
-    <ModalDialog labelledBy="discogs-import-title" onClose={onClose}>
+    <ModalDialog labelledBy="discogs-import-title" onClose={close}>
       <div className="rh-dialog-panel max-w-6xl">
         <div className="rh-dialog-header flex items-center justify-between gap-3 border-b border-gray-200 p-4 sm:p-6">
           <h2 id="discogs-import-title" className="text-xl font-bold text-gray-900">Import from Discogs</h2>
-          <button type="button" onClick={onClose} className="rh-dialog-close" aria-label="Close Discogs import">
+          <button type="button" onClick={close} className="rh-dialog-close" aria-label="Close Discogs import">
             <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -151,11 +186,9 @@ export const DiscogsImporter = ({ open, onClose, onSuccess, viewMode }: DiscogsI
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="flex-1 basis-52 space-y-1">
                   <p className="text-sm font-medium text-gray-900" role="status">
-                    {progress
-                      ? `Importing ${progress.current} of ${progress.total} to ${shelfNames[progress.destination]}…`
-                      : fetchStatus === 'loading'
-                        ? 'Refreshing Discogs collection…'
-                        : summary || `${remaining.length} ${remaining.length === 1 ? 'record' : 'records'} available`}
+                    {progressText ?? (fetchStatus === 'loading'
+                      ? 'Refreshing Discogs collection…'
+                      : summary || `${remaining.length} ${remaining.length === 1 ? 'record' : 'records'} available`)}
                   </p>
                   <p className="text-sm text-gray-600" role="status">
                     {stopping ? 'The current record will finish, then the import will stop.'
@@ -166,14 +199,20 @@ export const DiscogsImporter = ({ open, onClose, onSuccess, viewMode }: DiscogsI
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {remaining.length > 0 && (
-                    <button
-                      type="button"
-                      className={primaryAction}
-                      onClick={() => importRecords(remaining.map(album => ({ album, destination: viewMode })))}
-                      disabled={busy}
-                    >
-                      Import {remaining.length} {remaining.length === 1 ? 'record' : 'records'} to {destination}
-                    </button>
+                    <>
+                      <button type="button" className={secondaryAction} disabled={busy}
+                        onClick={() => setSelectedIds(selected.length === remaining.length
+                          ? new Set()
+                          : new Set(remaining.map(album => album.discogsId)))}>
+                        {selected.length === remaining.length ? 'Clear selection' : `Select all (${remaining.length})`}
+                      </button>
+                      <button type="button" className={primaryAction} disabled={busy || !selected.length}
+                        onClick={() => importRecords(selected.map(album => ({ album, destination: viewMode })))}>
+                        {selected.length
+                          ? `Import ${selected.length} ${selected.length === 1 ? 'record' : 'records'} to ${destination}`
+                          : 'Import selected records'}
+                      </button>
+                    </>
                   )}
                   {retryJobs.length > 0 && (
                     <button type="button" className={secondaryAction} onClick={() => importRecords(retryJobs)} disabled={busy}>
@@ -228,15 +267,28 @@ export const DiscogsImporter = ({ open, onClose, onSuccess, viewMode }: DiscogsI
                         ) : (
                           <>
                             {isRetry && <p className="mb-2 break-words text-sm text-red-600">Import to {shelfNames[outcome.destination]} failed</p>}
-                            <button
-                              type="button"
-                              className={`w-full ${isRetry ? secondaryAction : primaryAction}`}
-                              onClick={() => importRecords([{ album, destination: outcome?.destination ?? viewMode }])}
-                              disabled={busy}
-                              aria-label={`${isRetry ? 'Retry import of' : 'Import'} ${album.album}`}
-                            >
-                              {isImporting ? 'Importing…' : isRetry ? 'Retry' : 'Import'}
-                            </button>
+                            {isRetry ? (
+                              <button type="button" className={`w-full ${secondaryAction}`}
+                                onClick={() => importRecords([{ album, destination: outcome.destination }])}
+                                disabled={busy} aria-label={`Retry import of ${album.album}`}>
+                                {isImporting ? 'Importing…' : 'Retry'}
+                              </button>
+                            ) : (
+                              <label className="flex min-h-11 items-center gap-2 rounded-lg border border-gray-300 px-2 py-1.5 text-sm font-medium">
+                                <input type="checkbox" checked={selectedIds.has(album.discogsId)} disabled={busy}
+                                  aria-label={`Select ${album.album} by ${album.artist}`}
+                                  onChange={event => {
+                                    const checked = event.currentTarget.checked;
+                                    setSelectedIds(previous => {
+                                      const next = new Set(previous);
+                                      if (checked) next.add(album.discogsId);
+                                      else next.delete(album.discogsId);
+                                      return next;
+                                    });
+                                  }} />
+                                {isImporting ? 'Importing…' : 'Select'}
+                              </label>
+                            )}
                           </>
                         )}
                       </div>

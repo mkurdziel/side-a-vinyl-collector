@@ -32,6 +32,25 @@ export interface SearchResult {
   local: Album[];
   discogs: DiscogsAlbum[];
   errors?: string[];
+  nextOffset?: number;
+  catalogSampled?: boolean;
+}
+
+export interface BackupManifest {
+  timestamp: string | null;
+  albums: number;
+  collection: number;
+  wishlist: number;
+  artwork: number;
+  barcodes: number;
+  warnings: string[];
+}
+
+export interface BackupOutcome {
+  message: string;
+  stats: { albums: number; artwork: number; barcodes: number };
+  warnings: string[];
+  skippedArtwork: { album: string; reason: string }[];
 }
 
 export interface DiscogsAlbum {
@@ -48,7 +67,6 @@ export interface DiscogsAlbum {
   inWishlist?: boolean;
   existingAlbumId?: number | null;
   fromProvider?: string;
-  confidence?: number;
 }
 
 export interface SearchCoverArtResult {
@@ -72,7 +90,7 @@ class ApiService {
   private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
     const response = await fetch(`${API_URL}${endpoint}`, {
       ...options,
-      headers: {
+      headers: options?.body instanceof FormData ? options.headers : {
         'Content-Type': 'application/json',
         ...options?.headers,
       },
@@ -89,6 +107,10 @@ class ApiService {
 
   async getAlbums(status: 'collection' | 'wishlist' = 'collection', signal?: AbortSignal): Promise<{ albums: Album[] }> {
     return this.request(`/api/albums?status=${status}`, { signal });
+  }
+
+  async getAlbum(id: number): Promise<{ album: Album }> {
+    return this.request(`/api/albums/${id}`);
   }
 
   async addAlbum(data: {
@@ -125,11 +147,36 @@ class ApiService {
     });
   }
 
-  async search(query: string, signal?: AbortSignal, scope?: 'saved' | 'catalog', shelf?: Album['status']): Promise<SearchResult> {
+  async search(query: string, signal?: AbortSignal, scope?: 'saved' | 'catalog', shelf?: Album['status'], offset?: number, sort?: 'title' | 'artist' | 'date'): Promise<SearchResult> {
     const params = new URLSearchParams({ q: query });
     if (scope) params.set('scope', scope);
     if (shelf) params.set('shelf', shelf);
+    if (offset !== undefined) params.set('offset', String(offset));
+    if (sort && scope === 'saved') params.set('sort', sort);
     return this.request(`/api/search?${params}`, { signal });
+  }
+
+  private uploadBackup<T>(action: 'preview' | 'import', file: File): Promise<T> {
+    const body = new FormData();
+    body.append('backup', file);
+    return this.request(`/api/backup/${action}`, { method: 'POST', body });
+  }
+
+  previewBackup(file: File): Promise<BackupManifest> {
+    return this.uploadBackup('preview', file);
+  }
+
+  restoreBackup(file: File): Promise<BackupOutcome> {
+    return this.uploadBackup('import', file);
+  }
+
+  async exportBackup(): Promise<{ blob: Blob; filename: string }> {
+    const response = await fetch(`${API_URL}/api/backup/export`);
+    if (!response.ok || !response.headers.get('Content-Type')?.includes('application/zip')) {
+      throw new Error('Could not download the backup. Try again.');
+    }
+    const filename = response.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1] ?? 'vinyl-backup.zip';
+    return { blob: await response.blob(), filename };
   }
 
   async scanBarcode(barcode: string): Promise<{

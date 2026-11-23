@@ -20,7 +20,7 @@ const albums = [
   { id: 2, discogsId: 2, artist: 'Portishead', album: 'Third' },
   { id: 3, discogsId: 3, artist: 'Portishead', album: 'Roseland NYC Live' },
 ];
-const importerProps = { open: true, onClose: vi.fn(), onSuccess: vi.fn(), viewMode: 'collection' as const };
+const importerProps = { open: true, onOpen: vi.fn(), onClose: vi.fn(), onSuccess: vi.fn(), onImportingChange: vi.fn(), viewMode: 'collection' as const };
 let renderer: ReturnType<typeof create>;
 
 function findButton(label: string) {
@@ -58,6 +58,7 @@ describe('Discogs import', () => {
       .mockRejectedValueOnce(new ApiError('Album already in collection/wishlist', 409))
       .mockRejectedValueOnce(new ApiError('Service unavailable', 503));
     await loadCollection();
+    await act(async () => findButton('Select all (3)').props.onClick());
     await act(async () => findButton('Import 3 records to Collection').props.onClick());
 
     expect(content()).toContain('1 imported · 1 already in your library · 1 failed');
@@ -83,6 +84,7 @@ describe('Discogs import', () => {
     const firstAlbum = Promise.withResolvers<object>();
     addAlbum.mockReturnValueOnce(firstAlbum.promise);
     await loadCollection();
+    await act(async () => findButton('Select all (3)').props.onClick());
     const run = findButton('Import 3 records to Collection').props.onClick;
     await act(async () => {
       void run();
@@ -90,9 +92,13 @@ describe('Discogs import', () => {
     });
     expect(addAlbum).toHaveBeenCalledOnce();
     expect(content()).toContain('Importing 1 of 3 to Collection…');
-    expect(findButton('Import Third').props.disabled).toBe(true);
+    expect(renderer.root.findByProps({ 'aria-label': 'Select Third by Portishead' }).props.disabled).toBe(true);
 
+    await act(async () => findButton('Close Discogs import').props.onClick());
     await act(async () => renderer.update(createElement(DiscogsImporter, { ...importerProps, open: false, viewMode: 'wishlist' })));
+    expect(content()).toContain('Importing 1 of 3 to Collection…');
+    await act(async () => findButton('Reopen Discogs import').props.onClick());
+    expect(importerProps.onOpen).toHaveBeenCalledOnce();
     await act(async () => renderer.update(createElement(DiscogsImporter, { ...importerProps, viewMode: 'wishlist' })));
     expect(content()).toContain('Importing 1 of 3 to Collection…');
     await act(async () => firstAlbum.resolve({}));
@@ -108,6 +114,7 @@ describe('Discogs import', () => {
     const first = Promise.withResolvers<object>();
     addAlbum.mockReturnValueOnce(first.promise);
     await loadCollection();
+    await act(async () => findButton('Select all (3)').props.onClick());
     await act(async () => { void findButton('Import 3 records to Collection').props.onClick(); });
     await act(async () => findButton('Stop after current record').props.onClick());
     await act(async () => first.resolve({}));
@@ -116,6 +123,16 @@ describe('Discogs import', () => {
     expect(content()).toContain('Import stopped.');
     expect(content()).toContain('Imported to Collection');
     expect(findButton('Import 2 records to Collection').props.disabled).toBe(false);
+  });
+
+  it('imports only the checked subset', async () => {
+    await loadCollection();
+    expect(findButton('Import selected records').props.disabled).toBe(true);
+    await act(async () => renderer.root.findByProps({ 'aria-label': 'Select Third by Portishead' }).props.onChange({ currentTarget: { checked: true } }));
+    await act(async () => findButton('Import 1 record to Collection').props.onClick());
+    expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ discogsId: 2, status: 'collection' }));
+    expect(content()).toContain('1 imported');
+    expect(renderer.root.findByProps({ 'aria-label': 'Select Dummy by Portishead' }).props.checked).toBe(false);
   });
 
   it('gives server setup instructions only when configuration is missing', async () => {

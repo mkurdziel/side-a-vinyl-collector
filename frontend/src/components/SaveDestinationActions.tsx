@@ -8,9 +8,11 @@ interface SaveDestinationActionsProps {
   preferred: Shelf;
   existingStatus?: Shelf;
   canMove?: boolean;
+  primaryOnly?: boolean;
   pending?: DestinationAction;
   disabled?: boolean;
   onSelect: (action: DestinationAction) => void;
+  onOpenSaved?: () => void;
 }
 
 interface DestinationChoice {
@@ -19,12 +21,13 @@ interface DestinationChoice {
 }
 
 export function SaveDestinationActions({
-  albumTitle, preferred, existingStatus, canMove, pending, disabled, onSelect,
+  albumTitle, preferred, existingStatus, canMove, primaryOnly, pending, disabled, onSelect, onOpenSaved,
 }: SaveDestinationActionsProps) {
   const alternative = preferred === 'collection' ? 'wishlist' : 'collection';
   const choices: DestinationChoice[] = existingStatus
     ? [{ shelf: existingStatus }]
-    : [{ shelf: preferred, action: preferred }, { shelf: alternative, action: alternative }];
+    : [{ shelf: preferred, action: preferred }];
+  if (!existingStatus && !primaryOnly) choices.push({ shelf: alternative, action: alternative });
 
   if (existingStatus === 'wishlist' && canMove) choices.push({ shelf: 'collection', action: 'move' });
 
@@ -61,6 +64,13 @@ export function SaveDestinationActions({
           </button>
         );
       })}
+      {onOpenSaved && (
+        <button type="button" disabled={!!pending || !!disabled}
+          className="min-h-11 rounded-lg px-2 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-100"
+          aria-label={`Open saved album — ${albumTitle}`} onClick={onOpenSaved}>
+          Open saved album
+        </button>
+      )}
     </div>
   );
 }

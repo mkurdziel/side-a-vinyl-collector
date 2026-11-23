@@ -2,21 +2,22 @@ import { createElement } from 'react';
 import { act, create } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { analyzeImage, addAlbum, updateStatus } = vi.hoisted(() => ({
-  analyzeImage: vi.fn(), addAlbum: vi.fn(), updateStatus: vi.fn(),
+const { analyzeImage, addAlbum } = vi.hoisted(() => ({
+  analyzeImage: vi.fn(), addAlbum: vi.fn(),
 }));
 vi.mock('react-hot-toast', () => ({
   toast: Object.assign(vi.fn(), { loading: vi.fn(), success: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../src/services/api', () => ({ default: { analyzeImage, addAlbum, updateStatus } }));
+vi.mock('../src/services/api', () => ({ default: { analyzeImage, addAlbum } }));
 import { ImageUploader } from '../src/components/ImageUploader';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let renderer: ReturnType<typeof create> | undefined;
-const props = { onClose: vi.fn(), onSuccess: vi.fn(), viewMode: 'collection' as const };
+const props = { onClose: vi.fn(), onSuccess: vi.fn(), onSearchByName: vi.fn(), onMoveSaved: vi.fn(), onOpenSaved: vi.fn(), viewMode: 'collection' as const };
 
 beforeEach(() => {
   vi.resetAllMocks();
+  props.onMoveSaved.mockResolvedValue(true);
   vi.stubGlobal('FileReader', class {
     result = 'data:application/octet-stream;base64,example';
     onload?: () => void;
@@ -81,7 +82,21 @@ describe('album image uploads', () => {
     expect(labels).toContain('Roseland NYC Live is in Collection');
     expect(labels.filter(label => label?.startsWith('Move '))).toEqual(['Move Dummy to Collection']);
     await act(async () => renderer!.root.findByProps({ 'aria-label': 'Move Dummy to Collection' }).props.onClick());
-    expect(updateStatus).toHaveBeenCalledExactlyOnceWith(23, 'collection');
+    expect(props.onMoveSaved).toHaveBeenCalledExactlyOnceWith(23, 'Dummy');
     expect(addAlbum).not.toHaveBeenCalled();
+  });
+
+  it('labels confidence once and prefills name search when no albums match', async () => {
+    analyzeImage.mockResolvedValueOnce({
+      extractedText: { artist: 'Portishead', album: 'Dummy', confidence: 95 },
+      discogsMatches: [],
+    });
+    await upload({ name: 'cover.jpg', type: 'image/jpeg', size: 1024 });
+    const copy = JSON.stringify(renderer!.toJSON());
+    expect(copy).toContain('Text recognition confidence');
+    expect(copy).not.toContain('% match');
+    const search = renderer!.root.findAllByType('button').find(node => node.children.join('') === 'Search by name')!;
+    await act(async () => search.props.onClick());
+    expect(props.onSearchByName).toHaveBeenCalledExactlyOnceWith('Portishead Dummy');
   });
 });

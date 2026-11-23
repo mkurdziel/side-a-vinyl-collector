@@ -3,6 +3,7 @@ import visionService from '../services/vision';
 import discogsService from '../services/discogs';
 import { annotateCatalogMembership } from '../services/catalogMembership';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
+import type { DiscogsAlbum } from '../types';
 
 export const analyzeImage = asyncHandler(async (req: Request, res: Response) => {
   const { image } = req.body;
@@ -19,7 +20,7 @@ export const analyzeImage = asyncHandler(async (req: Request, res: Response) => 
   }
 
   // Search Discogs with extracted information
-  const matchesMap = new Map<number, any>(); // Track by discogsId to avoid duplicates
+  const matchesMap = new Map<number, DiscogsAlbum & { fromProvider?: string }>();
 
   // Search with primary result
   if (extractedText.artist || extractedText.album) {
@@ -29,9 +30,9 @@ export const analyzeImage = asyncHandler(async (req: Request, res: Response) => 
 
     try {
       const matches = await discogsService.searchByQuery(searchQuery, 5);
-      matches.forEach((match: any) => {
+      matches.forEach(match => {
         if (!matchesMap.has(match.discogsId)) {
-          matchesMap.set(match.discogsId, { ...match, fromProvider: extractedText.provider, confidence: extractedText.confidence });
+          matchesMap.set(match.discogsId, { ...match, fromProvider: extractedText.provider });
         }
       });
     } catch (error) {
@@ -40,8 +41,9 @@ export const analyzeImage = asyncHandler(async (req: Request, res: Response) => 
   }
 
   // If fallback was used and returned different results, search with those too
-  if (extractedText.primaryResult && (extractedText.primaryResult.artist || extractedText.primaryResult.album)) {
-    const primarySearchQuery = [extractedText.primaryResult.artist, extractedText.primaryResult.album]
+  const primary = extractedText.primaryResult;
+  if (primary && (primary.artist || primary.album)) {
+    const primarySearchQuery = [primary.artist, primary.album]
       .filter(Boolean)
       .join(' ');
 
@@ -50,9 +52,9 @@ export const analyzeImage = asyncHandler(async (req: Request, res: Response) => 
     if (primarySearchQuery.toLowerCase() !== mainQuery.toLowerCase()) {
       try {
         const primaryMatches = await discogsService.searchByQuery(primarySearchQuery, 5);
-        primaryMatches.forEach((match: any) => {
+        primaryMatches.forEach(match => {
           if (!matchesMap.has(match.discogsId)) {
-            matchesMap.set(match.discogsId, { ...match, fromProvider: extractedText.primaryResult!.provider, confidence: extractedText.primaryResult!.confidence });
+            matchesMap.set(match.discogsId, { ...match, fromProvider: primary.provider });
           }
         });
       } catch (error) {

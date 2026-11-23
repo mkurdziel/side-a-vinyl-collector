@@ -48,6 +48,22 @@ class StorageService {
     return filename;
   }
 
+  async saveRestoredCoverArt(image: Buffer, extension: string): Promise<string> {
+    await this.ensureStorageDir();
+    // A rolled-back restore must never overwrite an existing album's artwork.
+    const name = `restore-${crypto.randomUUID()}${extension}`;
+    const filename = this.getFullPath(name);
+    try {
+      await fs.writeFile(filename, image, { flag: 'wx' });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        await fs.rm(filename, { force: true }).catch(() => {});
+      }
+      throw error;
+    }
+    return name;
+  }
+
   /**
    * Get full path to cover art file
    */

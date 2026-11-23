@@ -1,181 +1,179 @@
-import { useState, useRef } from 'react';
-import { toast } from 'react-hot-toast';
+import { useRef, useState } from 'react';
+import api, { ApiError, type BackupManifest, type BackupOutcome } from '../services/api';
 import { ModalDialog } from './ModalDialog';
 
 interface SettingsModalProps {
-  isOpen: boolean;
   onClose: () => void;
+  onRestore: () => void;
+  restoreBlocked: boolean;
 }
 
-export const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
-  const [isImporting, setIsImporting] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+type Review = { file: File; manifest: BackupManifest };
 
-  if (!isOpen) return null;
+const secondary = 'min-h-11 rounded-lg border border-gray-300 bg-gray-100 px-3 text-sm font-semibold text-gray-900 hover:bg-gray-50 disabled:opacity-60';
 
-  const handleExport = async () => {
-    try {
-      toast.loading('Preparing backup...', { id: 'export' });
-      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
-      
-      // We can't use fetch for download easily if we want to trigger browser download behavior
-      // A simple window.location.href or opening in new tab is easiest for GET downloads
-      // But we can also fetch as blob and create object URL
-      
-      const response = await fetch(`${API_URL}/api/backup/export`);
-      if (!response.ok) throw new Error('Export failed');
-      
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      // Extract filename from header if possible, or generate default
-      const disposition = response.headers.get('Content-Disposition');
-      let filename = 'vinyl-backup.zip';
-      if (disposition && disposition.indexOf('attachment') !== -1) {
-        const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
-        const matches = filenameRegex.exec(disposition);
-        if (matches != null && matches[1]) { 
-          filename = matches[1].replace(/['"]/g, '');
-        }
-      }
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-      
-      toast.success('Backup downloaded successfully', { id: 'export' });
-    } catch (error) {
-      console.error(error);
-      toast.error('Failed to export data', { id: 'export' });
-    }
+export function SettingsModal({ onClose, onRestore, restoreBlocked }: SettingsModalProps) {
+  const [busy, setBusy] = useState<'preview' | 'restore' | 'export' | null>(null);
+  const [review, setReview] = useState<Review | null>(null);
+  const [outcome, setOutcome] = useState<BackupOutcome | null>(null);
+  const [error, setError] = useState('');
+  const [downloaded, setDownloaded] = useState(false);
+  const operation = useRef(false);
+
+  const close = () => {
+    if (!operation.current) onClose();
   };
 
-  const handleImportClick = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    // Reset input
-    e.target.value = '';
-
-    if (!confirm('WARNING: Importing a backup will overwrite ALL existing data. This cannot be undone. Are you sure?')) {
-      return;
-    }
-
-    setIsImporting(true);
-    const toastId = toast.loading('Restoring backup... This may take a while.');
-
+  const exportBackup = async () => {
+    if (operation.current) return;
+    operation.current = true;
+    setBusy('export');
+    setError('');
+    setDownloaded(false);
     try {
-      const formData = new FormData();
-      formData.append('backup', file);
-
-      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
-      const response = await fetch(`${API_URL}/api/backup/import`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || 'Import failed');
-      }
-
-      toast.success(`Backup restored! ${data.stats?.albums || 0} albums restored.`, { id: toastId });
-      
-      // Ideally reload page to refresh data
-      setTimeout(() => {
-        window.location.reload();
-      }, 2000);
-
-    } catch (error) {
-      console.error(error);
-      toast.error(error instanceof Error ? error.message : 'Failed to import backup', { id: toastId });
+      const { blob, filename } = await api.exportBackup();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setDownloaded(true);
+    } catch {
+      setError('Could not download the backup. Try again.');
     } finally {
-      setIsImporting(false);
+      operation.current = false;
+      setBusy(null);
+    }
+  };
+
+  const chooseFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (!file || operation.current) return;
+    operation.current = true;
+    setBusy('preview');
+    setReview(null);
+    setOutcome(null);
+    setError('');
+    try {
+      setReview({ file, manifest: await api.previewBackup(file) });
+    } catch (failure) {
+      setError(failure instanceof ApiError && failure.status < 500 ? failure.message : 'Could not review the backup. Try choosing the file again.');
+    } finally {
+      operation.current = false;
+      setBusy(null);
+    }
+  };
+
+  const restore = async () => {
+    if (!review || operation.current || restoreBlocked) return;
+    operation.current = true;
+    setBusy('restore');
+    setError('');
+    setDownloaded(false);
+    try {
+      setOutcome(await api.restoreBackup(review.file));
+      setReview(null);
+      onRestore();
+    } catch (failure) {
+      setError(failure instanceof ApiError && failure.status < 500 ? failure.message : 'Could not verify the restore outcome. Check your library before trying again.');
+    } finally {
+      operation.current = false;
+      setBusy(null);
     }
   };
 
   return (
-    <ModalDialog labelledBy="settings-title" onClose={onClose}>
-      <div className="rh-dialog-panel max-w-lg">
-        <div className="rh-dialog-header flex items-center justify-between p-4 sm:p-6 border-b border-gray-200">
-          <h2 id="settings-title" className="text-xl font-bold text-gray-900">Settings</h2>
-          <button onClick={onClose} className="rh-dialog-close" aria-label="Close settings">
-            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
+    <ModalDialog labelledBy="settings-title" onClose={close}>
+      <div className="rh-dialog-panel max-w-xl">
+        <header className="rh-dialog-header flex items-center justify-between gap-2 border-b border-gray-200 px-4 py-3 sm:px-6">
+          <h2 id="settings-title" className="text-xl font-bold">Library settings</h2>
+          <button type="button" className={secondary} onClick={close} disabled={!!busy}>Close</button>
+        </header>
 
-        <div className="p-4 sm:p-6 space-y-6">
-          {/* Data Management Section */}
-          <div>
-            <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
-              </svg>
-              Data Management
-            </h3>
-            
-            <div className="bg-gray-50 rounded-lg p-4 space-y-4 border border-gray-200">
-              <div className="flex items-center justify-between gap-3">
+        <div className="space-y-5 p-4 sm:p-6">
+          <section aria-labelledby="backup-title">
+            <h3 id="backup-title" className="font-semibold">Export backup</h3>
+            <p className="mt-1 text-sm text-gray-600">Download a ZIP of your shelves, notes, barcode mappings, album data and locally available artwork.</p>
+            <button type="button" className={`mt-3 ${secondary}`} onClick={exportBackup} disabled={!!busy}>
+              {busy === 'export' ? 'Preparing backup…' : 'Download current backup'}
+            </button>
+            {downloaded && <p className="mt-2 text-sm text-gray-600" role="status">Backup download started.</p>}
+          </section>
+
+          <section className="border-t border-gray-200 pt-5" aria-labelledby="restore-title">
+            <h3 id="restore-title" className="font-semibold">Restore from a backup</h3>
+            <p className="mt-1 text-sm text-gray-600">Choose a ZIP to review it first. Restoring replaces your current shelves, notes and barcode mappings.</p>
+            <label className="mt-3 block text-sm font-medium">
+              Backup ZIP
+              <input
+                type="file"
+                accept=".zip,application/zip"
+                onChange={chooseFile}
+                disabled={!!busy}
+                className="mt-1 block min-h-11 w-full min-w-0 rounded-lg border border-gray-300 p-2 text-sm"
+              />
+            </label>
+
+            {busy === 'preview' && <p role="status" className="mt-3 text-sm">Reading backup…</p>}
+            {review && (
+              <div className="mt-4 space-y-3 rounded-xl border border-gray-300 p-3 sm:p-4">
                 <div>
-                  <p className="font-medium text-gray-900">Export Data</p>
-                  <p className="text-sm text-gray-500">Download a full backup of your collection and artwork.</p>
+                  <h4 className="font-semibold [overflow-wrap:anywhere]">{review.file.name}</h4>
+                  <p className="text-sm text-gray-600">
+                    {review.manifest.timestamp
+                      ? `Exported ${new Date(review.manifest.timestamp).toLocaleString()}`
+                      : 'Export date unavailable'}
+                  </p>
                 </div>
-                <button
-                  onClick={handleExport}
-                  className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition-colors shadow-sm"
-                >
-                  Export
-                </button>
-              </div>
-
-              <div className="border-t border-gray-200 pt-4 flex items-center justify-between gap-3">
-                <div>
-                  <p className="font-medium text-gray-900">Import Data</p>
-                  <p className="text-sm text-gray-500">Restore your collection from a backup file.</p>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                  {[
+                    ['Collection', review.manifest.collection],
+                    ['Wishlist', review.manifest.wishlist],
+                    ['Barcode mappings', review.manifest.barcodes],
+                    ['Artwork available', review.manifest.artwork],
+                  ].map(([label, count]) => (
+                    <div key={label} className="flex items-baseline justify-between gap-2">
+                      <dt>{label}</dt><dd className="font-semibold tabular-nums">{count}</dd>
+                    </div>
+                  ))}
+                </dl>
+                {review.manifest.warnings.map(warning => <p key={warning} className="text-sm text-red-600">{warning}</p>)}
+                <p className="text-sm font-semibold">This replaces the current library. Download a current backup first if you want to keep a copy.</p>
+                {restoreBlocked && <p className="text-sm" role="status">Wait for the Discogs import to finish before restoring.</p>}
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => { setReview(null); setError(''); }} className={secondary} disabled={!!busy}>Cancel restore</button>
+                  <button type="button" onClick={restore} disabled={!!busy || restoreBlocked} aria-busy={busy === 'restore'}
+                    className="rh-filled-action min-h-11 rounded-lg bg-red-600 px-3 text-sm font-semibold disabled:opacity-60">
+                    {busy === 'restore' ? 'Restoring…' : 'Replace library with this backup'}
+                  </button>
                 </div>
-                <button
-                  onClick={handleImportClick}
-                  disabled={isImporting}
-                  className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium text-red-600 hover:bg-red-50 hover:text-red-700 transition-colors shadow-sm disabled:opacity-50"
-                >
-                  {isImporting ? 'Importing...' : 'Import'}
-                </button>
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  className="hidden"
-                  accept=".zip"
-                  onChange={handleFileChange}
-                />
               </div>
-            </div>
-            <p className="mt-3 text-xs text-amber-600 bg-amber-50 p-3 rounded border border-amber-100 flex items-start gap-2 leading-relaxed">
-              <svg className="size-4 shrink-0" aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3Z" />
-              </svg>
-              <span>Importing a backup will <strong>overwrite all existing data</strong>. Verify the backup before continuing.</span>
-            </p>
-          </div>
-        </div>
-
-        <div className="p-6 border-t border-gray-200 flex justify-end">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium transition-colors"
-          >
-            Close
-          </button>
+            )}
+            {outcome && (
+              <div role="status" className="mt-4 space-y-2 rounded-xl border border-gray-300 p-3 text-sm">
+                <h4 className="font-semibold">{outcome.message}</h4>
+                <ul className="space-y-1">
+                  <li>Albums restored · {outcome.stats.albums}</li>
+                  <li>Barcode mappings restored · {outcome.stats.barcodes}</li>
+                  <li>Artwork files restored · {outcome.stats.artwork}</li>
+                </ul>
+                {outcome.warnings.map(warning => <p key={warning}>{warning}</p>)}
+                {outcome.skippedArtwork.length > 0 && (
+                  <details>
+                    <summary className="cursor-pointer font-medium">Artwork files skipped · {outcome.skippedArtwork.length}</summary>
+                    <ul className="mt-2 list-disc space-y-1 pl-5">
+                      {outcome.skippedArtwork.map(({ album, reason }, index) => <li key={index} className="[overflow-wrap:anywhere]">{album} · {reason}</li>)}
+                    </ul>
+                  </details>
+                )}
+              </div>
+            )}
+          </section>
+          {!!error && <p role="alert" className="text-sm text-red-600">{error}</p>}
         </div>
       </div>
     </ModalDialog>
   );
-};
+}
