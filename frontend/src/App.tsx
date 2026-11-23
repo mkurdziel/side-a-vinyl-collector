@@ -45,6 +45,16 @@ function catalogKey(album: DiscogsAlbum) {
 
 const savedAlbumKey = (id: number) => `saved:${id}`;
 
+function draftForSearch(query: string, detected?: ManualAlbumDraft): ManualAlbumDraft {
+  const text = query.trim();
+  const artist = detected?.artist?.trim();
+  if (artist && text.toLowerCase() === artist.toLowerCase()) return { artist };
+  if (artist && text.toLowerCase().startsWith(`${artist.toLowerCase()} `)) {
+    return { artist, album: text.slice(artist.length).trim().slice(0, 255) };
+  }
+  return { album: text.slice(0, 255) };
+}
+
 function catalogSource(album: DiscogsAlbum): { label: string; type?: string; url?: string } | undefined {
   if (album.source === 'musicbrainz') {
     const validId = album.mbid && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(album.mbid);
@@ -162,7 +172,7 @@ function ShelfActions({ album, detailed = false, showShelf, pending, issue, load
           {inWishlist && move}
           <details className="min-w-0">
             <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-1 rounded-lg px-1 text-xs font-semibold text-gray-600 hover:bg-gray-100"
-              aria-label={`Shelf actions for ${album.title}`}>
+              aria-label={`Shelf actions for ${album.title} by ${album.artist_name}`}>
               Actions
               <svg aria-hidden="true" className="size-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                 <path strokeLinecap="round" strokeWidth="2" d="m6 9 6 6 6-6" />
@@ -186,7 +196,7 @@ function App() {
   const [catalogState, setCatalogState] = useState<SearchState>({ status: 'idle' });
   const [savedLoading, setSavedLoading] = useState(false);
   const [catalogLoading, setCatalogLoading] = useState(false);
-  const [saveShelfOverride, setSaveShelfOverride] = useState<Shelf>();
+  const [saveShelf, setSaveShelf] = useState<Shelf>('collection');
   const [loadingMore, setLoadingMore] = useState<Partial<Record<ResultKind, 'pending' | 'error'>>>({});
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [manualEntry, setManualEntry] = useState<{ draft: ManualAlbumDraft; shelf: Shelf }>();
@@ -222,7 +232,6 @@ function App() {
   const undoButton = useRef<HTMLButtonElement>(null);
 
   const viewMode = shelfRequest.view;
-  const saveShelf = saveShelfOverride ?? viewMode;
   const currentShelf = shelfResult?.request.view === viewMode &&
     (shelfResult.status === 'ready' || shelfResult.request.revision === shelfRequest.revision)
     ? shelfResult
@@ -349,7 +358,7 @@ function App() {
   const changeSearch = (value: string) => {
     latestQuery.current = value;
     setSearchQuery(value);
-    setDetectedDraft(undefined);
+    if (!value.trim()) setDetectedDraft(undefined);
     setSaveErrors({});
     runSearch(value, { delay: 400 });
   };
@@ -361,11 +370,12 @@ function App() {
     if (previous !== view && searchSettings.current.scope === 'shelf') runSearch(latestQuery.current);
   };
 
-  const changeScope = (scope: SearchScope) => {
-    if (searchSettings.current.scope === scope) return;
+  const changeScope = (scope: SearchScope, destination?: Shelf) => {
+    const previous = searchSettings.current.scope;
+    if (scope === 'catalog' && (previous !== scope || destination)) setSaveShelf(destination ?? viewMode);
+    if (previous === scope) return;
     searchSettings.current.scope = scope;
     setSearchScope(scope);
-    if (scope !== 'catalog') setSaveShelfOverride(undefined);
     runSearch(latestQuery.current);
   };
 
@@ -373,14 +383,16 @@ function App() {
     window.requestAnimationFrame(() => searchInput.current?.focus());
   };
 
-  const openNameSearch = (query?: string, draft?: ManualAlbumDraft) => {
+  const openNameSearch = (query?: string, draft?: ManualAlbumDraft, destination?: Shelf) => {
     if (query) {
+      if (searchSettings.current.scope !== 'catalog' || destination) setSaveShelf(destination ?? viewMode);
       searchSettings.current.scope = 'catalog';
       setSearchScope('catalog');
       changeSearch(query);
       setDetectedDraft(draft);
     } else {
-      changeScope('catalog');
+      changeScope('catalog', destination);
+      setDetectedDraft(undefined);
     }
     focusSearch();
   };
@@ -418,6 +430,9 @@ function App() {
                   existingAlbumId: albumId,
                   inCollection: status === 'collection',
                   inWishlist: status === 'wishlist',
+                  existingMatch: match.existingAlbumId === albumId ? match.existingMatch
+                    : match.discogsListing === 'release' && match.discogsId > 0 && match.discogsId === addition?.album.discogs_id
+                      ? 'release' : 'title',
                 }
               : match),
         },
@@ -504,12 +519,27 @@ function App() {
   const moveWishlistAlbum = (albumId: number, title: string) =>
     moveRecord({ albumId, title, from: 'wishlist', to: 'collection' });
 
-  const moveScannedAlbum = async (albumId: number, title: string) => {
+  const moveLookupAlbum = async (albumId: number, title: string) => {
     const moved = await moveWishlistAlbum(albumId, title);
-    if (moved) window.requestAnimationFrame(() => undoButton.current?.focus());
-    else toast.error('Could not move the album. Check its current shelf and try again.');
+    if (!moved) toast.error('Could not move the album. Check its current shelf and try again.');
     return moved;
   };
+
+  const moveScannedAlbum = async (albumId: number, title: string) => {
+    const moved = await moveLookupAlbum(albumId, title);
+    if (moved) window.requestAnimationFrame(() => undoButton.current?.focus());
+    return moved;
+  };
+
+  const undoShelfMove = (albumId: number) => {
+    if (lastShelfMove?.albumId !== albumId) return Promise.resolve(false);
+    return moveRecord({ ...lastShelfMove, from: lastShelfMove.to, to: lastShelfMove.from }, lastShelfMove);
+  };
+
+  const openCatalogManualEntry = () => setManualEntry({
+    draft: draftForSearch(searchQuery, detectedDraft),
+    shelf: saveShelf,
+  });
 
   const openSavedAlbum = async (albumId: number, closeLookup?: () => void, issueKey?: string) => {
     if (openingSavedAlbum.current) return;
@@ -852,11 +882,7 @@ function App() {
                 className={secondaryButton}
                 aria-disabled={!!pendingSaves[savedAlbumKey(lastShelfMove.albumId)] || !!saveErrors[savedAlbumKey(lastShelfMove.albumId)]?.stale}
                 aria-busy={!!pendingSaves[savedAlbumKey(lastShelfMove.albumId)]}
-                onClick={() => void moveRecord({
-                  ...lastShelfMove,
-                  from: lastShelfMove.to,
-                  to: lastShelfMove.from,
-                }, lastShelfMove)}
+                onClick={() => void undoShelfMove(lastShelfMove.albumId)}
               >
                 {pendingSaves[savedAlbumKey(lastShelfMove.albumId)] ? 'Undoing…' : 'Undo'}
               </button>
@@ -931,20 +957,18 @@ function App() {
                 <h2 id="catalog-results-title" tabIndex={-1} className="rh-result-heading text-lg font-semibold">Catalog albums</h2>
                 <p className="text-sm text-gray-600">Open a source listing to check release details.</p>
               </div>
-              <label className="flex max-w-full flex-wrap items-center gap-2 text-sm text-gray-600">
-                Default save shelf
-                <select
-                  value={saveShelfOverride ?? 'shelf'}
-                  onChange={event => {
-                    const value = event.target.value;
-                    setSaveShelfOverride(value === 'collection' || value === 'wishlist' ? value : undefined);
-                  }}
-                  className="min-h-11 rounded-lg border border-gray-300 px-2.5"
-                >
-                  <option value="shelf">Current shelf · {shelfLabel[viewMode]}</option>
-                  {shelves.map(shelf => <option key={shelf} value={shelf}>{shelfLabel[shelf]}</option>)}
-                </select>
-              </label>
+              <div className="rh-catalog-toolbar">
+                <label className="flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-600">
+                  Save catalog albums to
+                  <select id="catalog-save-shelf" value={saveShelf} onChange={event => setSaveShelf(event.target.value as Shelf)}
+                    className="min-h-11 rounded-lg border border-gray-300 px-2.5">
+                    {shelves.map(shelf => <option key={shelf} value={shelf}>{shelfLabel[shelf]}</option>)}
+                  </select>
+                </label>
+                {catalogCount > 0 && (
+                  <button type="button" className="rh-lookup-link" onClick={openCatalogManualEntry}>Add album manually</button>
+                )}
+              </div>
             </div>
             {catalogLoading && <p role="status" className="mb-3 text-sm text-gray-600">Searching catalogs…</p>}
             {(catalogState.status === 'error' || !!catalogResults?.errors?.length) && (
@@ -961,8 +985,7 @@ function App() {
                 {catalogResults && !catalogResults.errors?.length && (
                   <p role="status" className="mb-2 text-sm text-gray-600">No catalog albums match “{searchQuery.trim()}”.</p>
                 )}
-                <button type="button" className={secondaryButton}
-                  onClick={() => setManualEntry({ draft: detectedDraft ?? { album: searchQuery.trim().slice(0, 255) }, shelf: saveShelf })}>
+                <button type="button" className={secondaryButton} onClick={openCatalogManualEntry}>
                   Add album manually
                 </button>
               </div>
@@ -1004,6 +1027,7 @@ function App() {
                             albumTitle={album.album}
                             preferred={saveShelf}
                             existingStatus={savedShelf}
+                            existingMatch={album.existingMatch}
                             canMove={savedShelf === 'wishlist' && albumId != null}
                             pending={pending === 'remove' ? undefined : pending}
                             disabled={pending === 'remove' || !!saveErrors[saveKey]?.stale}
@@ -1101,16 +1125,18 @@ function App() {
       {showBarcodeScanner && (
         <BarcodeScanner
           onClose={() => setShowBarcodeScanner(false)}
-          onSearchByName={() => {
+          onSearchByName={(query, draft) => {
             setShowBarcodeScanner(false);
-            openNameSearch();
+            openNameSearch(query, draft, viewMode);
           }}
-          onMoveSaved={moveScannedAlbum}
+          onManual={draft => {
+            setShowBarcodeScanner(false);
+            setManualEntry({ draft: draft ?? {}, shelf: viewMode });
+          }}
+          onMoveSaved={moveLookupAlbum}
+          onUndoMove={undoShelfMove}
           onOpenSaved={id => openSavedAlbum(id, () => setShowBarcodeScanner(false))}
-          onSuccess={() => {
-            refreshLibrary();
-            setShowBarcodeScanner(false);
-          }}
+          onSuccess={refreshLibrary}
           viewMode={viewMode}
         />
       )}
@@ -1120,7 +1146,11 @@ function App() {
           onClose={() => setShowImageUploader(false)}
           onSearchByName={(query, draft) => {
             setShowImageUploader(false);
-            openNameSearch(query, draft);
+            openNameSearch(query, draft, viewMode);
+          }}
+          onManual={draft => {
+            setShowImageUploader(false);
+            setManualEntry({ draft: draft ?? {}, shelf: viewMode });
           }}
           onMoveSaved={moveScannedAlbum}
           onOpenSaved={id => openSavedAlbum(id, () => setShowImageUploader(false))}

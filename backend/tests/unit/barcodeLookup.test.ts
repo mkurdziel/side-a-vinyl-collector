@@ -69,3 +69,24 @@ describe('barcode lookup failures', () => {
     expect((await lookup()).status).toBe(500);
   });
 });
+
+describe('barcode match evidence', () => {
+  it('distinguishes saved barcode mappings from catalog release IDs', async () => {
+    query.mockResolvedValueOnce({ rows: [{ id: 44, title: 'Fixture', artist_name: 'Artist' }] })
+      .mockResolvedValueOnce({ rows: [{ album_id: 44, status: 'collection' }] });
+    await expect(lookup()).resolves.toMatchObject({ status: 200, body: { existingMatch: 'barcode', existingAlbumId: 44 } });
+
+    get.mockResolvedValueOnce({ data: { results: [{ id: 91, title: 'Artist - Fixture' }] } });
+    query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ album_id: 44, status: 'collection' }] });
+    await expect(lookup()).resolves.toMatchObject({ status: 200, body: { existingMatch: 'release', existingAlbumId: 44 } });
+  });
+
+  it('labels a name match as a title match and never chooses among ambiguous saved entries', async () => {
+    get.mockResolvedValueOnce({ data: { results: [{ id: 91, title: 'Artist - Fixture' }] } });
+    query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ album_id: 44, status: 'collection' }, { album_id: 45, status: 'wishlist' }] });
+    await expect(lookup()).resolves.toMatchObject({
+      status: 200, body: { existingMatch: 'title', existingStatus: 'collection', existingAlbumId: null },
+    });
+  });
+});

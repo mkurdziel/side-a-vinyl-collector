@@ -2,7 +2,7 @@ import pool from '../config/database';
 import type { AlbumWithArtist } from '../types';
 
 type SavedAlbum = Pick<AlbumWithArtist, 'id' | 'discogs_id' | 'title' | 'artist_name' | 'status'>;
-type CatalogMatch = { artist: string; album: string; discogsId?: number };
+type CatalogMatch = { artist: string; album: string; discogsId?: number; discogsListing?: 'release' | 'master' };
 
 function nameKey(artist: string, title: string) {
   const normalize = (value: string) => value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
@@ -43,6 +43,7 @@ export async function annotateCatalogMembership<T extends CatalogMatch>(matches:
       inCollection: candidates.some(album => album.status === 'collection'),
       inWishlist: candidates.some(album => album.status === 'wishlist'),
       existingAlbumId: linked?.id ?? null,
+      existingMatch: candidates.length === 0 ? null : exact && match.discogsListing === 'release' ? 'release' as const : 'title' as const,
     };
   });
 }

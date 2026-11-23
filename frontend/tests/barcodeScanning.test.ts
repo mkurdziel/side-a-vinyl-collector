@@ -26,6 +26,7 @@ import { ApiError } from '../src/services/api';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let renderer: ReturnType<typeof create> | undefined;
+const focused = vi.fn();
 const result = { codeResult: { code: '0602537340436', decodedCodes: [{ error: 0.05 }] } };
 
 function Camera({ callback, active = true }: { callback: (barcode: string) => void; active?: boolean }) {
@@ -37,7 +38,9 @@ function Camera({ callback, active = true }: { callback: (barcode: string) => vo
 }
 
 async function mount(element: ReturnType<typeof createElement>) {
-  await act(async () => { renderer = create(element, { createNodeMock: () => ({}) }); });
+  await act(async () => {
+    renderer = create(element, { createNodeMock: node => ({ focus: () => focused(node.props.id ?? node.props.children) }) });
+  });
 }
 
 beforeEach(() => {
@@ -122,7 +125,10 @@ describe('barcode camera lifecycle', () => {
 });
 
 describe('barcode lookup requests', () => {
-  const props = { onClose: vi.fn(), onSuccess: vi.fn(), onSearchByName: vi.fn(), onMoveSaved: vi.fn(), onOpenSaved: vi.fn(), viewMode: 'collection' as const };
+  const props = {
+    onClose: vi.fn(), onSuccess: vi.fn(), onSearchByName: vi.fn(), onManual: vi.fn(),
+    onMoveSaved: vi.fn(), onUndoMove: vi.fn(), onOpenSaved: vi.fn(), viewMode: 'collection' as const,
+  };
 
   it('sends one lookup when the camera reports repeated detections before the next render', async () => {
     let resolve!: (result: unknown) => void;
@@ -240,17 +246,46 @@ describe('barcode lookup requests', () => {
     expect(props.onClose).not.toHaveBeenCalled();
     await act(async () => save.resolve());
     expect(props.onSuccess).toHaveBeenCalledOnce();
+    expect(props.onClose).not.toHaveBeenCalled();
+    expect(focused).toHaveBeenCalledWith('Dummy');
+    expect(JSON.stringify(renderer!.toJSON())).toContain('Saved to Wishlist');
+    const next = renderer!.root.findAllByType('button').find(node => node.children.join('') === 'Scan next')!;
+    await act(async () => next.props.onClick());
+
+    const detectNext = quagga.onDetected.mock.calls.at(-1)![0];
+    await act(async () => detectNext(result));
+    expect(scanBarcode).toHaveBeenCalledOnce();
+    await act(async () => detectNext({ codeResult: { code: '012345678905', decodedCodes: [{ error: 0.05 }] } }));
+    expect(scanBarcode).toHaveBeenLastCalledWith('012345678905');
   });
 
-  it('moves a wishlisted barcode match without adding a new record', async () => {
+  it('moves and undoes a wishlisted barcode match inside the open scanner', async () => {
     scanBarcode.mockResolvedValue({
-      artist: 'Portishead', album: 'Dummy', existingStatus: 'wishlist', existingAlbumId: 19,
+      artist: 'Portishead', album: 'Dummy', existingStatus: 'wishlist', existingAlbumId: 19, existingMatch: 'title',
     });
+    props.onMoveSaved.mockResolvedValueOnce(true);
+    props.onUndoMove.mockResolvedValueOnce(true);
     await mount(createElement(BarcodeScanner, props));
     await act(async () => quagga.onDetected.mock.calls[0]![0](result));
 
     await act(async () => renderer!.root.findByProps({ 'aria-label': 'Move Dummy to Collection' }).props.onClick());
     expect(props.onMoveSaved).toHaveBeenCalledExactlyOnceWith(19, 'Dummy');
     expect(addAlbum).not.toHaveBeenCalled();
+    const undo = renderer!.root.findAllByType('button').find(node => node.children.join('') === 'Undo move')!;
+    await act(async () => undo.props.onClick());
+    expect(props.onUndoMove).toHaveBeenCalledExactlyOnceWith(19);
+    expect(JSON.stringify(renderer!.toJSON())).toContain('Moved back to Wishlist');
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
+  it('offers manual and name-search recovery after a barcode result', async () => {
+    scanBarcode.mockResolvedValue({ artist: 'Portishead', album: 'Dummy', discogsId: 17 });
+    await mount(createElement(BarcodeScanner, props));
+    await act(async () => quagga.onDetected.mock.calls[0]![0](result));
+    const controls = renderer!.root.findAllByType('details').find(node => node.findByType('summary').children.join('') === 'None of these')!;
+    expect(JSON.stringify(renderer!.toJSON())).toContain('None of these');
+    const manual = controls.findAllByType('button').find(node => node.children.join('') === 'Add album manually')!;
+    await act(async () => manual.props.onClick());
+    expect(props.onManual).toHaveBeenCalledExactlyOnceWith({ artist: 'Portishead', album: 'Dummy' });
   });
 });

@@ -22,6 +22,8 @@ vi.mock('react-hot-toast', () => ({
 vi.mock('../src/components/SettingsModal', () => ({ SettingsModal: () => null }));
 
 import App from '../src/App';
+import { AddMenu } from '../src/components/AddMenu';
+import { ImageUploader } from '../src/components/ImageUploader';
 
 const saved: Album = {
   id: 1,
@@ -136,10 +138,10 @@ describe('library and catalog search', () => {
     await chooseScope('catalog');
     expect(button('Open Blue Train by John Coltrane')).toBeDefined();
     expect(button('Add Giant Steps to Wishlist')).toBeUndefined();
-    const saveDefault = renderer.root.findAllByType('select').find(node => node.props.value === 'shelf')!;
+    const saveDefault = renderer.root.findByProps({ id: 'catalog-save-shelf' });
     await act(async () => button('Wishlist').props.onClick());
     expect(search).toHaveBeenCalledTimes(3);
-    expect(saveDefault.findAllByType('option')[0].children.join('')).toBe('Current shelf · Wishlist');
+    expect(saveDefault.props.value).toBe('collection');
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Coltrane');
     await act(async () => discovery.resolve({ local: [], discogs: [catalog] }));
     expect(button('Add Giant Steps to Wishlist')).toBeDefined();
@@ -182,7 +184,8 @@ describe('library and catalog search', () => {
     expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status: 'wishlist' }));
     expect(button('Add Giant Steps to Collection').props['aria-disabled']).toBe(true);
     await act(async () => add.resolve({ album: { ...saved, id: 2, title: 'Giant Steps' } }));
-    expect(renderer.root.findAllByProps({ 'aria-label': 'Giant Steps is in Wishlist' })).toHaveLength(2);
+    expect(renderer.root.findByProps({ 'aria-label': 'Giant Steps is in Wishlist' })).toBeDefined();
+    expect(button('Giant Steps: Title in Wishlist')).toBeDefined();
     expect(button('Add Giant Steps to Collection')).toBeUndefined();
   });
 
@@ -212,7 +215,8 @@ describe('library and catalog search', () => {
     expect(search.mock.calls[5][0]).toBe('Coltrane');
 
     await act(async () => staleSearch.resolve(match));
-    expect(renderer.root.findAllByProps({ 'aria-label': 'Giant Steps is in Wishlist' })).toHaveLength(2);
+    expect(renderer.root.findByProps({ 'aria-label': 'Giant Steps is in Wishlist' })).toBeDefined();
+    expect(button('Giant Steps: Title in Wishlist')).toBeDefined();
     expect(button('Add Giant Steps to Collection')).toBeUndefined();
   });
 
@@ -241,7 +245,8 @@ describe('library and catalog search', () => {
     await act(async () => moving.resolve());
 
     expect(moveButtons()).toHaveLength(0);
-    expect(renderer.root.findAllByProps({ 'aria-label': 'Giant Steps is in Collection' })).toHaveLength(2);
+    expect(renderer.root.findByProps({ 'aria-label': 'Giant Steps is in Collection' })).toBeDefined();
+    expect(button('Giant Steps: Title in Collection')).toBeDefined();
     expect(getAlbums).toHaveBeenCalledTimes(2);
 
     await act(async () => button('Undo').props.onClick());
@@ -282,6 +287,24 @@ describe('library and catalog search', () => {
     await act(async () => button('Add album manually').props.onClick());
     expect(renderer.root.findByProps({ name: 'album' }).props.defaultValue).toBe('Unlisted record');
     expect(button('Add to Collection')).toBeDefined();
+  });
+
+  it('prefills edited details for manual entry beside populated catalog results', async () => {
+    search.mockResolvedValue({ local: [], discogs: [catalog] });
+    await renderLibrary();
+    await act(async () => button('Wishlist').props.onClick());
+    await act(async () => button('Add Album').props.onClick());
+    await act(async () => renderer.root.findByType(AddMenu).props.onImageClick());
+    await act(async () => renderer.root.findByType(ImageUploader).props.onSearchByName(
+      'John Coltrane Giant Steps', { artist: 'John Coltrane', album: 'Giant Steps' },
+    ));
+    await editSearch('John Coltrane Alternate Album');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    await act(async () => button('Collection').props.onClick());
+    await act(async () => button('Add album manually').props.onClick());
+    expect(renderer.root.findByProps({ name: 'artist' }).props.defaultValue).toBe('John Coltrane');
+    expect(renderer.root.findByProps({ name: 'album' }).props.defaultValue).toBe('Alternate Album');
+    expect(button('Add to Wishlist')).toBeDefined();
   });
 
   it('offers the existing saved album after a catalog add conflict', async () => {

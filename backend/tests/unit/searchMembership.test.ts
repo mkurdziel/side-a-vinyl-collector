@@ -20,10 +20,11 @@ vi.mock('../../src/services/vision', () => ({
 
 import { analyzeImage } from '../../src/controllers/imageController';
 import { search } from '../../src/controllers/searchController';
+import { annotateCatalogMembership } from '../../src/services/catalogMembership';
 
 const catalogAlbum = { id: 101, discogsId: 101, artist: 'John Coltrane', album: 'Giant Steps' };
 const savedAlbum = { id: 1, artist_name: 'John Coltrane', title: 'Giant Steps', status: 'wishlist' };
-type Membership = { existingAlbumId: number | null; inCollection: boolean; inWishlist: boolean };
+type Membership = { existingAlbumId: number | null; inCollection: boolean; inWishlist: boolean; existingMatch?: string };
 
 function searchCatalog(): Promise<{ discogs: Membership[] }> {
   return new Promise((resolve, reject) => {
@@ -90,6 +91,7 @@ describe('search result membership', () => {
       existingAlbumId: 2,
       inCollection: false,
       inWishlist: true,
+      existingMatch: 'release',
     });
   });
 
@@ -102,7 +104,7 @@ describe('search result membership', () => {
       .mockResolvedValueOnce({ rows: [nameMatch, { ...savedAlbum, id: 2 }] });
 
     const single = await searchCatalog();
-    expect(single.discogs[0]).toMatchObject({ existingAlbumId: 1, inWishlist: true });
+    expect(single.discogs[0]).toMatchObject({ existingAlbumId: 1, inWishlist: true, existingMatch: 'title' });
     const ambiguous = await searchCatalog();
     expect(ambiguous.discogs[0]).toMatchObject({ existingAlbumId: null, inWishlist: true });
   });
@@ -122,6 +124,13 @@ describe('search result membership', () => {
       existingAlbumId: 2,
       inCollection: false,
       inWishlist: true,
+      existingMatch: 'release',
     });
+  });
+
+  it('does not describe a master listing as an exact saved release', async () => {
+    query.mockResolvedValueOnce({ rows: [{ ...savedAlbum, discogs_id: catalogAlbum.discogsId }] });
+    const [match] = await annotateCatalogMembership([{ ...catalogAlbum, discogsListing: 'master' }]);
+    expect(match).toMatchObject({ existingAlbumId: savedAlbum.id, existingMatch: 'title' });
   });
 });

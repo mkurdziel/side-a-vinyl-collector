@@ -1,20 +1,22 @@
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { toast } from 'react-hot-toast';
 import api, { ApiError, type DiscogsAlbum } from '../services/api';
 import { ModalDialog } from './ModalDialog';
 import { SaveDestinationActions, type DestinationAction } from './SaveDestinationActions';
+import { LookupRecovery } from './LookupRecovery';
 import type { ManualAlbumDraft } from './ManualAlbumDialog';
 
 interface ImageUploaderProps {
   onClose: () => void;
   onSuccess: () => void;
   onSearchByName: (query?: string, draft?: ManualAlbumDraft) => void;
+  onManual: (draft?: ManualAlbumDraft) => void;
   onMoveSaved: (id: number, title: string) => Promise<boolean>;
   onOpenSaved: (id: number) => Promise<void>;
   viewMode: 'collection' | 'wishlist';
 }
 
-export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onMoveSaved, onOpenSaved, viewMode }: ImageUploaderProps) => {
+export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onManual, onMoveSaved, onOpenSaved, viewMode }: ImageUploaderProps) => {
   const [analyzing, setAnalyzing] = useState(false);
   const [matches, setMatches] = useState<DiscogsAlbum[]>([]);
   const [imagePreview, setImagePreview] = useState<string>('');
@@ -24,6 +26,17 @@ export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onMoveSaved,
   const saveInProgress = useRef(false);
   const [analysisError, setAnalysisError] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
+  const outcomeHeading = useRef<HTMLHeadingElement>(null);
+  const focusUpload = useRef(false);
+  const draft = extractedInfo ? { artist: extractedInfo.artist, album: extractedInfo.album } : undefined;
+
+  useLayoutEffect(() => {
+    if (!analyzing && (analysisError || matches.length)) outcomeHeading.current?.focus();
+    if (!imagePreview && focusUpload.current) {
+      focusUpload.current = false;
+      fileInput.current?.focus();
+    }
+  }, [analyzing, analysisError, matches, imagePreview]);
   const clearPhoto = () => {
     setImagePreview('');
     setMatches([]);
@@ -157,146 +170,112 @@ export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onMoveSaved,
           </button>
         </div>
 
-        <div className="mb-6">
+        <div className="space-y-4">
           <input ref={fileInput} id="cover-photo-file" type="file" accept="image/*,.heic,.heif"
-            onChange={handleFileChange} disabled={analyzing || !!saving} className={imagePreview ? 'hidden' : 'sr-only'}
-            aria-label="Choose a cover photo" />
-          {!imagePreview ? (
-            <label htmlFor="cover-photo-file" className="rh-upload-label block w-full cursor-pointer rounded-2xl group">
-              <div className="relative flex flex-col items-center justify-center w-full h-64 border-2 border-dashed border-gray-300 rounded-2xl bg-gray-50 group-hover:bg-purple-50 group-hover:border-purple-300 transition-all duration-200">
-                <div className="w-16 h-16 mb-4 flex items-center justify-center bg-white rounded-full shadow-sm group-hover:scale-110 transition-transform duration-200">
-                  <svg className="w-8 h-8 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                </div>
-                <p className="mb-2 text-lg font-semibold text-gray-700 group-hover:text-purple-700">Choose a cover photo</p>
-                <p className="text-sm text-gray-500 group-hover:text-purple-500">JPG, PNG, or HEIC (max 10MB)</p>
-              </div>
+            onChange={handleFileChange} disabled={analyzing || !!saving} className="sr-only"
+            tabIndex={imagePreview ? -1 : undefined} aria-label="Choose a cover photo" />
+          {!imagePreview && !analyzing && (
+            <label htmlFor="cover-photo-file" className="rh-upload-label rh-cover-pick">
+              <svg aria-hidden="true" className="size-7 shrink-0 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22a2 2 0 001.664.89H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              <span className="min-w-0">
+                <span className="block text-base font-semibold">Choose a cover photo</span>
+                <span className="mt-1 block text-sm text-gray-600">JPG, PNG or HEIC, up to 10 MB</span>
+              </span>
             </label>
-          ) : (
-            <div className="relative group">
-              <div className="bg-gray-100 rounded-xl border border-gray-200 p-2">
-                {imagePreview === 'HEIC' ? (
-                  <div className="w-full h-64 flex flex-col items-center justify-center rounded-lg bg-gray-50 border-2 border-dashed border-gray-300">
-                    <svg className="w-16 h-16 text-gray-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                    </svg>
-                    <p className="text-sm font-medium text-gray-600">HEIC Image</p>
-                    <p className="text-xs text-gray-500 mt-1">Preview not available</p>
-                  </div>
-                ) : (
-                  <img src={imagePreview} alt="Album cover" className="w-full h-64 object-contain rounded-lg shadow-sm" />
-                )}
-              </div>
-              {!analyzing && (
-                <button 
-                  onClick={clearPhoto}
-                  disabled={!!saving}
-                  className="rh-dialog-close absolute top-4 right-4 bg-white/95 hover:text-red-600"
-                  title="Remove image"
-                  aria-label="Remove image"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
+          )}
+
+          {imagePreview && (
+            <div className="rh-lookup-record">
+              {imagePreview === 'HEIC' ? (
+                <span className="grid size-16 shrink-0 place-items-center rounded-lg border border-gray-300 text-xs font-semibold">HEIC</span>
+              ) : (
+                <img src={imagePreview} alt="Uploaded cover" className="size-16 shrink-0 rounded-lg object-contain" />
               )}
+              <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                {draft && (draft.artist || draft.album) ? (
+                  <p className="text-sm text-gray-600">Detected text · <strong className="text-gray-900">{[draft.artist, draft.album].filter(Boolean).join(' · ')}</strong></p>
+                ) : <p className="text-sm font-medium">Cover photo</p>}
+                {typeof extractedInfo?.confidence === 'number' && extractedInfo.confidence > 0 && (
+                  <p className="mt-1 text-xs text-gray-600">Text recognition confidence: {Math.round(extractedInfo.confidence)}%</p>
+                )}
+                {!analyzing && <button type="button" className="rh-lookup-link" title="Remove image"
+                  disabled={!!saving} onClick={() => {
+                    focusUpload.current = true;
+                    clearPhoto();
+                  }}>Remove photo</button>}
+              </div>
             </div>
           )}
-        </div>
 
-        {analyzing && (
-          <div className="text-center py-8" role="status">
-            <div className="inline-block w-12 h-12 border-4 border-purple-600/30 border-t-purple-600 rounded-full animate-spin mb-4"></div>
-            <p className="text-lg font-medium text-gray-700">Looking for matching albums…</p>
-          </div>
-        )}
+          {analyzing && <p className="text-sm font-medium text-gray-600" role="status">Looking for matching albums…</p>}
 
-        {extractedInfo && (
-          <div className="mb-4 space-y-1 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
-            <p className="[overflow-wrap:anywhere]">
-              Detected text: <strong className="text-gray-900">{[extractedInfo.artist, extractedInfo.album].filter(Boolean).join(' · ')}</strong>
-            </p>
-            {typeof extractedInfo.confidence === 'number' && extractedInfo.confidence > 0 && (
-              <p>Text recognition confidence: {Math.round(extractedInfo.confidence)}%</p>
-            )}
-          </div>
-        )}
-
-        {analysisError && (
-          <div className="mb-4 space-y-2">
-            <p className="text-sm text-red-600" role="alert">{analysisError}</p>
-            <div className="flex flex-wrap gap-2">
-              <button type="button" className="rh-primary-action px-3 text-sm font-semibold"
-                onClick={() => onSearchByName([extractedInfo?.artist, extractedInfo?.album].filter(Boolean).join(' '),
-                  extractedInfo ? { artist: extractedInfo.artist, album: extractedInfo.album } : undefined)}>
-                Search by name
-              </button>
-              <button type="button" className="min-h-11 rounded-lg border border-gray-300 px-3 text-sm font-semibold hover:bg-gray-100"
-                onClick={() => fileInput.current?.click()}>
-                Choose another photo
-              </button>
+          {analysisError && (
+            <div className="space-y-2">
+              <h3 ref={outcomeHeading} tabIndex={-1} className="font-semibold">Find this album another way</h3>
+              <p className="text-sm text-red-600" role="alert">{analysisError}</p>
+              <LookupRecovery direct draft={draft} onSearchByName={onSearchByName} onManual={onManual} />
             </div>
-          </div>
-        )}
+          )}
 
-        {matches.length > 0 && (
-          <div className="mb-6">
-            {saving && <p role="status" className="mb-3 text-sm text-gray-600">Saving this album…</p>}
-            <h3 className="mb-3 text-xl font-bold text-gray-900" role="status">
-              {matches.length === 1 ? '1 possible match' : `${matches.length} possible matches`}
-            </h3>
+          {matches.length > 0 && (
             <div className="space-y-3">
-              {matches.map(match => {
-                const existingStatus = match.inCollection ? 'collection' : match.inWishlist ? 'wishlist' : undefined;
+              <div className="flex flex-wrap items-start justify-between gap-x-2">
+                <h3 ref={outcomeHeading} tabIndex={-1} className="py-2 text-lg font-semibold text-gray-900">
+                  {matches.length === 1 ? '1 possible match' : `${matches.length} possible matches`}
+                </h3>
+                <LookupRecovery draft={draft} disabled={!!saving} onSearchByName={onSearchByName} onManual={onManual} />
+              </div>
+              {saving && <p role="status" className="text-sm text-gray-600">Saving this album…</p>}
+              <div className="space-y-3">
+                {matches.map(match => {
+                  const existingStatus = match.inCollection ? 'collection' : match.inWishlist ? 'wishlist' : undefined;
 
-                return (
-                  <article key={match.discogsId} className="rounded-xl border border-gray-300 p-3">
-                    <div className="flex items-start gap-3">
-                      {match.coverImageUrl && (
-                        <img src={match.coverImageUrl} alt="" loading="lazy" className="size-14 rounded-lg object-cover" />
-                      )}
-                      <div className="min-w-0">
-                        <h4 className="font-semibold text-gray-900 break-words">{match.album}</h4>
-                        <p className="text-sm text-gray-600 break-words">
-                          {match.artist}{match.year ? ` · ${match.year}` : ''}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="mt-3">
-                      {duplicates[match.discogsId] !== undefined ? (
-                        <div className="grid gap-1">
-                          <p role="alert" className="text-sm">This album is already saved.</p>
-                          <button type="button" className="rh-primary-action px-3 text-sm font-semibold" disabled={!!saving}
-                            onClick={() => void onOpenSaved(duplicates[match.discogsId])}>Open saved album</button>
+                  return (
+                    <article key={match.discogsId} className="rounded-xl border border-gray-300 p-3">
+                      <div className="flex items-start gap-3">
+                        {match.coverImageUrl && (
+                          <img src={match.coverImageUrl} alt="" loading="lazy" className="size-14 rounded-lg object-cover" />
+                        )}
+                        <div className="min-w-0">
+                          <h4 className="font-semibold text-gray-900 break-words">{match.album}</h4>
+                          <p className="text-sm text-gray-600 break-words">
+                            {match.artist}{match.year ? ` · ${match.year}` : ''}
+                          </p>
                         </div>
-                      ) : <SaveDestinationActions
-                        albumTitle={match.album}
-                        preferred={viewMode}
-                        existingStatus={existingStatus}
-                        canMove={Boolean(match.existingAlbumId)}
-                        onOpenSaved={match.existingAlbumId ? () => void onOpenSaved(match.existingAlbumId!) : undefined}
-                        pending={saving?.id === match.discogsId ? saving.action : undefined}
-                        disabled={!!saving}
-                        onSelect={action => void saveMatch(match, action)}
-                      />}
-                    </div>
-                  </article>
-                );
-              })}
+                      </div>
+                      <div className="mt-3">
+                        {duplicates[match.discogsId] !== undefined ? (
+                          <div className="grid gap-1">
+                            <p role="alert" className="text-sm">This album is already saved.</p>
+                            <button type="button" className="rh-primary-action px-3 text-sm font-semibold" disabled={!!saving}
+                              onClick={() => void onOpenSaved(duplicates[match.discogsId])}>Open saved album</button>
+                          </div>
+                        ) : <SaveDestinationActions
+                          albumTitle={match.album}
+                          preferred={viewMode}
+                          existingStatus={existingStatus}
+                          existingMatch={match.existingMatch}
+                          canMove={Boolean(match.existingAlbumId)}
+                          onOpenSaved={match.existingAlbumId ? () => void onOpenSaved(match.existingAlbumId!) : undefined}
+                          pending={saving?.id === match.discogsId ? saving.action : undefined}
+                          disabled={!!saving}
+                          onSelect={action => void saveMatch(match, action)}
+                        />}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        <div className="flex justify-end pt-2">
-            <button 
-                className="px-6 py-2.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium transition-colors" 
-                onClick={close}
-                disabled={!!saving}
-            >
-            Cancel
-            </button>
+          <div className="flex flex-wrap justify-end gap-2">
+            {imagePreview && !analyzing && <button type="button" className="rh-lookup-link" disabled={!!saving}
+              onClick={() => fileInput.current?.click()}>Choose another photo</button>}
+            <button type="button" className="rh-lookup-link" onClick={close} disabled={!!saving}>Cancel</button>
+          </div>
         </div>
       </div>
     </ModalDialog>

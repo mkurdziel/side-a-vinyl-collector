@@ -69,12 +69,12 @@ export function ManualAlbumDialog({ draft, initialShelf, onClose, onSaved, onOpe
           }}>
             <label className="grid gap-1.5 text-sm font-medium">
               Artist
-              <input autoFocus name="artist" required maxLength={255} defaultValue={draft.artist}
+              <input autoFocus name="artist" required maxLength={255} defaultValue={draft.artist?.slice(0, 255)}
                 className="min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-base" />
             </label>
             <label className="grid gap-1.5 text-sm font-medium">
               Album title
-              <input name="album" required maxLength={255} defaultValue={draft.album}
+              <input name="album" required maxLength={255} defaultValue={draft.album?.slice(0, 255)}
                 className="min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-base" />
             </label>
             <label className="grid gap-1.5 text-sm font-medium">
