@@ -6,11 +6,22 @@ interface AddMenuProps {
   onSearchClick: () => void;
   onImportClick: () => void;
   onClose: () => void;
-  discogsConfigured: boolean;
+  discogsConfigured: boolean | null;
+  discogsCheckFailed?: boolean;
   viewMode: 'collection' | 'wishlist';
 }
 
-export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick, onImportClick, onClose, discogsConfigured, viewMode }: AddMenuProps) => {
+export const AddMenu = ({
+  onBarcodeClick, onImageClick, onSearchClick, onImportClick, onClose, discogsConfigured, discogsCheckFailed, viewMode,
+}: AddMenuProps) => {
+  const importIcon = (
+    <span className={`shrink-0 rounded-lg p-3 ${discogsConfigured ? 'bg-blue-50 group-hover:bg-blue-100' : 'bg-gray-50'}`}>
+      <svg className={`h-6 w-6 ${discogsConfigured ? 'text-blue-600' : 'text-gray-400'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+      </svg>
+    </span>
+  );
+
   return (
     <ModalDialog labelledBy="add-album-title" onClose={onClose}>
       <div className="rh-dialog-panel max-w-3xl">
@@ -72,25 +83,39 @@ export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick, onImportC
             </span>
           </button>
 
-          <button
-            className="rh-add-method group"
-            onClick={discogsConfigured ? onImportClick : undefined}
-            disabled={!discogsConfigured}
-          >
-            <span className={`p-3 rounded-lg transition-colors ${discogsConfigured ? 'bg-blue-50 group-hover:bg-blue-100' : 'bg-gray-50'}`}>
-              <svg className={`w-6 h-6 ${discogsConfigured ? 'text-blue-600' : 'text-gray-400'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-              </svg>
-            </span>
-            <span className="min-w-0">
-              <span className="block text-base font-semibold text-gray-900 mb-1">Import from Discogs</span>
-              <span className="block text-sm text-gray-600">
-                {discogsConfigured
-                  ? `Copy records from Discogs into your ${viewMode}.`
-                  : 'A Discogs token is required. Search by name to add individual records.'}
+          {discogsConfigured ? (
+            <button type="button" className="rh-add-method group" onClick={onImportClick}>
+              {importIcon}
+              <span className="min-w-0">
+                <span className="mb-1 block text-base font-semibold text-gray-900">Import from Discogs</span>
+                <span className="block text-sm text-gray-600">Copy records from Discogs into your {viewMode}.</span>
               </span>
-            </span>
-          </button>
+            </button>
+          ) : (
+            <div className="flex items-start gap-4 rounded-xl border border-gray-300 p-4">
+              {importIcon}
+              <div className="min-w-0">
+                <p className="mb-1 text-base font-semibold text-gray-900">Import from Discogs</p>
+                {discogsCheckFailed ? (
+                  <p className="text-sm text-gray-600" role="status">Could not check the Discogs connection. You can still add records by name.</p>
+                ) : discogsConfigured === null ? (
+                  <p className="text-sm text-gray-600" role="status">Checking the Discogs connection…</p>
+                ) : (
+                  <>
+                    <p className="text-sm text-gray-600">Ask your server administrator to connect Discogs before importing.</p>
+                    <a
+                      href="https://github.com/mkurdziel/side-a-vinyl-collector#configuration"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex min-h-11 items-center text-sm font-medium text-blue-600 underline underline-offset-2 hover:text-blue-700"
+                    >
+                      Discogs setup instructions
+                    </a>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </ModalDialog>

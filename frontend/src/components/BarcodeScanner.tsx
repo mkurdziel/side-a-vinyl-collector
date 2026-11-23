@@ -1,40 +1,62 @@
 import { useRef, useState } from 'react';
 import { toast } from 'react-hot-toast';
-import api from '../services/api';
+import api, { ApiError } from '../services/api';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 import { ModalDialog } from './ModalDialog';
 import { SaveDestinationActions, type DestinationAction } from './SaveDestinationActions';
 
 type BarcodeMatch = Awaited<ReturnType<typeof api.scanBarcode>> & { barcode: string };
+type LookupFailure = 'invalid' | 'missing' | 'unavailable';
+type Lookup = { status: 'scanning' | 'looking-up' }
+  | { status: 'failed'; reason: LookupFailure; barcode: string }
+  | { status: 'found'; match: BarcodeMatch };
+
+const lookupMessages: Record<LookupFailure, string> = {
+  invalid: 'Enter the 8, 12, 13, or 14 digits printed below the barcode.',
+  missing: 'No release matched this barcode. Check the digits or search by name.',
+  unavailable: 'Barcode lookup is unavailable right now. Retry or search by name.',
+};
+const barcodePattern = /^(?:[0-9]{8}|[0-9]{12,14})$/;
 
 interface BarcodeScannerProps {
   onClose: () => void;
   onSuccess: () => void;
+  onSearchByName: () => void;
   viewMode: 'collection' | 'wishlist';
 }
 
-export const BarcodeScanner = ({ onClose, onSuccess, viewMode }: BarcodeScannerProps) => {
-  const [scanning, setScanning] = useState(true);
+export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, viewMode }: BarcodeScannerProps) => {
+  const [lookup, setLookup] = useState<Lookup>({ status: 'scanning' });
   const lookupInProgress = useRef(false);
-  const [scannedResult, setScannedResult] = useState<BarcodeMatch | null>(null);
   const [saving, setSaving] = useState<DestinationAction>();
   const saveInProgress = useRef(false);
-  const [lookupError, setLookupError] = useState('');
   const [manualBarcode, setManualBarcode] = useState('');
+  const scannedResult = lookup.status === 'found' ? lookup.match : null;
+  const scanning = lookup.status === 'scanning';
+  const lookingUp = lookup.status === 'looking-up';
+  const failure = lookup.status === 'failed' && manualBarcode.trim() === lookup.barcode ? lookup.reason : undefined;
 
-  const handleDetected = async (barcode: string) => {
+  const lookUp = async (barcode: string) => {
     if (lookupInProgress.current) return;
 
+    setManualBarcode(barcode);
+    if (!barcodePattern.test(barcode)) {
+      setLookup({ status: 'failed', reason: 'invalid', barcode });
+      return;
+    }
+
     lookupInProgress.current = true;
-    setLookupError('');
-    setScanning(false);
+    setLookup({ status: 'looking-up' });
 
     try {
       const result = await api.scanBarcode(barcode);
-      setScannedResult({ ...result, barcode });
-    } catch {
-      setLookupError('Could not find a record for that barcode. Check the digits and try again.');
-      setScanning(true);
+      setLookup({ status: 'found', match: { ...result, barcode } });
+    } catch (error) {
+      let reason: LookupFailure = 'unavailable';
+      if (error instanceof ApiError && error.status === 404) reason = 'missing';
+      if (error instanceof ApiError && error.status === 400) reason = 'invalid';
+      setLookup({ status: 'failed', reason, barcode });
+    } finally {
       lookupInProgress.current = false;
     }
   };
@@ -75,13 +97,12 @@ export const BarcodeScanner = ({ onClose, onSuccess, viewMode }: BarcodeScannerP
   };
 
   const handleScanAnother = () => {
-    setScannedResult(null);
     setManualBarcode('');
-    lookupInProgress.current = false;
-    setScanning(true);
+    setLookup({ status: 'scanning' });
+    retryCamera();
   };
 
-  const { scannerRef, error, cameras, cameraId, setCameraId } = useBarcodeScanner(handleDetected, scanning);
+  const { scannerRef, error, cameras, cameraId, setCameraId, retryCamera } = useBarcodeScanner(lookUp, scanning);
 
   return (
     <ModalDialog labelledBy="barcode-title" onClose={onClose}>
@@ -109,85 +130,109 @@ export const BarcodeScanner = ({ onClose, onSuccess, viewMode }: BarcodeScannerP
         <div className="p-4 overflow-y-auto">
           {!scannedResult && (
             <>
-            {cameras.length > 1 && (
-              <label className="block mb-3 text-sm font-medium text-gray-700">
-                Camera
-                <select
-                  className="mt-1 block w-full rounded-lg border border-gray-300 p-2 bg-white"
-                  value={cameraId}
-                  onChange={event => setCameraId(event.target.value)}
-                  disabled={!scanning}
+              <form className="mb-2" noValidate onSubmit={event => {
+                event.preventDefault();
+                void lookUp(manualBarcode.trim());
+              }}>
+                <label htmlFor="manual-barcode" className="mb-1 block text-sm font-medium text-gray-700">
+                  Enter barcode manually
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    id="manual-barcode"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    value={manualBarcode}
+                    onChange={event => setManualBarcode(event.target.value)}
+                    disabled={lookingUp}
+                    aria-invalid={failure === 'invalid'}
+                    aria-describedby={failure ? 'barcode-lookup-error' : undefined}
+                    required
+                    className="min-h-11 min-w-0 flex-1 rounded-lg border border-gray-300 p-2"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!manualBarcode.trim()}
+                    aria-disabled={lookingUp || undefined}
+                    className="rh-filled-action min-h-11 rounded-lg bg-purple-600 px-3 py-2 disabled:opacity-50 aria-disabled:opacity-60"
+                  >
+                    {lookingUp ? 'Looking up…' : failure === 'unavailable' ? 'Retry lookup' : 'Look up'}
+                  </button>
+                </div>
+              </form>
+
+              {lookingUp && <p className="my-2 text-sm text-gray-600" role="status">Looking up barcode…</p>}
+              {failure && (
+                <p id="barcode-lookup-error" className="my-2 text-sm text-red-600" role="alert">
+                  {lookupMessages[failure]}
+                </p>
+              )}
+
+              <div className="mb-4 flex flex-wrap gap-x-3">
+                <button
+                  type="button"
+                  onClick={onSearchByName}
+                  className="min-h-11 rounded-lg px-2 text-sm font-medium text-purple-600 hover:bg-gray-100"
                 >
-                  <option value="">Automatic (back camera)</option>
-                  {cameras.map((camera, index) => (
-                    <option key={camera.deviceId} value={camera.deviceId}>
-                      {camera.label || `Camera ${index + 1}`}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            <div className="relative bg-black rounded-2xl overflow-hidden mb-4 shadow-lg border border-gray-200 aspect-[4/3]">
-            <div ref={scannerRef} className="w-full h-full [&>video]:w-full [&>video]:h-full [&>video]:object-contain [&>canvas]:hidden" />
-            {error ? (
-              <div className="absolute inset-0 bg-black text-center overflow-y-auto py-8 px-4">
-                <div className="inline-block p-4 bg-red-50 rounded-full mb-4">
-                    <svg className="w-8 h-8 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                    </svg>
-                </div>
-                <p className="text-red-500 text-lg font-medium mb-2">{error}</p>
-                <p className="text-gray-400">You can also enter the barcode below.</p>
+                  Search by name
+                </button>
+                {lookup.status === 'failed' && (
+                  <button
+                    type="button"
+                    onClick={handleScanAnother}
+                    className="min-h-11 rounded-lg px-2 text-sm font-medium text-purple-600 hover:bg-gray-100"
+                  >
+                    Scan again
+                  </button>
+                )}
               </div>
-            ) : (
-              <>
-                <div className="absolute inset-0 pointer-events-none">
-                  {/* Scanning frame - centered */}
-                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-3/4 max-w-xs h-40 border-2 border-purple-500 rounded-xl shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]">
-                    <div className="absolute top-0 left-0 right-0 h-0.5 bg-purple-500 animate-scan" style={{ top: '50%', boxShadow: '0 0 8px 2px rgba(84, 156, 214, 0.6)' }} />
+
+              {scanning && (
+                <>
+                  {cameras.length > 1 && (
+                    <label className="mb-3 block text-sm font-medium text-gray-700">
+                      Camera
+                      <select
+                        className="mt-1 block w-full rounded-lg border border-gray-300 bg-white p-2"
+                        value={cameraId}
+                        onChange={event => setCameraId(event.target.value)}
+                      >
+                        <option value="">Automatic (back camera)</option>
+                        {cameras.map((camera, index) => (
+                          <option key={camera.deviceId} value={camera.deviceId}>
+                            {camera.label || `Camera ${index + 1}`}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <div className={error ? 'hidden' : 'relative mb-3 aspect-[4/3] overflow-hidden rounded-xl bg-black'}>
+                    <div ref={scannerRef} className="size-full [&>video]:size-full [&>video]:object-contain [&>canvas]:hidden" />
+                    <div className="pointer-events-none absolute inset-0" aria-hidden="true">
+                      <div className="absolute left-1/2 top-1/2 h-40 w-3/4 max-w-xs -translate-x-1/2 -translate-y-1/2 rounded-xl border-2 border-purple-500 shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]">
+                        <div className="animate-scan absolute inset-x-0 top-1/2 h-0.5 bg-purple-500" />
+                      </div>
+                    </div>
                   </div>
-                </div>
-                
-                  <div className="absolute bottom-4 left-0 right-0 text-center pointer-events-none z-10">
-                     <span className="inline-block bg-black/60 backdrop-blur-sm text-white px-3 py-1.5 rounded-full text-xs font-medium border border-white/10">
-                      Align barcode in frame
-                     </span>
-                  </div>
+                  {error ? (
+                    <div className="rounded-lg border border-gray-300 px-3 py-2">
+                      <p className="text-sm text-red-600" role="alert">{error}</p>
+                      <button
+                        type="button"
+                        onClick={retryCamera}
+                        className="min-h-11 rounded-lg px-2 text-sm font-medium text-purple-600 hover:bg-gray-100"
+                      >
+                        Retry camera
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-600">
+                      Keep the whole barcode in the frame. Move farther back if it looks blurry.
+                    </p>
+                  )}
                 </>
               )}
-            </div>
-            <p className="mb-4 text-sm text-gray-600">
-              Keep the whole barcode visible. Move farther back if it looks blurry, or try another camera.
-            </p>
-            {!scanning && <p className="mb-2 text-sm text-gray-600" role="status">Looking up barcode…</p>}
-            {lookupError && <p className="mb-2 text-sm text-red-600" role="alert">{lookupError}</p>}
-            <form className="mb-4" onSubmit={event => {
-              event.preventDefault();
-              if (manualBarcode.trim()) void handleDetected(manualBarcode.trim());
-            }}>
-              <label htmlFor="manual-barcode" className="block mb-1 text-sm font-medium text-gray-700">
-                Enter barcode manually
-              </label>
-              <div className="flex gap-2">
-                <input
-                  id="manual-barcode"
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  pattern="[0-9]{8}|[0-9]{12,14}"
-                  title="Enter the 8, 12, 13, or 14 digits printed below the barcode."
-                  value={manualBarcode}
-                  onChange={event => setManualBarcode(event.target.value)}
-                  disabled={!scanning}
-                  required
-                  className="min-w-0 flex-1 rounded-lg border border-gray-300 p-2"
-                />
-                <button type="submit" disabled={!scanning || !manualBarcode.trim()}
-                  className="rh-filled-action rounded-lg bg-purple-600 px-4 py-2 disabled:opacity-50">
-                  {scanning ? 'Look up' : 'Looking up…'}
-                </button>
-              </div>
-            </form>
             </>
           )}
 

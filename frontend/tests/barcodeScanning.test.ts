@@ -15,10 +15,14 @@ vi.mock('@ericblade/quagga2', () => ({ default: quagga }));
 vi.mock('react-hot-toast', () => ({
   toast: { loading: vi.fn(), success: vi.fn(), error: vi.fn() },
 }));
-vi.mock('../src/services/api', () => ({ default: { scanBarcode, addAlbum, updateStatus } }));
+vi.mock('../src/services/api', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/services/api')>(),
+  default: { scanBarcode, addAlbum, updateStatus },
+}));
 
 import { useBarcodeScanner } from '../src/hooks/useBarcodeScanner';
 import { BarcodeScanner } from '../src/components/BarcodeScanner';
+import { ApiError } from '../src/services/api';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let renderer: ReturnType<typeof create> | undefined;
@@ -118,7 +122,7 @@ describe('barcode camera lifecycle', () => {
 });
 
 describe('barcode lookup requests', () => {
-  const props = { onClose: vi.fn(), onSuccess: vi.fn(), viewMode: 'collection' as const };
+  const props = { onClose: vi.fn(), onSuccess: vi.fn(), onSearchByName: vi.fn(), viewMode: 'collection' as const };
 
   it('sends one lookup when the camera reports repeated detections before the next render', async () => {
     let resolve!: (result: unknown) => void;
@@ -130,13 +134,62 @@ describe('barcode lookup requests', () => {
     await act(async () => resolve({ artist: 'Portishead', album: 'Dummy' }));
   });
 
-  it('restarts scanning and permits a retry after a failed lookup', async () => {
-    scanBarcode.mockRejectedValue(new Error('Lookup unavailable'));
+  it.each([new ApiError('Discogs is busy', 503), new TypeError('Network request failed')])(
+    'pauses automatic scanning and preserves the code for an explicit retry after %s',
+    async error => {
+      scanBarcode.mockRejectedValueOnce(error).mockResolvedValueOnce({ artist: 'Portishead', album: 'Dummy' });
+      await mount(createElement(BarcodeScanner, props));
+      const detect = quagga.onDetected.mock.calls[0]![0];
+      await act(async () => detect(result));
+      expect(renderer!.root.findByProps({ role: 'alert' }).children).toContain(
+        'Barcode lookup is unavailable right now. Retry or search by name.',
+      );
+      expect(renderer!.root.findByType('input').props.value).toBe('0602537340436');
+      await act(async () => detect(result));
+      expect(scanBarcode).toHaveBeenCalledOnce();
+      const retry = renderer!.root.findByProps({ type: 'submit' });
+      expect(retry.children).toContain('Retry lookup');
+      await act(async () => renderer!.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() }));
+      expect(scanBarcode).toHaveBeenCalledTimes(2);
+      expect(scanBarcode).toHaveBeenLastCalledWith('0602537340436');
+      expect(JSON.stringify(renderer!.toJSON())).toContain('Dummy');
+    },
+  );
+
+  it('offers an editable barcode, camera restart, and name search after a genuine miss', async () => {
+    scanBarcode.mockRejectedValueOnce(new ApiError('No album found for this barcode', 404));
     await mount(createElement(BarcodeScanner, props));
     await act(async () => quagga.onDetected.mock.calls[0]![0](result));
-    const retryDetection = quagga.onDetected.mock.calls.at(-1)![0];
-    await act(async () => retryDetection(result));
-    expect(scanBarcode).toHaveBeenCalledTimes(2);
+    expect(renderer!.root.findByProps({ role: 'alert' }).children).toContain(
+      'No release matched this barcode. Check the digits or search by name.',
+    );
+    expect(renderer!.root.findByType('input').props.value).toBe('0602537340436');
+    const buttons = renderer!.root.findAllByType('button');
+    await act(async () => buttons.find(button => button.children.includes('Search by name'))!.props.onClick());
+    expect(props.onSearchByName).toHaveBeenCalledOnce();
+    await act(async () => buttons.find(button => button.children.includes('Scan again'))!.props.onClick());
+    expect(quagga.start).toHaveBeenCalledTimes(2);
+  });
+
+  it('explains invalid manual input before making a lookup request', async () => {
+    await mount(createElement(BarcodeScanner, props));
+    await act(async () => renderer!.root.findByType('input').props.onChange({ target: { value: '123z' } }));
+    await act(async () => renderer!.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() }));
+    expect(scanBarcode).not.toHaveBeenCalled();
+    expect(renderer!.root.findByType('input').props['aria-invalid']).toBe(true);
+    expect(renderer!.root.findByProps({ role: 'alert' }).children).toContain(
+      'Enter the 8, 12, 13, or 14 digits printed below the barcode.',
+    );
+  });
+
+  it('announces camera failures and lets the user retry the camera', async () => {
+    quagga.init.mockImplementationOnce((_config, callback) => callback(new Error('Camera unavailable')));
+    await mount(createElement(BarcodeScanner, props));
+    expect(renderer!.root.findByProps({ role: 'alert' }).children[0]).toMatch(/Unable to start camera/);
+    const retry = renderer!.root.findAllByType('button').find(button => button.children.includes('Retry camera'));
+    await act(async () => retry!.props.onClick());
+    expect(quagga.init).toHaveBeenCalledTimes(2);
+    expect(quagga.start).toHaveBeenCalledOnce();
   });
 
   it('looks up a manually entered barcode even when the camera fails, preserving leading zeroes', async () => {

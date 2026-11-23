@@ -9,7 +9,8 @@ export const useBarcodeScanner = (onDetected: (barcode: string) => void, isActiv
   const scannerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
-  const [cameraId, setCameraId] = useState('');
+  const [cameraId, updateCameraId] = useState('');
+  const [cameraAttempt, setCameraAttempt] = useState(0);
   const onDetectedRef = useRef(onDetected);
 
   useEffect(() => {
@@ -81,7 +82,17 @@ export const useBarcodeScanner = (onDetected: (barcode: string) => void, isActiv
         console.warn('Unable to release barcode camera.');
       });
     };
-  }, [isActive, cameraId]);
+  }, [isActive, cameraId, cameraAttempt]);
 
-  return { scannerRef, error, cameras, cameraId, setCameraId };
+  const setCameraId = (id: string) => {
+    if (id === cameraId) return;
+    setError(null);
+    updateCameraId(id);
+  };
+  const retryCamera = () => {
+    setError(null);
+    setCameraAttempt(attempt => attempt + 1);
+  };
+
+  return { scannerRef, error, cameras, cameraId, setCameraId, retryCamera };
 };

@@ -3,6 +3,7 @@ import { getTestPool } from '../setup/testContainers';
 import request from 'supertest';
 import express from 'express';
 import * as albumController from '../../src/controllers/albumController';
+import { errorHandler } from '../../src/middleware/errorHandler';
 
 describe('Album CRUD Operations', () => {
   let app: express.Application;
@@ -25,6 +26,7 @@ describe('Album CRUD Operations', () => {
     app.delete('/api/albums/:id', albumController.deleteAlbum);
     app.patch('/api/albums/:id/notes', albumController.updateAlbumNotes);
     app.patch('/api/albums/:id/status', albumController.updateAlbumStatus);
+    app.use(errorHandler);
   });
 
   describe('POST /api/albums', () => {
@@ -139,6 +141,38 @@ describe('Album CRUD Operations', () => {
 
       expect(wishlistResponse.body.albums).toHaveLength(0);
     });
+  });
+
+  it('guards a removal or undo against a record that has moved to another shelf', async () => {
+    const created = await request(app)
+      .post('/api/albums')
+      .send({ artist: 'Test Artist', album: 'Saved Record', status: 'wishlist' })
+      .expect(201);
+    const albumUrl = `/api/albums/${created.body.album.id}`;
+    await request(app).patch(`${albumUrl}/notes`).send({ notes: 'Original pressing' }).expect(200);
+
+    await request(app)
+      .patch(`${albumUrl}/status`)
+      .send({ status: 'collection', expectedStatus: 'wishlist' })
+      .expect(200);
+    await request(app).delete(`${albumUrl}?expectedStatus=wishlist`).expect(409);
+    await request(app)
+      .patch(`${albumUrl}/status`)
+      .send({ status: 'collection', expectedStatus: 'wishlist' })
+      .expect(409);
+    await request(app)
+      .patch(`${albumUrl}/status`)
+      .send({ status: 'wishlist', expectedStatus: 'collection' })
+      .expect(200);
+
+    const restored = await request(app).get(albumUrl).expect(200);
+    expect(restored.body.album).toMatchObject({
+      id: created.body.album.id,
+      added_at: created.body.album.added_at,
+      status: 'wishlist',
+      notes: 'Original pressing',
+    });
+    await request(app).delete(`${albumUrl}?expectedStatus=wishlist`).expect(200);
   });
 
   describe('DELETE /api/albums/:id', () => {
