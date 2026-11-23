@@ -41,6 +41,8 @@ export interface DiscogsAlbum {
   year?: number;
   coverImageUrl?: string;
   discogsId: number;
+  source?: 'musicbrainz' | 'discogs';
+  mbid?: string;
   inCollection?: boolean;
   inWishlist?: boolean;
   existingAlbumId?: number | null;
@@ -56,6 +58,15 @@ export interface SearchCoverArtResult {
   id: string | number;
 }
 
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 class ApiService {
   private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
     const response = await fetch(`${API_URL}${endpoint}`, {
@@ -67,8 +78,9 @@ class ApiService {
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Request failed' }));
-      throw new Error(error.error || 'Request failed');
+      const body = await response.json().catch(() => null);
+      const message = typeof body?.error === 'string' && body.error ? body.error : 'Request failed';
+      throw new ApiError(message, response.status);
     }
 
     return response.json();
@@ -93,8 +105,9 @@ class ApiService {
     });
   }
 
-  async deleteAlbum(id: number): Promise<void> {
-    return this.request(`/api/albums/${id}`, { method: 'DELETE' });
+  async deleteAlbum(id: number, expectedStatus?: Album['status']): Promise<void> {
+    const expected = expectedStatus ? `?expectedStatus=${expectedStatus}` : '';
+    return this.request(`/api/albums/${id}${expected}`, { method: 'DELETE' });
   }
 
   async updateNotes(id: number, notes: string): Promise<void> {
@@ -104,10 +117,10 @@ class ApiService {
     });
   }
 
-  async updateStatus(id: number, status: 'collection' | 'wishlist'): Promise<void> {
+  async updateStatus(id: number, status: Album['status'], expectedStatus?: Album['status']): Promise<void> {
     return this.request(`/api/albums/${id}/status`, {
       method: 'PATCH',
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, expectedStatus }),
     });
   }
 

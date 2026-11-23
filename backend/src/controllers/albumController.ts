@@ -225,15 +225,25 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
   }
 });
 
+function isShelf(status: unknown): status is 'collection' | 'wishlist' {
+  return status === 'collection' || status === 'wishlist';
+}
+
 export const deleteAlbum = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
+  const { expectedStatus } = req.query;
+
+  if (expectedStatus !== undefined && !isShelf(expectedStatus)) {
+    throw new AppError('Invalid expected status', 400);
+  }
 
   const result = await pool.query(
-    'DELETE FROM collections WHERE album_id = $1 RETURNING *',
-    [id]
+    'DELETE FROM collections WHERE album_id = $1 AND ($2::text IS NULL OR status = $2) RETURNING *',
+    [id, expectedStatus ?? null]
   );
 
   if (result.rowCount === 0) {
+    if (expectedStatus) throw new AppError('This album’s shelf changed. Refresh and try again.', 409);
     throw new AppError('Album not in collection', 404);
   }
 
@@ -258,18 +268,22 @@ export const updateAlbumNotes = asyncHandler(async (req: Request, res: Response)
 
 export const updateAlbumStatus = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  const { status } = req.body;
+  const { status, expectedStatus } = req.body;
 
-  if (!status || !['collection', 'wishlist'].includes(status)) {
+  if (!isShelf(status)) {
     throw new AppError('Invalid status', 400);
+  }
+  if (expectedStatus !== undefined && !isShelf(expectedStatus)) {
+    throw new AppError('Invalid expected status', 400);
   }
 
   const result = await pool.query(
-    'UPDATE collections SET status = $1 WHERE album_id = $2 RETURNING *',
-    [status, id]
+    'UPDATE collections SET status = $1 WHERE album_id = $2 AND ($3::text IS NULL OR status = $3) RETURNING *',
+    [status, id, expectedStatus ?? null]
   );
 
   if (result.rowCount === 0) {
+    if (expectedStatus) throw new AppError('This album’s shelf changed. Refresh and try again.', 409);
     throw new AppError('Album not in collection', 404);
   }
 

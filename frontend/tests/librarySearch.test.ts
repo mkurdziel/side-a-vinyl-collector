@@ -203,12 +203,17 @@ describe('library and catalog search', () => {
       for (const button of moveButtons()) button.props.onClick();
     });
 
-    expect(updateStatus).toHaveBeenCalledExactlyOnceWith(album.id, 'collection');
+    expect(updateStatus).toHaveBeenCalledExactlyOnceWith(album.id, 'collection', 'wishlist');
     expect(moveButtons().every(node => node.props['aria-disabled'])).toBe(true);
     await act(async () => moving.resolve());
 
     expect(moveButtons()).toHaveLength(0);
     expect(renderer.root.findAllByProps({ 'aria-label': 'Giant Steps is in Collection' })).toHaveLength(2);
     expect(getAlbums).toHaveBeenCalledTimes(2);
+
+    await act(async () => button('Undo').props.onClick());
+    expect(updateStatus).toHaveBeenLastCalledWith(album.id, 'wishlist', 'collection');
+    expect(moveButtons()).toHaveLength(2);
+    expect(button('Undo')).toBeUndefined();
   });
 });

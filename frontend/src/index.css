@@ -116,6 +116,7 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
+summary:focus-visible,
 [tabindex]:focus-visible {
   outline: 2px solid var(--rh-info);
   outline-offset: 3px;
@@ -304,11 +305,53 @@ textarea:focus-visible,
 
 .rh-album-card:hover .rh-album-cover img { transform: scale(1.025); }
 
-@media (hover: hover) and (pointer: fine) {
-  .rh-album-quick-action { opacity: 0; }
-  .rh-album-card:hover .rh-album-quick-action,
-  .rh-album-card:focus-within .rh-album-quick-action,
-  .rh-album-quick-action:focus-visible { opacity: 1; }
+.rh-album-quick-action {
+  border: 1px solid var(--rh-edge);
+}
+
+.rh-album-quick-action[aria-disabled="true"] {
+  cursor: progress;
+}
+
+.rh-catalog-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.rh-catalog-details > summary {
+  display: flex;
+  min-height: 82px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 12px;
+  border-top: 1px solid var(--rh-edge);
+  list-style: none;
+  cursor: pointer;
+}
+
+.rh-catalog-details > summary::-webkit-details-marker { display: none; }
+.rh-catalog-details > summary:hover { background: var(--rh-active-wash); }
+
+.rh-catalog-details[open] .rh-catalog-title,
+.rh-catalog-details[open] .rh-catalog-artist {
+  display: block;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  -webkit-line-clamp: unset;
+}
+
+.rh-catalog-details[open] .rh-catalog-chevron { transform: rotate(180deg); }
+.rh-catalog-actions { margin-top: auto; }
+
+.rh-shelf-notice {
+  position: fixed;
+  z-index: 30;
+  inset-inline-end: 16px;
+  inset-block-end: max(16px, env(safe-area-inset-bottom));
+  width: min(23rem, calc(100% - 32px));
+  box-shadow: var(--rh-shadow-panel);
 }
 
 .rh-album-meta {
@@ -435,15 +478,38 @@ html:has(.rh-dialog[open]) .rh-page-toaster { display: none; }
 
 @media (max-width: 640px) {
   .rh-shell { padding-inline: 16px; }
-  .rh-header .rh-shell { padding-block: 24px 20px; }
+  .rh-header .rh-shell { padding-block: 14px 8px; }
   .rh-view-switcher {
     display: grid;
     width: 100%;
     grid-template-columns: 1fr 1fr;
   }
+  .rh-shelf-controls .rh-view-switcher { flex: 1; min-width: 0; }
   .rh-view-tab { min-width: 0; }
-  .rh-command-bar { top: 8px; padding: 8px; border-radius: 16px; }
-  .rh-album-meta { min-height: 88px; }
+  .rh-command-bar {
+    position: static;
+    margin-bottom: 18px;
+    padding: 7px;
+    border-radius: 14px;
+    box-shadow: none;
+  }
+  .rh-album-meta { min-height: 78px; }
+  .rh-catalog-grid { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .rh-catalog-card {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr);
+    align-items: start;
+    gap: 8px;
+    padding: 8px;
+  }
+  .rh-catalog-cover { border-radius: 8px; }
+  .rh-catalog-details > summary {
+    min-height: 64px;
+    padding: 6px 4px 4px;
+    border-top: 0;
+  }
+  .rh-catalog-actions { grid-column: 1 / -1; padding: 0; }
+  .rh-catalog-actions > :first-child { grid-auto-columns: minmax(0, 1fr); grid-auto-flow: column; }
   .rh-dialog[open] {
     align-items: flex-end;
     padding: 0;
