@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Toaster, toast } from 'react-hot-toast';
-import api, { type Album, type DiscogsAlbum, getCoverArtUrl } from './services/api';
+import api, { type Album, type DiscogsAlbum, type SearchResult, getCoverArtUrl } from './services/api';
 import { AddMenu } from './components/AddMenu';
 import { BarcodeScanner } from './components/BarcodeScanner';
 import { ImageUploader } from './components/ImageUploader';
@@ -8,14 +8,67 @@ import { DiscogsImporter } from './components/DiscogsImporter';
 import { AlbumDetailModal } from './components/AlbumDetailModal';
 import { SettingsModal } from './components/SettingsModal';
 
+type Shelf = Album['status'];
+type SortBy = 'title' | 'artist' | 'date';
+type ShelfRequest = { view: Shelf; revision: number };
+type ShelfResult = { request: ShelfRequest } & (
+  { status: 'ready'; albums: Album[] } | { status: 'error' }
+);
+type SearchState =
+  | { status: 'idle' | 'pending' | 'error' }
+  | { status: 'ready'; results: SearchResult };
+type SearchRequest = { controller: AbortController; timer?: number };
+
+const shelves: Shelf[] = ['collection', 'wishlist'];
+const shelfLabel: Record<Shelf, string> = { collection: 'Collection', wishlist: 'Wishlist' };
+const albumGrid = 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4';
+const secondaryButton = 'min-h-11 rounded-lg border border-gray-300 bg-gray-100 px-3 text-sm font-semibold text-gray-900 hover:bg-gray-50';
+
+function cancelSearch(request: SearchRequest | null) {
+  if (!request) return;
+  window.clearTimeout(request.timer);
+  request.controller.abort();
+}
+
+function catalogKey(album: DiscogsAlbum) {
+  // Catalog providers supply different IDs. They are deduplicated by artist and title.
+  return JSON.stringify([album.artist.toLowerCase(), album.album.toLowerCase()]);
+}
+
+function AlbumCover({ src }: { src?: string }) {
+  const [failed, setFailed] = useState(false);
+  // This decorative cover is paired with the album title and artist on every card.
+  return src && !failed ? (
+    <img
+      src={src}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      className="size-full object-cover"
+      onError={() => setFailed(true)}
+    />
+  ) : (
+    <svg aria-hidden="true" className="size-10 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+    </svg>
+  );
+}
+
+function AlbumMeta({ title, artist, year }: { title: string; artist: string; year?: number }) {
+  return (
+    <div className="rh-album-meta p-3">
+      <h3 className="line-clamp-2 text-sm text-gray-900" title={title}>{title}</h3>
+      <p className="mt-0.5 truncate text-xs" title={artist}>{artist}</p>
+      {year ? <p className="rh-album-year text-xs">{year}</p> : null}
+    </div>
+  );
+}
 
 function App() {
-  const [albums, setAlbums] = useState<Album[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [shelfRequest, setShelfRequest] = useState<ShelfRequest>({ view: 'collection', revision: 0 });
+  const [shelfResult, setShelfResult] = useState<ShelfResult | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [lastSearchedQuery, setLastSearchedQuery] = useState('');
-  const [isSearching, setIsSearching] = useState(false);
-  const [searchResults, setSearchResults] = useState<{ local: Album[]; discogs: DiscogsAlbum[] } | null>(null);
+  const [searchState, setSearchState] = useState<SearchState>({ status: 'idle' });
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [showBarcodeScanner, setShowBarcodeScanner] = useState(false);
   const [showImageUploader, setShowImageUploader] = useState(false);
@@ -23,571 +76,506 @@ function App() {
   const [selectedAlbum, setSelectedAlbum] = useState<Album | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [discogsConfigured, setDiscogsConfigured] = useState(false);
-  const [viewMode, setViewMode] = useState<'collection' | 'wishlist'>('collection');
-  const [addedAlbums, setAddedAlbums] = useState<Record<string | number, { status: 'collection' | 'wishlist', showAdded: boolean }>>({});
-  const searchTimeoutRef = useRef<number | null>(null);
-  const [sortBy, setSortBy] = useState<'title' | 'artist' | 'date'>(() => {
+  const [pendingAdds, setPendingAdds] = useState<Record<string, Shelf>>({});
+  const [addErrors, setAddErrors] = useState<Record<string, string>>({});
+  const [artworkRevisions, setArtworkRevisions] = useState<Record<number, number>>({});
+  const [sortBy, setSortBy] = useState<SortBy>(() => {
     const saved = localStorage.getItem('albumSortBy');
-    return (saved as 'title' | 'artist' | 'date') || 'title';
+    return saved === 'artist' || saved === 'date' ? saved : 'title';
   });
+  const inFlightAdds = useRef(new Set<string>());
+  const searchRequest = useRef<SearchRequest | null>(null);
+  const latestQuery = useRef('');
+  const searchInput = useRef<HTMLInputElement>(null);
 
-  // Save sort preference to localStorage
+  const viewMode = shelfRequest.view;
+  const currentShelf = shelfResult?.request.view === viewMode &&
+    (shelfResult.status === 'ready' || shelfResult.request.revision === shelfRequest.revision)
+    ? shelfResult
+    : null;
+
   useEffect(() => {
     localStorage.setItem('albumSortBy', sortBy);
   }, [sortBy]);
 
-  // Cleanup timeout on unmount
   useEffect(() => {
-    return () => {
-      if (searchTimeoutRef.current) {
-        clearTimeout(searchTimeoutRef.current);
-      }
-    };
+    const controller = new AbortController();
+    api.getAlbums(shelfRequest.view, controller.signal)
+      .then(({ albums }) => {
+        if (!controller.signal.aborted) setShelfResult({ request: shelfRequest, status: 'ready', albums });
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setShelfResult({ request: shelfRequest, status: 'error' });
+      });
+    return () => controller.abort();
+  }, [shelfRequest]);
+
+  useEffect(() => {
+    let active = true;
+    api.checkDiscogsConfig()
+      .then(config => {
+        if (active) setDiscogsConfigured(config.configured);
+      })
+      .catch(error => console.error('Failed to check Discogs config:', error));
+    return () => { active = false; };
   }, []);
 
-  const checkDiscogsConfig = () => api.checkDiscogsConfig()
-    .then(config => setDiscogsConfigured(config.configured))
-    .catch(error => console.error('Failed to check Discogs config:', error));
+  useEffect(() => () => cancelSearch(searchRequest.current), []);
 
-  const loadAlbums = () => api.getAlbums(viewMode)
-    .then(data => setAlbums(data.albums))
-    .catch(() => toast.error('Failed to load albums'))
-    .finally(() => setLoading(false));
+  const refreshShelf = () => setShelfRequest(request => ({ ...request, revision: request.revision + 1 }));
 
-  useEffect(() => {
-    loadAlbums();
-    checkDiscogsConfig();
-  }, [viewMode]);
-
-  const performSearch = async (query: string) => {
-    if (query.trim().length < 2) {
-      setSearchResults(null);
-      setLastSearchedQuery(query.trim());
+  const runSearch = (value: string, { delay = 0, keepResults = false } = {}) => {
+    cancelSearch(searchRequest.current);
+    searchRequest.current = null;
+    const query = value.trim();
+    if (query.length < 2) {
+      setSearchState({ status: 'idle' });
       return;
     }
 
-    setIsSearching(true);
-    setLastSearchedQuery(query.trim());
-    try {
-      const results = await api.search(query);
-      setSearchResults(results);
-      
-      if (results.errors && results.errors.length > 0) {
-        results.errors.forEach(err => toast.error(err, { duration: 4000 }));
+    const request: SearchRequest = { controller: new AbortController() };
+    searchRequest.current = request;
+    if (!keepResults) setSearchState({ status: 'pending' });
+
+    const fetchResults = async () => {
+      try {
+        const results = await api.search(query, request.controller.signal);
+        if (!request.controller.signal.aborted) setSearchState({ status: 'ready', results });
+      } catch {
+        if (!request.controller.signal.aborted) setSearchState({ status: 'error' });
+      } finally {
+        if (searchRequest.current === request) searchRequest.current = null;
       }
-    } catch (error) {
-      toast.error('Search failed');
-    } finally {
-      setIsSearching(false);
-    }
+    };
+    if (delay) request.timer = window.setTimeout(fetchResults, delay);
+    else void fetchResults();
   };
 
-  const handleSearch = (query: string) => {
-    setSearchQuery(query);
-
-    // Clear existing timeout
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
-    }
-
-    // If query is empty or too short, clear results immediately
-    if (query.trim().length < 2) {
-      setSearchResults(null);
-      return;
-    }
-
-    // Debounce the actual search API call
-    searchTimeoutRef.current = setTimeout(() => {
-      performSearch(query);
-    }, 5000); // 5000ms (5 seconds) delay
+  const changeSearch = (value: string) => {
+    latestQuery.current = value;
+    setSearchQuery(value);
+    setAddErrors({});
+    runSearch(value, { delay: 400 });
   };
 
-  const handleAddFromDiscogs = async (album: DiscogsAlbum, targetStatus: 'collection' | 'wishlist') => {
+  const showShelf = (view: Shelf) => {
+    if (view === viewMode && !searchQuery) return;
+    changeSearch('');
+    if (view !== viewMode) setShelfRequest({ view, revision: shelfRequest.revision + 1 });
+  };
+
+  const refreshLibrary = (updatedArtwork?: Album) => {
+    if (updatedArtwork) {
+      const revision = Date.now();
+      setArtworkRevisions(prev => ({ ...prev, [updatedArtwork.id]: revision }));
+    }
+    refreshShelf();
+    if (latestQuery.current.trim().length >= 2) runSearch(latestQuery.current, { keepResults: true });
+  };
+
+  const handleCatalogAdd = async (album: DiscogsAlbum, destination: Shelf) => {
+    const key = catalogKey(album);
+    if (inFlightAdds.current.has(key)) return;
+    inFlightAdds.current.add(key);
+    setPendingAdds(prev => ({ ...prev, [key]: destination }));
+    setAddErrors(prev => ({ ...prev, [key]: '' }));
     try {
-      await api.addAlbum({
+      const { album: saved } = await api.addAlbum({
         artist: album.artist,
         album: album.album,
         year: album.year,
         coverImageUrl: album.coverImageUrl,
         discogsId: album.discogsId,
-        status: targetStatus,
+        status: destination,
       });
-      
-      toast.success(`Album added to ${targetStatus}`);
-      
-      // Update local state to show "Added" in UI without reload
-      const addedId = album.coverImageUrl || album.discogsId;
-      setAddedAlbums(prev => ({
+      setSearchState(current => {
+        if (current.status !== 'ready' || !current.results.discogs.some(match => catalogKey(match) === key)) {
+          return current;
+        }
+        const { local, discogs } = current.results;
+        return {
+          status: 'ready',
+          results: {
+            ...current.results,
+            local: local.some(match => match.id === saved.id) ? local : [...local, saved],
+            discogs: discogs.map(match => catalogKey(match) !== key ? match : {
+              ...match,
+              inCollection: destination === 'collection',
+              inWishlist: destination === 'wishlist',
+            }),
+          },
+        };
+      });
+      toast.success(`“${album.album}” added to ${shelfLabel[destination]}.`);
+      refreshShelf();
+      // A search that started before this save can carry the old membership.
+      if (searchRequest.current) runSearch(latestQuery.current, { keepResults: true });
+    } catch (error) {
+      setAddErrors(prev => ({
         ...prev,
-        [addedId]: { status: targetStatus, showAdded: true }
+        [key]: error instanceof Error ? error.message : 'Could not add this album. Try again.',
       }));
-      
-      // Transition out of the "Added" state after 2 seconds
-      setTimeout(() => {
-        setAddedAlbums(prev => ({
-          ...prev,
-          [addedId]: { status: targetStatus, showAdded: false }
-        }));
-      }, 2000);
-      
-      // Silently refresh main list in background
-      loadAlbums(); 
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to add album');
+    } finally {
+      inFlightAdds.current.delete(key);
+      setPendingAdds(prev => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
     }
   };
 
   const handleRemove = async (album: Album) => {
-    if (album.status === 'collection') {
-      if (!confirm('Move this album from your collection to your wishlist?')) return;
-      try {
-        await api.updateStatus(album.id, 'wishlist');
-        toast.success('Album moved to wishlist');
-        loadAlbums();
-      } catch (error) {
-        toast.error('Failed to move album');
-      }
-    } else {
-      if (!confirm('Remove this album from your wishlist entirely?')) return;
-      try {
-        await api.deleteAlbum(album.id);
-        toast.success('Album removed entirely');
-        loadAlbums();
-      } catch (error) {
-        toast.error('Failed to remove album');
-      }
+    const moveToWishlist = album.status === 'collection';
+    const message = moveToWishlist
+      ? `Move “${album.title}” from Collection to Wishlist?`
+      : `Remove “${album.title}” from Wishlist?`;
+    if (!confirm(message)) return;
+
+    try {
+      if (moveToWishlist) await api.updateStatus(album.id, 'wishlist');
+      else await api.deleteAlbum(album.id);
+      toast.success(moveToWishlist
+        ? `“${album.title}” moved to Wishlist.`
+        : `“${album.title}” removed from Wishlist.`);
+      refreshLibrary();
+    } catch {
+      toast.error(moveToWishlist ? 'Could not move this album.' : 'Could not remove this album.');
     }
   };
 
-  const displayAlbums = searchResults ? searchResults.local : albums;
+  const results = searchState.status === 'ready' ? searchState.results : null;
+  const queryLength = searchQuery.trim().length;
+  const shelfAlbums = currentShelf?.status === 'ready' ? currentShelf.albums : [];
+  const sortedAlbums = [...(results?.local ?? shelfAlbums)].sort((first, second) => {
+    if (sortBy === 'artist') return first.artist_name.localeCompare(second.artist_name);
+    if (sortBy === 'date') return new Date(second.added_at).getTime() - new Date(first.added_at).getTime();
+    return first.title.localeCompare(second.title);
+  });
 
-  // Sort albums based on selected criteria
-  const sortAlbums = (albumsToSort: typeof albums) => {
-    const sorted = [...albumsToSort];
-    switch (sortBy) {
-      case 'artist':
-        return sorted.sort((a, b) => a.artist_name.localeCompare(b.artist_name));
-      case 'date':
-        return sorted.sort((a, b) => new Date(b.added_at).getTime() - new Date(a.added_at).getTime());
-      case 'title':
-      default:
-        return sorted.sort((a, b) => a.title.localeCompare(b.title));
-    }
-  };
-
-  const sortedAlbums = sortAlbums(displayAlbums);
+  const renderSavedAlbums = () => (
+    <div className={albumGrid}>
+      {sortedAlbums.map(album => {
+        const revision = artworkRevisions[album.id];
+        const src = `${getCoverArtUrl(album.id)}${revision ? `?v=${revision}` : ''}`;
+        const quickAction = album.status === 'collection' ? 'Move to Wishlist' : 'Remove from Wishlist';
+        return (
+          <article key={album.id} className="rh-album-card relative rounded-xl border border-gray-200">
+            <div className="rh-album-cover flex aspect-square items-center justify-center overflow-hidden">
+              <AlbumCover key={src} src={src} />
+              {!album.cover_art_fetched && (
+                <span className="absolute left-2 top-2 z-10 rounded-full bg-yellow-400 p-1 text-yellow-900" title="Unverified artwork">
+                  <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  <span className="sr-only">Unverified artwork</span>
+                </span>
+              )}
+            </div>
+            <AlbumMeta title={album.title} artist={album.artist_name} year={album.year} />
+            {results && (
+              <span className="mb-3 ml-3 inline-block rounded-md bg-gray-100 px-2 py-1 text-xs text-gray-900">
+                In {shelfLabel[album.status]}
+              </span>
+            )}
+            <button
+              type="button"
+              className="absolute inset-0 z-10 cursor-pointer rounded-[inherit]"
+              aria-label={`Open ${album.title} by ${album.artist_name}`}
+              aria-haspopup="dialog"
+              onClick={() => setSelectedAlbum(album)}
+            />
+            <button
+              type="button"
+              className="rh-album-quick-action absolute right-1 top-1 z-20 grid size-11 place-items-center rounded-lg border border-gray-300 bg-gray-100 text-gray-900 hover:bg-gray-50"
+              aria-label={`${quickAction} — ${album.title}`}
+              title={quickAction}
+              onClick={() => void handleRemove(album)}
+            >
+              <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                {album.status === 'collection' ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                )}
+              </svg>
+            </button>
+          </article>
+        );
+      })}
+    </div>
+  );
 
   return (
-    <div className="rh-app min-h-screen bg-gray-50">
-      <Toaster
-        position="top-right"
-        toastOptions={{
-          style: {
-            background: 'var(--rh-surface-2)',
-            color: 'var(--rh-ink)',
-            border: '1px solid var(--rh-edge)',
-            boxShadow: 'var(--rh-shadow-panel)',
-          },
-        }}
-      />
+    <div className="rh-app min-h-screen">
+      <div className="rh-page-toaster">
+        <Toaster
+          position="top-right"
+          toastOptions={{
+            style: {
+              background: 'var(--rh-surface-2)',
+              color: 'var(--rh-ink)',
+              border: '1px solid var(--rh-edge)',
+              boxShadow: 'var(--rh-shadow-panel)',
+            },
+          }}
+        />
+      </div>
 
-      <header className="rh-header bg-white border-b border-gray-200">
-        <div className="rh-shell max-w-7xl mx-auto px-6 py-8">
-          <div className="flex items-start justify-between mb-6">
-            <div>
-              <p className="rh-kicker">Side A · Personal archive</p>
-              <h1 className="text-2xl font-bold text-gray-900 mb-1">Vinyl Collector</h1>
-              <p className="text-sm text-gray-600">Manage your vinyl record collection</p>
-            </div>
+      <header className="rh-header border-b">
+        <div className="rh-shell mx-auto px-6 py-6">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <h1>Vinyl Collector</h1>
             <button
+              type="button"
               onClick={() => setShowSettings(true)}
-              className="rh-icon-button p-2.5 text-gray-500 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-colors"
+              className="rh-icon-button rounded-lg border p-2.5 text-gray-500 transition-colors"
               title="Settings"
               aria-label="Open settings"
+              aria-haspopup="dialog"
             >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
             </button>
           </div>
 
-          <div className="rh-view-switcher flex gap-4 border-b border-gray-200" role="tablist" aria-label="Library view">
-            <button
-              className={`rh-view-tab pb-3 px-1 text-sm font-medium transition-colors relative ${
-                viewMode === 'collection'
-                  ? 'text-purple-600'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-              onClick={() => setViewMode('collection')}
-              role="tab"
-              aria-selected={viewMode === 'collection'}
-            >
-              Collection
-            </button>
-            <button
-              className={`rh-view-tab pb-3 px-1 text-sm font-medium transition-colors relative ${
-                viewMode === 'wishlist'
-                  ? 'text-purple-600'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-              onClick={() => setViewMode('wishlist')}
-              role="tab"
-              aria-selected={viewMode === 'wishlist'}
-            >
-              Wishlist
-            </button>
-          </div>
-
-          <div className="mt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="rh-library-count text-sm font-medium text-gray-600">
-              {loading ? (
-                <span>Loading...</span>
-              ) : (
-                <span>
-                  {albums.length} {albums.length === 1 ? 'item' : 'items'} in {viewMode === 'collection' ? 'Collection' : 'Wishlist'}
-                </span>
-              )}
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+            <div className="rh-view-switcher flex" role="group" aria-label="Library view">
+              {shelves.map(shelf => (
+                <button
+                  key={shelf}
+                  type="button"
+                  className="rh-view-tab text-sm font-medium text-gray-500 transition-colors"
+                  onClick={() => showShelf(shelf)}
+                  aria-pressed={viewMode === shelf}
+                >
+                  {shelfLabel[shelf]}
+                </button>
+              ))}
             </div>
-
-            {/* Sort dropdown */}
-            <div className="flex items-center gap-2">
-              <label htmlFor="sort-select" className="rh-field-label text-sm font-medium text-gray-700">
-                Sort
-              </label>
-              <select
-                id="sort-select"
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as 'title' | 'artist' | 'date')}
-                className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white"
-              >
-                <option value="title">Album Title</option>
-                <option value="artist">Artist Name</option>
-                <option value="date">Date Added</option>
-              </select>
+            <div className="flex flex-wrap items-center justify-between gap-2 sm:flex-1">
+              <div className="rh-library-count text-sm" aria-live="polite">
+                {currentShelf?.status === 'ready' && (
+                  <span>{shelfAlbums.length} {shelfAlbums.length === 1 ? 'album' : 'albums'} in {shelfLabel[viewMode]}</span>
+                )}
+              </div>
+              <div className="ml-auto flex items-center gap-2">
+                <label htmlFor="sort-select" className="text-sm text-gray-600">Sort</label>
+                <select
+                  id="sort-select"
+                  value={sortBy}
+                  onChange={event => setSortBy(event.target.value as SortBy)}
+                  className="min-h-11 rounded-lg border border-gray-300 bg-white px-2.5"
+                >
+                  <option value="title">Album title</option>
+                  <option value="artist">Artist name</option>
+                  <option value="date">Date added</option>
+                </select>
+              </div>
             </div>
           </div>
         </div>
       </header>
 
-      <main className="rh-main rh-shell max-w-7xl mx-auto px-6 py-8">
-        <div className="rh-command-bar flex flex-col md:flex-row gap-3 mb-12">
-          <div className="rh-search relative flex-1">
-            {isSearching ? (
-              <div className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 border-2 border-purple-200 border-t-purple-600 rounded-full animate-spin"></div>
-            ) : (
-              <svg className={`absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 ${
-                searchQuery.trim() !== lastSearchedQuery && searchQuery.trim().length >= 2 ? 'text-purple-500 animate-pulse' : 'text-gray-400'
-              }`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-            )}
-            <input
-              type="text"
-              className={`w-full pl-10 pr-24 py-2.5 text-base border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent ${
-                searchQuery.trim() !== lastSearchedQuery && searchQuery.trim().length >= 2 ? 'border-purple-300 bg-purple-50' : 'border-gray-300'
-              }`}
-              placeholder="Search albums..."
-              value={searchQuery}
-              onChange={(e) => handleSearch(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  if (searchTimeoutRef.current) {
-                    clearTimeout(searchTimeoutRef.current);
-                  }
-                  performSearch(e.currentTarget.value);
-                }
-              }}
-            />
-            {searchQuery && (
-              <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
-                {searchQuery.trim() !== lastSearchedQuery && searchQuery.trim().length >= 2 && !isSearching && (
-                  <span className="text-xs font-medium text-purple-600 bg-purple-100 px-2 py-1 rounded hidden sm:inline-block animate-pulse shadow-sm">Press Enter ↵</span>
-                )}
+      <main className="rh-main rh-shell mx-auto px-6 py-5 sm:py-6">
+        <div className="rh-command-bar flex flex-col gap-2 sm:flex-row">
+          <form
+            role="search"
+            className="flex min-w-0 flex-1 gap-2"
+            onSubmit={event => {
+              event.preventDefault();
+              runSearch(searchQuery);
+            }}
+          >
+            <div className="rh-search relative min-w-0 flex-1">
+              <label htmlFor="album-search" className="sr-only">Search saved albums and catalogs</label>
+              <input
+                ref={searchInput}
+                id="album-search"
+                type="text"
+                enterKeyHint="search"
+                className={`w-full border px-3 py-2 ${searchQuery ? 'pr-12' : ''}`}
+                placeholder="Album or artist"
+                value={searchQuery}
+                onChange={event => changeSearch(event.target.value)}
+              />
+              {searchQuery && (
                 <button
-                  className="text-gray-400 hover:text-gray-600 transition-colors bg-white/50 rounded-full p-0.5"
+                  type="button"
+                  className="absolute right-1 top-1/2 grid size-11 -translate-y-1/2 place-items-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-900"
+                  aria-label="Clear search"
+                  title="Clear search"
                   onClick={() => {
-                    setSearchQuery('');
-                    setLastSearchedQuery('');
-                    setSearchResults(null);
+                    changeSearch('');
+                    searchInput.current?.focus();
                   }}
                 >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
-              </div>
-            )}
-          </div>
-          <button className="rh-primary-action px-5 py-2.5 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors md:w-auto w-full flex items-center justify-center gap-2" onClick={() => setShowAddMenu(!showAddMenu)} aria-expanded={showAddMenu}>
-            {showAddMenu ? (
-              <>
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-                Close
-              </>
-            ) : (
-              <>
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                Add Album
-              </>
-            )}
+              )}
+            </div>
+            <button type="submit" className={`${secondaryButton} disabled:opacity-60`} disabled={queryLength < 2}>
+              Search
+            </button>
+          </form>
+          <button
+            type="button"
+            className="rh-primary-action flex shrink-0 items-center justify-center gap-2 px-4 py-2 text-sm font-semibold"
+            aria-haspopup="dialog"
+            onClick={() => setShowAddMenu(true)}
+          >
+            <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            Add Album
           </button>
         </div>
 
-        {viewMode === 'wishlist' && albums.length > 0 && !loading && (
-          <div className="rh-notice mb-8 p-4 bg-purple-50 rounded-lg border border-purple-100 flex items-start gap-3">
-            <svg className="w-5 h-5 text-purple-600 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <div>
-              <h3 className="text-sm font-medium text-purple-900">Wishlist Mode</h3>
-              <p className="text-sm text-purple-700 mt-1">
-                Albums you add while viewing the wishlist will be added here automatically. Click an album to move it to your collection.
-              </p>
-            </div>
+        <div role="status" className="text-sm text-gray-600" aria-atomic="true">
+          {queryLength === 1 && <p className="mb-4">Enter at least two characters to search.</p>}
+          {searchState.status === 'pending' && <p className="py-8">Searching your library and catalogs…</p>}
+          {results && (results.local.length || results.discogs.length) ? (
+            <p className="mb-4">
+              {results.local.length} saved {results.local.length === 1 ? 'album' : 'albums'} · {results.discogs.length} catalog {results.discogs.length === 1 ? 'match' : 'matches'}
+            </p>
+          ) : null}
+          {queryLength < 2 && !currentShelf && <p className="py-8">Loading {shelfLabel[viewMode]}…</p>}
+        </div>
+
+        {searchState.status === 'error' && (
+          <div className="flex flex-wrap items-center gap-3 py-5">
+            <p role="alert" className="text-sm">Search couldn’t finish.</p>
+            <button type="button" className={secondaryButton} onClick={() => runSearch(searchQuery)}>Retry search</button>
           </div>
         )}
 
-        {showAddMenu && (
-          <AddMenu
-            onBarcodeClick={() => {
-              setShowBarcodeScanner(true);
-              setShowAddMenu(false);
-            }}
-            onImageClick={() => {
-              setShowImageUploader(true);
-              setShowAddMenu(false);
-            }}
-            onSearchClick={() => {
-              setShowAddMenu(false);
-              document.querySelector<HTMLInputElement>('input[type="text"]')?.focus();
-            }}
-            onImportClick={() => {
-              setShowDiscogsImporter(true);
-              setShowAddMenu(false);
-            }}
-            onClose={() => setShowAddMenu(false)}
-            discogsConfigured={discogsConfigured}
-            viewMode={viewMode}
-          />
-        )}
-
-        {loading ? (
-          <div className="text-center py-16">
-            <div className="inline-block w-16 h-16 border-4 border-white/30 border-t-white rounded-full animate-spin"></div>
-            <p className="mt-4 text-xl text-gray-900 font-medium">Loading your collection...</p>
-          </div>
-        ) : (
-          <>
-            {(!searchQuery || viewMode === 'collection') ? (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-                {sortedAlbums.length === 0 ? (
-                  <div className="col-span-full text-center py-16 px-4">
-                    <div className="bg-gray-100 rounded-full w-20 h-20 flex items-center justify-center mx-auto mb-4">
-                      {searchQuery ? (
-                         <svg className="w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                         </svg>
-                      ) : (
-                         <svg className="mx-auto w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                         </svg>
-                      )}
-                    </div>
-                    <h3 className="text-lg font-medium text-gray-900">
-                      {searchQuery ? 'No matching albums found' : (viewMode === 'wishlist' ? 'Your wishlist is empty' : 'No albums yet')}
-                    </h3>
-                    {!searchQuery && (
-                      <p className="mt-1 text-gray-500">
-                        {viewMode === 'wishlist' 
-                          ? 'Search for albums above to add them to your wishlist.'
-                          : 'Start building your collection by adding an album.'}
-                      </p>
-                    )}
-                </div>
-              ) : (
-                sortedAlbums.map((album) => (
-                  <div
-                    key={album.id}
-                    className="rh-album-card bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow group relative overflow-hidden cursor-pointer"
-                    onClick={() => setSelectedAlbum(album)}
-                  >
-                    <div className="rh-album-cover aspect-square bg-gray-50 flex items-center justify-center overflow-hidden rounded-t-xl">
-                      <img
-                        src={getCoverArtUrl(album.id)}
-                        alt={album.title}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                        onError={(e) => {
-                          // If cover art fails to load, show placeholder icon
-                          const target = e.target as HTMLImageElement;
-                          target.style.display = 'none';
-                          target.parentElement!.innerHTML = '<svg class="w-12 h-12 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>';
-                        }}
-                      />
-                      <div className="absolute top-2 left-2 flex flex-col gap-1 items-start">
-                        {searchQuery && (
-                          <div className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider shadow-sm backdrop-blur-sm ${
-                            album.status === 'collection' ? 'bg-green-500/90 text-white' : 'bg-purple-500/90 text-white'
-                          }`}>
-                            {album.status}
-                          </div>
-                        )}
-                        {!album.cover_art_fetched && (
-                          <div className="bg-yellow-400 text-yellow-900 rounded-full p-1 shadow-md w-fit" title="Unverified Artwork">
-                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                            </svg>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="rh-album-meta p-3">
-                      <h3 className="font-medium text-sm mb-0.5 truncate text-gray-900">{album.title}</h3>
-                      <p className="text-xs text-gray-600 truncate mb-0.5">{album.artist_name}</p>
-                      {album.year && <p className="text-xs text-gray-400">{album.year}</p>}
-                    </div>
-                    <button
-                      className="absolute top-2 right-2 bg-white/95 hover:bg-red-50 hover:text-red-600 text-gray-600 rounded-lg p-2 transition-all duration-200 shadow-sm opacity-0 group-hover:opacity-100"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRemove(album);
-                      }}
-                      title={album.status === 'collection' ? "Move to wishlist" : "Remove completely"}
-                    >
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        {album.status === 'collection' ? (
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-                        ) : (
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        )}
-                      </svg>
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-            ) : searchQuery && viewMode === 'wishlist' && (!searchResults || !searchResults.discogs || searchResults.discogs.length === 0) ? (
-               <div className="text-center py-16">
-                 <p className="text-gray-500 mb-2">No matching albums found.</p>
-                 <p className="text-sm text-gray-400">Try checking your spelling or searching for a different artist.</p>
-               </div>
+        {results && (
+          <div className="space-y-8">
+            {results.errors?.length ? (
+              <div className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-300 p-3">
+                <p role="status" className="text-sm">Some catalog results are temporarily unavailable.</p>
+                <button type="button" className={secondaryButton} onClick={() => runSearch(searchQuery)}>Retry search</button>
+              </div>
             ) : null}
-
-            {searchResults && searchResults.discogs.length > 0 && (
-              <div className="mt-12 pt-8 border-t border-gray-200">
-                <h2 className="text-lg font-semibold text-gray-900 mb-4">Search Results</h2>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-                  {searchResults.discogs.map((album) => (
-                    <div key={album.discogsId} className="rh-album-card bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow group relative overflow-hidden">
-                      <div className="rh-album-cover aspect-square bg-gray-50 flex items-center justify-center overflow-hidden rounded-t-xl">
-                        {album.coverImageUrl ? (
-                          <img
-                            src={album.coverImageUrl}
-                            alt={album.album}
-                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                          />
-                        ) : (
-                          <svg className="w-12 h-12 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                          </svg>
-                        )}
-                      </div>
-                      <div className="rh-album-meta p-3">
-                        <h3 className="font-medium text-sm mb-0.5 truncate text-gray-900">{album.album}</h3>
-                        <p className="text-xs text-gray-600 truncate mb-0.5">{album.artist}</p>
-                        {album.year && <p className="text-xs text-gray-400">{album.year}</p>}
-                      </div>
-                      <div className={`absolute top-2 right-2 flex flex-col gap-1 transition-opacity duration-200 ${
-                        album.inCollection || album.inWishlist || addedAlbums[album.coverImageUrl || album.discogsId]
-                          ? 'opacity-100'
-                          : 'opacity-0 group-hover:opacity-100'
-                      }`}>
-                        {album.inCollection ? (
-                           <div className="bg-green-600 text-white rounded-lg p-2 text-xs font-medium shadow-sm flex items-center justify-center gap-1 w-32 cursor-default">
-                             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                             </svg>
-                             In Collection
-                          </div>
-                        ) : album.inWishlist ? (
-                           <div className="bg-purple-600 text-white rounded-lg p-2 text-xs font-medium shadow-sm flex items-center justify-center gap-1 w-32 cursor-default">
-                             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                             </svg>
-                             In Wishlist
-                          </div>
-                        ) : addedAlbums[album.coverImageUrl || album.discogsId] ? (
-                          <div className={`text-white rounded-lg p-2 text-xs font-medium shadow-sm flex items-center justify-center gap-1 w-32 cursor-default ${
-                            addedAlbums[album.coverImageUrl || album.discogsId].status === 'collection' ? 'bg-green-600' : 'bg-purple-600'
-                          }`}>
-                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              {addedAlbums[album.coverImageUrl || album.discogsId].status === 'collection' || addedAlbums[album.coverImageUrl || album.discogsId].showAdded ? (
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                              ) : (
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                              )}
-                            </svg>
-                            {addedAlbums[album.coverImageUrl || album.discogsId].showAdded
-                              ? 'Added'
-                              : addedAlbums[album.coverImageUrl || album.discogsId].status === 'collection'
-                                ? 'In Collection'
-                                : 'In Wishlist'}
-                          </div>
-                        ) : (
-                          <>
-                            <button
-                              className="bg-purple-600 hover:bg-purple-700 text-white rounded-lg p-2 text-xs font-medium shadow-sm flex items-center justify-center gap-1 w-32"
-                              onClick={() => handleAddFromDiscogs(album, 'collection')}
-                              title="Add to Collection"
-                            >
-                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                              </svg>
-                              Collection
-                            </button>
-                            <button
-                              className="bg-white hover:bg-gray-100 text-purple-600 border border-purple-200 rounded-lg p-2 text-xs font-medium shadow-sm flex items-center justify-center gap-1 w-32"
-                              onClick={() => handleAddFromDiscogs(album, 'wishlist')}
-                              title="Add to Wishlist"
-                            >
-                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                              </svg>
-                              Wishlist
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+            {!results.local.length && !results.discogs.length && !results.errors?.length && (
+              <div className="py-10 text-center" role="status">
+                <h2 className="text-lg font-semibold">No matches for “{searchQuery.trim()}”</h2>
+                <p className="mt-1 text-sm text-gray-600">Check the spelling or try a different album or artist.</p>
               </div>
             )}
-          </>
+            {!!results.local.length && (
+              <section aria-labelledby="saved-results-title">
+                <h2 id="saved-results-title" className="mb-3 text-lg font-semibold">Saved albums</h2>
+                {renderSavedAlbums()}
+              </section>
+            )}
+            {!!results.discogs.length && (
+              <section aria-labelledby="catalog-results-title">
+                <h2 id="catalog-results-title" className="mb-3 text-lg font-semibold">Catalog matches</h2>
+                <div className={albumGrid}>
+                  {results.discogs.map(album => {
+                    const key = catalogKey(album);
+                    const savedShelf = album.inCollection ? 'collection' : album.inWishlist ? 'wishlist' : null;
+                    const pending = pendingAdds[key];
+                    return (
+                      <article key={key} className="rh-album-card flex flex-col rounded-xl border border-gray-200">
+                        <div className="rh-album-cover flex aspect-square items-center justify-center overflow-hidden">
+                          <AlbumCover key={album.coverImageUrl} src={album.coverImageUrl} />
+                        </div>
+                        <AlbumMeta title={album.album} artist={album.artist} year={album.year} />
+                        <div className="mt-auto grid gap-1.5 p-2 pt-0">
+                          {shelves.map(destination => {
+                            if (savedShelf && savedShelf !== destination) return null;
+                            const label = shelfLabel[destination];
+                            return (
+                              <button
+                                key={destination}
+                                type="button"
+                                aria-disabled={!!pending || !!savedShelf}
+                                aria-busy={pending === destination}
+                                tabIndex={savedShelf ? -1 : undefined}
+                                aria-label={savedShelf ? `${album.album} is in ${label}` : `Add ${album.album} to ${label}`}
+                                className={`min-h-11 rounded-lg border px-1 text-xs font-semibold transition-colors ${savedShelf
+                                  ? 'border-gray-300 text-gray-600'
+                                  : destination === viewMode
+                                    ? 'border-transparent bg-purple-600 text-[var(--rh-ink-inverse)] hover:bg-purple-700'
+                                    : 'border-gray-300 bg-gray-100 text-gray-900 hover:bg-gray-50'}`}
+                                onClick={() => {
+                                  if (!savedShelf) void handleCatalogAdd(album, destination);
+                                }}
+                              >
+                                {savedShelf ? `In ${label}` : pending === destination ? 'Adding…' : `Add to ${label}`}
+                              </button>
+                            );
+                          })}
+                          {addErrors[key] && (
+                            <p role="alert" className="px-1 text-xs text-red-600">{addErrors[key]}</p>
+                          )}
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+          </div>
+        )}
+
+        {queryLength < 2 && currentShelf?.status === 'error' && (
+          <div className="flex flex-wrap items-center gap-3 py-5">
+            <p role="alert" className="text-sm">Couldn’t load {shelfLabel[viewMode]}.</p>
+            <button type="button" className={secondaryButton} onClick={refreshShelf}>Retry</button>
+          </div>
+        )}
+        {queryLength < 2 && currentShelf?.status === 'ready' && (
+          sortedAlbums.length ? renderSavedAlbums() : (
+            <div className="py-10 text-center">
+              <h2 className="text-lg font-semibold">Your {shelfLabel[viewMode].toLowerCase()} is empty</h2>
+              <p className="mt-1 text-sm text-gray-600">Search for a record or choose Add Album to get started.</p>
+            </div>
+          )
         )}
       </main>
 
-      {/* Version Footer */}
-      <footer className="max-w-7xl mx-auto px-6 py-4 text-center">
-        <p className="text-xs text-gray-400">
-          {__APP_VERSION__}
-        </p>
+      <footer className="rh-shell mx-auto px-6 py-4 text-center">
+        <p className="text-xs text-gray-400">{__APP_VERSION__}</p>
       </footer>
 
-      <SettingsModal
-        isOpen={showSettings}
-        onClose={() => setShowSettings(false)}
-      />
+      {showAddMenu && (
+        <AddMenu
+          onBarcodeClick={() => {
+            setShowAddMenu(false);
+            setShowBarcodeScanner(true);
+          }}
+          onImageClick={() => {
+            setShowAddMenu(false);
+            setShowImageUploader(true);
+          }}
+          onSearchClick={() => {
+            setShowAddMenu(false);
+            window.requestAnimationFrame(() => searchInput.current?.focus());
+          }}
+          onImportClick={() => {
+            setShowAddMenu(false);
+            setShowDiscogsImporter(true);
+          }}
+          onClose={() => setShowAddMenu(false)}
+          discogsConfigured={discogsConfigured}
+          viewMode={viewMode}
+        />
+      )}
+
+      <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />
 
       {showBarcodeScanner && (
         <BarcodeScanner
           onClose={() => setShowBarcodeScanner(false)}
           onSuccess={() => {
-            loadAlbums();
+            refreshLibrary();
             setShowBarcodeScanner(false);
           }}
           viewMode={viewMode}
@@ -598,7 +586,7 @@ function App() {
         <ImageUploader
           onClose={() => setShowImageUploader(false)}
           onSuccess={() => {
-            loadAlbums();
+            refreshLibrary();
             setShowImageUploader(false);
           }}
           viewMode={viewMode}
@@ -608,9 +596,7 @@ function App() {
       {showDiscogsImporter && (
         <DiscogsImporter
           onClose={() => setShowDiscogsImporter(false)}
-          onSuccess={() => {
-            loadAlbums();
-          }}
+          onSuccess={refreshLibrary}
           viewMode={viewMode}
         />
       )}
@@ -619,12 +605,7 @@ function App() {
         <AlbumDetailModal
           album={selectedAlbum}
           onClose={() => setSelectedAlbum(null)}
-          onRefresh={() => {
-            loadAlbums();
-            if (searchQuery) {
-              performSearch(searchQuery);
-            }
-          }}
+          onRefresh={refreshLibrary}
         />
       )}
     </div>

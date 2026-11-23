@@ -1,3 +1,5 @@
+import { ModalDialog } from './ModalDialog';
+
 interface AddMenuProps {
   onBarcodeClick: () => void;
   onImageClick: () => void;
@@ -10,13 +12,13 @@ interface AddMenuProps {
 
 export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick, onImportClick, onClose, discogsConfigured, viewMode }: AddMenuProps) => {
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full mx-4" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-gray-200 p-6">
-          <h2 className="text-xl font-bold text-gray-900">Add to {viewMode === 'collection' ? 'Collection' : 'Wishlist'}</h2>
+    <ModalDialog labelledBy="add-album-title" onClose={onClose}>
+      <div className="rh-dialog-panel max-w-3xl">
+        <div className="rh-dialog-header flex items-center justify-between border-b border-gray-200 p-4 sm:p-6">
+          <h2 id="add-album-title" className="text-xl font-bold text-gray-900">Add an album</h2>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
+            className="rh-dialog-close"
             aria-label="Close add menu"
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -24,9 +26,9 @@ export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick, onImportC
             </svg>
           </button>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 sm:p-6">
       <button
-        className="bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow p-6 text-left group flex items-start gap-4"
+        className="rh-add-method"
         onClick={onBarcodeClick}
       >
         <div className="p-3 bg-blue-50 rounded-lg group-hover:bg-blue-100 transition-colors">
@@ -35,13 +37,13 @@ export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick, onImportC
           </svg>
         </div>
         <div>
-          <span className="block text-base font-semibold text-gray-900 mb-1">Scan Barcode</span>
-          <span className="block text-sm text-gray-600">Use camera to scan UPC/EAN</span>
+          <span className="block text-base font-semibold text-gray-900 mb-1">Look up a barcode</span>
+          <span className="block text-sm text-gray-600">Scan with your camera or type the digits.</span>
         </div>
       </button>
 
       <button
-        className="bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow p-6 text-left group flex items-start gap-4"
+        className="rh-add-method"
         onClick={onImageClick}
       >
         <div className="p-3 bg-blue-50 rounded-lg group-hover:bg-blue-100 transition-colors">
@@ -50,13 +52,13 @@ export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick, onImportC
           </svg>
         </div>
         <div>
-          <span className="block text-base font-semibold text-gray-900 mb-1">Upload Image</span>
-          <span className="block text-sm text-gray-600">AI vision recognition</span>
+          <span className="block text-base font-semibold text-gray-900 mb-1">Identify a cover</span>
+          <span className="block text-sm text-gray-600">Use a photo to find matching albums.</span>
         </div>
       </button>
 
       <button
-        className="bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow p-6 text-left group flex items-start gap-4"
+        className="rh-add-method"
         onClick={onSearchClick}
       >
         <div className="p-3 bg-blue-50 rounded-lg group-hover:bg-blue-100 transition-colors">
@@ -65,13 +67,13 @@ export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick, onImportC
           </svg>
         </div>
         <div>
-          <span className="block text-base font-semibold text-gray-900 mb-1">Search by Name</span>
-          <span className="block text-sm text-gray-600">Search Discogs database</span>
+          <span className="block text-base font-semibold text-gray-900 mb-1">Search by name</span>
+          <span className="block text-sm text-gray-600">Find an artist or album in your library and the catalogs.</span>
         </div>
       </button>
 
       <button
-        className={`bg-white rounded-xl border border-gray-200 hover:shadow-lg transition-shadow p-6 text-left group flex items-start gap-4 ${!discogsConfigured ? 'opacity-50 cursor-not-allowed' : ''}`}
+        className="rh-add-method"
         onClick={discogsConfigured ? onImportClick : undefined}
         disabled={!discogsConfigured}
       >
@@ -83,12 +85,14 @@ export const AddMenu = ({ onBarcodeClick, onImageClick, onSearchClick, onImportC
         <div>
           <span className="block text-base font-semibold text-gray-900 mb-1">Import from Discogs</span>
           <span className="block text-sm text-gray-600">
-            {discogsConfigured ? 'Import your Discogs collection' : 'Discogs token not configured'}
+            {discogsConfigured
+              ? `Copy records from Discogs into your ${viewMode}.`
+              : 'A Discogs token is required. Search by name to add individual records.'}
           </span>
         </div>
       </button>
         </div>
       </div>
-    </div>
+    </ModalDialog>
   );
 };

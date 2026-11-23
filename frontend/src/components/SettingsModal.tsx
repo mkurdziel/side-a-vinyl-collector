@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
 import { toast } from 'react-hot-toast';
+import { ModalDialog } from './ModalDialog';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -92,27 +93,27 @@ export const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
         window.location.reload();
       }, 2000);
 
-    } catch (error: any) {
+    } catch (error) {
       console.error(error);
-      toast.error(error.message || 'Failed to import backup', { id: toastId });
+      toast.error(error instanceof Error ? error.message : 'Failed to import backup', { id: toastId });
     } finally {
       setIsImporting(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-6 border-b border-gray-200">
-          <h2 className="text-xl font-bold text-gray-900">Settings</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600" aria-label="Close settings">
+    <ModalDialog labelledBy="settings-title" onClose={onClose}>
+      <div className="rh-dialog-panel max-w-lg">
+        <div className="rh-dialog-header flex items-center justify-between p-4 sm:p-6 border-b border-gray-200">
+          <h2 id="settings-title" className="text-xl font-bold text-gray-900">Settings</h2>
+          <button onClick={onClose} className="rh-dialog-close" aria-label="Close settings">
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         </div>
 
-        <div className="p-6 space-y-6">
+        <div className="p-4 sm:p-6 space-y-6">
           {/* Data Management Section */}
           <div>
             <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
@@ -123,7 +124,7 @@ export const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
             </h3>
             
             <div className="bg-gray-50 rounded-lg p-4 space-y-4 border border-gray-200">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="font-medium text-gray-900">Export Data</p>
                   <p className="text-sm text-gray-500">Download a full backup of your collection and artwork.</p>
@@ -136,7 +137,7 @@ export const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
                 </button>
               </div>
 
-              <div className="border-t border-gray-200 pt-4 flex items-center justify-between">
+              <div className="border-t border-gray-200 pt-4 flex items-center justify-between gap-3">
                 <div>
                   <p className="font-medium text-gray-900">Import Data</p>
                   <p className="text-sm text-gray-500">Restore your collection from a backup file.</p>
@@ -158,7 +159,9 @@ export const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
               </div>
             </div>
             <p className="mt-3 text-xs text-amber-600 bg-amber-50 p-3 rounded border border-amber-100 flex items-start gap-2 leading-relaxed">
-              <span className="text-lg leading-none">⚠️</span>
+              <svg className="size-4 shrink-0" aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3Z" />
+              </svg>
               <span>Importing a backup will <strong>overwrite all existing data</strong>. Verify the backup before continuing.</span>
             </p>
           </div>
@@ -173,6 +176,6 @@ export const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
           </button>
         </div>
       </div>
-    </div>
+    </ModalDialog>
   );
 };

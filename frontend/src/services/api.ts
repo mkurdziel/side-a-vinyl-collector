@@ -74,8 +74,8 @@ class ApiService {
     return response.json();
   }
 
-  async getAlbums(status: 'collection' | 'wishlist' = 'collection'): Promise<{ albums: Album[] }> {
-    return this.request(`/api/albums?status=${status}`);
+  async getAlbums(status: 'collection' | 'wishlist' = 'collection', signal?: AbortSignal): Promise<{ albums: Album[] }> {
+    return this.request(`/api/albums?status=${status}`, { signal });
   }
 
   async addAlbum(data: {
@@ -111,8 +111,8 @@ class ApiService {
     });
   }
 
-  async search(query: string): Promise<SearchResult> {
-    return this.request(`/api/search?q=${encodeURIComponent(query)}`);
+  async search(query: string, signal?: AbortSignal): Promise<SearchResult> {
+    return this.request(`/api/search?q=${encodeURIComponent(query)}`, { signal });
   }
 
   async scanBarcode(barcode: string): Promise<{

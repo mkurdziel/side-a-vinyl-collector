@@ -46,15 +46,16 @@ describe('album details state', () => {
   it('keeps a local artwork update until a new album prop arrives', async () => {
     vi.useFakeTimers();
     searchCoverArt.mockResolvedValue({ results: [{ source: 'Discogs', id: 1, title: 'Candidate', url: '/new.jpg' }] });
-    updateCoverArt.mockResolvedValue({ album: { ...album, cover_image_url: '/new.jpg' } });
+    updateCoverArt.mockResolvedValue({ album: { id: album.id, cover_image_url: '/new.jpg', local_cover_path: '1_new.jpg' } });
     await act(async () => { renderer = create(renderAlbum(album)); });
-    const search = renderer!.root.findAllByType('button').find(button => !button.props.disabled && button.props.onClick.name === 'handleSearchArtwork');
+    const search = renderer!.root.findAllByType('button').find(button => button.children.includes('Refresh Artwork'));
     await act(async () => search!.props.onClick());
-    await act(async () => renderer!.root.findByProps({ className: 'group cursor-pointer relative' }).props.onClick());
+    const useCover = renderer!.root.findByProps({ 'aria-label': 'Use Candidate cover from Discogs' });
+    await act(async () => useCover.props.onClick());
     await act(async () => renderer!.update(renderAlbum(album)));
-    expect(JSON.stringify(renderer!.toJSON())).toContain('/new.jpg');
-    await act(async () => renderer!.update(renderAlbum({ ...album, cover_image_url: '/parent.jpg' })));
-    expect(JSON.stringify(renderer!.toJSON())).toContain('/parent.jpg');
-    expect(JSON.stringify(renderer!.toJSON())).not.toContain('/new.jpg');
+    expect(renderer!.root.findByType('img').props.src).toBe('/api/cover-art/1?v=1_new.jpg');
+    expect(callbacks.onRefresh).toHaveBeenCalledWith({ ...album, cover_image_url: '/new.jpg', local_cover_path: '1_new.jpg' });
+    await act(async () => renderer!.update(renderAlbum({ ...album, local_cover_path: '1_parent.jpg' })));
+    expect(renderer!.root.findByType('img').props.src).toBe('/api/cover-art/1?v=1_parent.jpg');
   });
 });
