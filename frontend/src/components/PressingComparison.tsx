@@ -121,7 +121,13 @@ export function PressingComparison({
             <p className="font-semibold">{title}</p>
             {lookup?.artist && <p className="text-sm text-gray-600">{lookup.artist}</p>}
             <p className="mt-2 max-w-prose text-sm text-gray-600">
-              Match the catalog number on the sleeve or record label. An album overview can include several pressings.
+              Side A saves one entry per artist and title.
+              {lookup?.source?.url
+                ? ' If this is a different pressing, use the source listing to check it or search for a different album.'
+                : ' Check the sleeve for a catalog number before deciding which copy you have.'}
+            </p>
+            <p className="mt-1 text-sm text-gray-600">
+              Check the catalog number on the sleeve or record label. An album overview can include several pressings.
             </p>
           </div>
           {removed && (
@@ -152,6 +158,11 @@ export function PressingComparison({
               </div>
             </div>
           )}
+          <div className="rh-comparison-links">
+            {sourceLink('Lookup', lookupRelease ? `${lookupRecord}, release ${lookupRelease}` : lookupRecord, lookup?.source)}
+            {selected && sourceLink('Saved copy', savedCopyLabel(selected), savedSource)}
+            {onSearch && <button type="button" className="rh-lookup-link" onClick={onSearch}>{searchLabel}</button>}
+          </div>
           <div>
             <table className="rh-pressing-table">
               <caption className="sr-only">Catalog evidence for {lookupRecord}</caption>
@@ -172,14 +183,6 @@ export function PressingComparison({
             {!loadingDetails && (lookupRelease || savedRelease) && !lookupDetails && !savedDetails && (
               <p className="mt-2 text-sm text-gray-600">More details may be available in the source listing.</p>
             )}
-            <div className="rh-comparison-links">
-              {sourceLink('Lookup', lookupRelease ? `${lookupRecord}, release ${lookupRelease}` : lookupRecord, lookup?.source)}
-              {selected && sourceLink('Saved copy', savedCopyLabel(selected), savedSource)}
-            </div>
-          </div>
-          <div className="border-t border-gray-200 pt-3">
-            <p className="text-sm text-gray-600">Side A’s add form allows one saved entry per artist and title.</p>
-            {onSearch && <button type="button" className="rh-lookup-link" onClick={onSearch}>{searchLabel}</button>}
           </div>
         </div>
       </div>

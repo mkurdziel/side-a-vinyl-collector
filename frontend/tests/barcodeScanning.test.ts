@@ -318,7 +318,7 @@ describe('barcode lookup requests', () => {
     expect(renderer!.root.findAllByProps({ 'aria-label': 'Move Dummy to Collection' })).toHaveLength(0);
     expect(renderer!.root.findAllByType('summary').filter(node => node.children.includes('None of these'))).toHaveLength(0);
     await act(async () => renderer!.root.findByProps({ 'aria-label': 'Compare pressings for Dummy' }).props.onClick());
-    expect(JSON.stringify(renderer!.toJSON())).toContain('one saved entry per artist and title');
+    expect(JSON.stringify(renderer!.toJSON())).toContain('one entry per artist and title');
     const open = renderer!.root.findByProps({ 'aria-label': 'Open saved album · Dummy by Portishead, Wishlist, Discogs release 20' });
     const opener = { isConnected: true };
     props.onOpenSaved.mockResolvedValueOnce('opened');

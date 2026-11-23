@@ -1,13 +1,14 @@
 import type { Request, Response } from 'express';
 import pool from '../config/database';
 import discogsService from '../services/discogs';
-import musicbrainzService from '../services/musicbrainz';
+import musicbrainzService, { type MusicBrainzAlbum } from '../services/musicbrainz';
 import { annotateCatalogMembership } from '../services/catalogMembership';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
-import type { AlbumWithArtist } from '../types';
+import type { AlbumWithArtist, DiscogsAlbum } from '../types';
+import { canExpandArtist, matchesCatalogArtist, rankCatalogMatches } from '../services/catalogRelevance';
 
-// Helper to normalize strings for comparison
-const normalize = (str: string) => str.toLowerCase().replace(/[^a-z0-9]/g, '');
+type CatalogAlbum = (DiscogsAlbum & { source: 'discogs' })
+  | (MusicBrainzAlbum & { source: 'musicbrainz'; discogsListing?: never });
 
 export const search = asyncHandler(async (req: Request, res: Response) => {
   const { q, scope, shelf, sort, offset: rawOffset } = req.query;
@@ -75,126 +76,64 @@ export const search = asyncHandler(async (req: Request, res: Response) => {
     });
   }
 
-  // 2. Search MusicBrainz & Discogs
-  let externalResults: any[] = [];
   const errors: string[] = [];
 
-  const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, serviceName: string): Promise<T> => {
-    let timeoutId: NodeJS.Timeout;
-    const timeoutPromise = new Promise<T>((_, reject) => {
-      timeoutId = setTimeout(() => reject(new Error(`${serviceName} search timed out after 5 seconds`)), timeoutMs);
+  const fromProvider = async (searchProvider: () => Promise<CatalogAlbum[]>, serviceName: string) => {
+    let timeoutId: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error(`${serviceName} search timed out after 5 seconds`)), 5000);
     });
-    return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
+    try {
+      return await Promise.race([searchProvider(), timeout]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `${serviceName} search failed`;
+      console.error(message);
+      errors.push(message);
+      return [];
+    } finally {
+      clearTimeout(timeoutId);
+    }
   };
 
+  const expandArtist = canExpandArtist(query);
+  const discogsEnabled = discogsService.isEnabled();
+  const [discogsTitles, discogsArtist, musicBrainzArtist] = await Promise.all([
+    discogsEnabled ? fromProvider(async () => {
+      const releases = await discogsService.searchByQuery(query, discogsLimit);
+      if (releases.length === discogsLimit) catalogSampled = true;
+      return releases.map(release => ({ ...release, discogsListing: 'release', source: 'discogs' }));
+    }, 'Discogs') : [],
+    discogsEnabled && expandArtist ? fromProvider(async () => {
+      const artist = await discogsService.searchArtist(query);
+      if (!artist || !matchesCatalogArtist(query, artist.title)) return [];
+      const releases = await discogsService.getArtistReleases(artist.id, discogsLimit);
+      if (releases.length === discogsLimit) catalogSampled = true;
+      return releases.map(release => ({ ...release, artist: release.artist || artist.title, source: 'discogs' }));
+    }, 'Discogs artist') : [],
+    musicbrainzService.isEnabled() && expandArtist ? fromProvider(async () => {
+      const artist = await musicbrainzService.searchArtist(query);
+      if (!artist || !matchesCatalogArtist(query, artist.name)) return [];
+      const albums = await musicbrainzService.getArtistReleaseGroups(artist.id, artist.name, 20);
+      if (albums.length === 20) catalogSampled = true;
+      return albums.map(album => ({ ...album, source: 'musicbrainz' }));
+    }, 'MusicBrainz') : [],
+  ]);
+
+  const ranked = rankCatalogMatches(query, [...discogsTitles, ...discogsArtist, ...musicBrainzArtist]);
   try {
-    const mbEnabled = musicbrainzService.isEnabled();
-    const discogsEnabled = discogsService.isEnabled();
-
-    // A. MusicBrainz Search
-    let mbResults: any[] = [];
-    if (mbEnabled) {
-      try {
-        const mbSearchPromise = async () => {
-          const mbArtist = await musicbrainzService.searchArtist(query);
-          if (mbArtist) {
-            console.log(`Found MusicBrainz artist: ${mbArtist.name} (${mbArtist.id})`);
-            const mbReleases = await musicbrainzService.getArtistReleaseGroups(mbArtist.id, mbArtist.name, 20);
-            if (mbReleases.length === 20) catalogSampled = true;
-            return mbReleases.map(r => ({
-              ...r,
-              isArtistMatch: true,
-              source: 'musicbrainz'
-            }));
-          }
-          return [];
-        };
-        mbResults = await withTimeout(mbSearchPromise(), 5000, 'MusicBrainz');
-      } catch (err: any) {
-        console.error(err.message);
-        errors.push(err.message);
-      }
-    }
-
-    // B. Discogs Search
-    let discogsResults: any[] = [];
-    if (discogsEnabled) {
-      try {
-        const discogsSearchPromise = async () => {
-          const discogsArtist = await discogsService.searchArtist(query);
-          let artistReleases: any[] = [];
-          
-          if (discogsArtist) {
-            console.log(`Found Discogs artist: ${discogsArtist.title} (${discogsArtist.id})`);
-            artistReleases = await discogsService.getArtistReleases(discogsArtist.id, discogsLimit);
-            artistReleases.forEach(r => {
-              if (!r.artist) r.artist = discogsArtist.title;
-            });
-          }
-
-          const generalResults = await discogsService.searchByQuery(query, discogsLimit);
-          if (generalResults.length === discogsLimit || artistReleases.length === discogsLimit) catalogSampled = true;
-
-          // Deduplicate Discogs
-          const seenDiscogs = new Set<string>();
-          const mergedDiscogs: any[] = [];
-
-          const addUniqueDiscogs = (item: any, isArtistMatch: boolean) => {
-               if (seenDiscogs.has(item.id)) return;
-               const key = `${normalize(item.artist)}:${normalize(item.album)}`;
-               if (seenDiscogs.has(key)) return;
-               seenDiscogs.add(item.id);
-               seenDiscogs.add(key);
-               mergedDiscogs.push({ ...item, isArtistMatch, source: 'discogs' });
-          };
-
-          artistReleases.forEach(r => addUniqueDiscogs(r, true));
-          generalResults.forEach(r => addUniqueDiscogs({ ...r, discogsListing: 'release' }, false));
-          return mergedDiscogs;
-        };
-        discogsResults = await withTimeout(discogsSearchPromise(), 5000, 'Discogs');
-      } catch (err: any) {
-        console.error(err.message);
-        errors.push(err.message);
-      }
-    }
-
-    // C. Merge MB and Discogs
-    // MB results come first. Deduplicate catalog results before checking membership.
-    
-    const seenFinal = new Set<string>();
-    const finalMerged: any[] = [];
-    
-    const addFinal = (item: any) => {
-      const key = `${normalize(item.artist)}:${normalize(item.album)}`;
-      if (seenFinal.has(key)) return;
-      seenFinal.add(key);
-
-      finalMerged.push(item);
-    };
-
-    mbResults.forEach(r => addFinal(r));
-    discogsResults.forEach(r => addFinal(r));
-
-    externalResults = await annotateCatalogMembership(finalMerged.slice(offset, offset + catalogPageSize));
-    if (paged) {
-      return res.json({
-        local,
-        discogs: externalResults,
-        errors,
+    const discogs = await annotateCatalogMembership(ranked.slice(offset, offset + catalogPageSize));
+    return res.json({
+      local,
+      discogs, // The client uses this field for both catalog providers.
+      errors,
+      ...(paged ? {
         catalogSampled,
-        ...(finalMerged.length > offset + catalogPageSize ? { nextOffset: offset + catalogPageSize } : {}),
-      });
-    }
-
+        ...(ranked.length > offset + catalogPageSize ? { nextOffset: offset + catalogPageSize } : {}),
+      } : {}),
+    });
   } catch (error) {
     console.error('External search failed:', error);
     errors.push('Could not check catalog matches against your library.');
+    return res.json({ local, discogs: [], errors });
   }
-
-  res.json({
-    local,
-    discogs: externalResults, // Frontend expects 'discogs' key for external results currently
-    errors
-  });
 });

@@ -147,8 +147,10 @@ describe('library and catalog search', () => {
     expect(saveDefault.props.value).toBe('collection');
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Coltrane');
     await act(async () => discovery.resolve({ local: [], discogs: [catalog] }));
-    expect(button('Add to Wishlist · Giant Steps by John Coltrane')).toBeDefined();
+    expect(button('Add to Collection · Giant Steps by John Coltrane')).toBeDefined();
+    expect(button('Add to Wishlist · Giant Steps by John Coltrane')).toBeUndefined();
     await act(async () => saveDefault.props.onChange({ target: { value: 'wishlist' } }));
+    expect(button('Add to Wishlist · Giant Steps by John Coltrane')).toBeDefined();
     await act(async () => button('Collection').props.onClick());
     expect(saveDefault.props.value).toBe('wishlist');
 
@@ -170,7 +172,7 @@ describe('library and catalog search', () => {
     expect(search).toHaveBeenLastCalledWith('Coltrane', expect.any(AbortSignal), 'saved', 'wishlist', 0, 'title');
   });
 
-  it('serializes the two add destinations for the same catalog record', async () => {
+  it('keeps a catalog save bound to its original shelf when the default changes', async () => {
     const add = Promise.withResolvers<{ album: Album }>();
     search.mockResolvedValue({ local: [], discogs: [catalog] });
     addAlbum.mockReturnValueOnce(add.promise);
@@ -179,13 +181,15 @@ describe('library and catalog search', () => {
     await editSearch('steps');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
 
-    await act(async () => {
-      button('Add to Wishlist · Giant Steps by John Coltrane').props.onClick();
-      button('Add to Collection · Giant Steps by John Coltrane').props.onClick();
-    });
+    const destination = renderer.root.findByProps({ id: 'catalog-save-shelf' });
+    await act(async () => destination.props.onChange({ target: { value: 'wishlist' } }));
+    await act(async () => button('Add to Wishlist · Giant Steps by John Coltrane').props.onClick());
+    await act(async () => destination.props.onChange({ target: { value: 'collection' } }));
 
+    const saving = button('Add to Wishlist · Giant Steps by John Coltrane');
+    expect(saving.props['aria-disabled']).toBe(true);
+    await act(async () => saving.props.onClick());
     expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status: 'wishlist' }));
-    expect(button('Add to Collection · Giant Steps by John Coltrane').props['aria-disabled']).toBe(true);
     await act(async () => add.resolve({ album: { ...saved, id: 2, title: 'Giant Steps' } }));
     expect(renderer.root.findByProps({ 'aria-label': 'Giant Steps is in Wishlist' })).toBeDefined();
     expect(renderer.root.findByProps({ 'aria-label': 'Saved title matches for Giant Steps by John Coltrane' })).toBeDefined();
@@ -209,6 +213,7 @@ describe('library and catalog search', () => {
     await chooseScope('catalog');
     await editSearch('steps');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    await act(async () => renderer.root.findByProps({ id: 'catalog-save-shelf' }).props.onChange({ target: { value: 'wishlist' } }));
     await act(async () => button('Add to Wishlist · Giant Steps by John Coltrane').props.onClick());
 
     await editSearch('Coltrane');
@@ -372,7 +377,8 @@ describe('library and catalog search', () => {
     await chooseScope('catalog');
     await editSearch('Giant Steps');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
-    expect(renderer.root.findByProps({ 'aria-label': 'Album information for Giant Steps by John Coltrane, 1960, Discogs album overview' })).toBeDefined();
+    expect(renderer.root.findByProps({ href: 'https://www.discogs.com/master/91' }).props.target).toBe('_blank');
+    expect(renderer.root.findAllByType('summary').some(summary => summary.props['aria-label']?.startsWith('Album information'))).toBe(false);
     await act(async () => button('Add to Collection · Giant Steps by John Coltrane, 1960, Discogs album overview').props.onClick());
     expect(addAlbum.mock.calls[0][0]).toMatchObject({ catalogListing });
     expect(addAlbum.mock.calls[0][0]).not.toHaveProperty('discogsId');
@@ -419,6 +425,36 @@ describe('library and catalog search', () => {
     expect(JSON.stringify(renderer.toJSON())).toContain('Moved back to ');
     await act(async () => button('Back to matches').props.onClick());
     expect(button('Open saved album · Giant Steps by John Coltrane, Wishlist, Discogs release 2219')).toBeDefined();
+  });
+
+  it('announces the saved sort refresh without replacing the catalog or accepting an older page', async () => {
+    const moreSaved = Promise.withResolvers<SearchResult>();
+    const sorted = Promise.withResolvers<SearchResult>();
+    search.mockImplementation(async (_query, _signal, scope, _shelf, offset, sort) => {
+      if (scope === 'catalog') return { local: [], discogs: [catalog] };
+      if (sort === 'artist') return sorted.promise;
+      return offset ? moreSaved.promise : { local: [saved], discogs: [], nextOffset: 20 };
+    });
+    await renderLibrary();
+    await chooseScope('catalog');
+    await editSearch('Coltrane');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    await act(async () => button('Load more saved albums').props.onClick());
+    const continuation = search.mock.lastCall![1];
+    await act(async () => renderer.root.findByProps({ id: 'sort-select' }).props.onChange({ target: { value: 'artist' } }));
+    expect(continuation.aborted).toBe(true);
+    const savedSection = renderer.root.findByProps({ 'aria-labelledby': 'saved-results-title' });
+    const status = savedSection.findByProps({ role: 'status' });
+    expect(status.children.join('')).toBe('Updating saved results by artist name…');
+    expect(savedSection.findByProps({ 'aria-busy': true })).toBeDefined();
+    expect(search.mock.calls.filter(([, , scope]) => scope === 'catalog')).toHaveLength(1);
+    expect(button('Add to Collection · Giant Steps by John Coltrane')).toBeDefined();
+
+    await act(async () => moreSaved.resolve({ local: [{ ...saved, id: 7, title: 'Stale page' }], discogs: [] }));
+    await act(async () => sorted.resolve({ local: [saved], discogs: [] }));
+    expect(status.children.join('')).toBe('Showing 1 saved match, sorted by artist name.');
+    expect(savedSection.findByProps({ 'aria-busy': false })).toBeDefined();
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('Stale page');
   });
 
   it('appends saved matches and discards a catalog continuation after a new query', async () => {

@@ -1,19 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 
-const { query, searchByQuery } = vi.hoisted(() => ({
+const { query, searchByQuery, searchArtist, getArtistReleases, mbEnabled, mbArtist, mbReleases } = vi.hoisted(() => ({
   query: vi.fn(),
   searchByQuery: vi.fn(),
+  searchArtist: vi.fn(),
+  getArtistReleases: vi.fn(),
+  mbEnabled: vi.fn(),
+  mbArtist: vi.fn(),
+  mbReleases: vi.fn(),
 }));
 vi.mock('../../src/config/database', () => ({ default: { query } }));
 vi.mock('../../src/services/discogs', () => ({
   default: {
     isEnabled: () => true,
-    searchArtist: async () => null,
+    searchArtist,
+    getArtistReleases,
     searchByQuery,
   },
 }));
-vi.mock('../../src/services/musicbrainz', () => ({ default: { isEnabled: () => false } }));
+vi.mock('../../src/services/musicbrainz', () => ({
+  default: { isEnabled: mbEnabled, searchArtist: mbArtist, getArtistReleaseGroups: mbReleases },
+}));
 vi.mock('../../src/services/vision', () => ({
   default: { extractAlbumInfo: async () => ({ artist: 'John Coltrane', album: 'Giant Steps', provider: 'openai' }) },
 }));
@@ -37,6 +45,8 @@ function searchCatalog(): Promise<{ discogs: Membership[] }> {
 beforeEach(() => {
   vi.resetAllMocks();
   searchByQuery.mockResolvedValue([catalogAlbum]);
+  searchArtist.mockResolvedValue(null);
+  mbEnabled.mockReturnValue(false);
 });
 
 describe('search result membership', () => {
@@ -77,6 +87,53 @@ describe('search result membership', () => {
     expect(result.discogs.map(album => album.id)).toEqual([30, 31, 32, 33, 34, 35, 36, 37, 38, 39]);
     expect(result.catalogSampled).toBe(true);
     expect(result.nextOffset).toBeUndefined();
+  });
+
+  it('ranks the exact numeric title above partial matches and skips artist expansions', async () => {
+    const taylorSwift = { id: 912, discogsId: 912, artist: 'Taylor Swift', album: '1989' };
+    mbEnabled.mockReturnValue(true);
+    searchByQuery.mockResolvedValue([
+      { id: 900, discogsId: 900, artist: '1989', album: 'The Right Life' },
+      { id: 901, discogsId: 901, artist: 'Croatian Amor', album: '1989 Is Croatian Amor' },
+      taylorSwift,
+    ]);
+    query.mockResolvedValue({ rows: [] });
+    const result = await new Promise<{ discogs: { id: number }[] }>((resolve, reject) => {
+      search({ query: { q: '1989', scope: 'catalog', offset: '0' } } as unknown as Request,
+        { json: resolve } as unknown as Response, reject);
+    });
+    expect(result.discogs.map(album => album.id)).toEqual([912, 901]);
+    expect(searchArtist).not.toHaveBeenCalled();
+    expect(mbArtist).not.toHaveBeenCalled();
+  });
+
+  it('rejects unrelated provider matches and does not expand an unrelated artist', async () => {
+    mbEnabled.mockReturnValue(true);
+    searchArtist.mockResolvedValue({ id: 42, title: 'Croatian Amor' });
+    mbArtist.mockResolvedValue({ id: 'no-match', name: 'Dan Gibson' });
+    searchByQuery.mockResolvedValue([{ id: 19, discogsId: 19, artist: 'Dan Gibson', album: 'Ocean Surf' }]);
+    const result = await new Promise<{ discogs: unknown[]; errors: unknown[] }>((resolve, reject) => {
+      search({ query: { q: 'zzzxqv-047-no-record', scope: 'catalog' } } as unknown as Request,
+        { json: resolve } as unknown as Response, reject);
+    });
+    expect(result).toMatchObject({ discogs: [], errors: [] });
+    expect(getArtistReleases).not.toHaveBeenCalled();
+    expect(mbReleases).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('expands an exact artist despite accents and Discogs disambiguation', async () => {
+    const album = { id: 38, discogsId: 38, artist: '', album: 'Renaissance', discogsListing: 'release' };
+    searchArtist.mockResolvedValue({ id: 42, title: 'Beyoncé (2)' });
+    getArtistReleases.mockResolvedValue([album]);
+    searchByQuery.mockResolvedValue([]);
+    query.mockResolvedValue({ rows: [] });
+    const result = await new Promise<{ discogs: unknown[] }>((resolve, reject) => {
+      search({ query: { q: 'Beyonce', scope: 'catalog' } } as unknown as Request,
+        { json: resolve } as unknown as Response, reject);
+    });
+    expect(getArtistReleases).toHaveBeenCalledExactlyOnceWith(42, 20);
+    expect(result.discogs).toMatchObject([{ id: 38, artist: 'Beyoncé (2)', album: 'Renaissance' }]);
   });
 
   it('links the exact Discogs match even when another name match is in Collection', async () => {
