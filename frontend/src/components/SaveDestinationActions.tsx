@@ -52,7 +52,7 @@ export function SaveDestinationActions({
     return (
       <>
         <div className="rh-title-review" role="group" aria-label={`Saved title matches for ${catalogLabel ?? albumTitle}`}>
-          <p className="px-2 text-xs font-medium text-gray-600">Same artist and title</p>
+          <p className="px-2 text-xs font-medium text-gray-600">Same artist and title. One saved entry per album.</p>
           {onOpenSaved && matches.length > 0 && (
             <button ref={compareButton} type="button" className="rh-lookup-link text-left" disabled={blocked}
               aria-haspopup="dialog" aria-label={`Compare pressings for ${catalogLabel ?? albumTitle}`} onClick={() => setComparing(true)}>
@@ -65,10 +65,11 @@ export function SaveDestinationActions({
     );
   }
 
-  const alternative = preferred === 'collection' ? 'wishlist' : 'collection';
+  const firstShelf = catalogLabel && pending && pending !== 'move' ? pending : preferred;
+  const alternative = firstShelf === 'collection' ? 'wishlist' : 'collection';
   const choices: DestinationChoice[] = existingStatus
     ? [{ shelf: existingStatus }]
-    : [{ shelf: preferred, action: preferred }];
+    : [{ shelf: firstShelf, action: firstShelf }];
 
   if (existingStatus === 'wishlist' && existingAlbumId != null && isExactSavedMatch(existingMatch)) {
     choices.push({ shelf: 'collection', action: 'move' });
@@ -86,7 +87,7 @@ export function SaveDestinationActions({
       : `${albumTitle}: ${label}`;
     const color = !action
       ? 'border-gray-300 text-gray-600'
-      : moving || shelf === preferred
+      : moving || (!catalogLabel && shelf === firstShelf)
         ? 'rh-filled-action border-transparent bg-purple-600 hover:bg-purple-700'
         : 'border-gray-300 bg-gray-100 text-gray-900 hover:bg-gray-50';
 
@@ -94,7 +95,7 @@ export function SaveDestinationActions({
       // Keep the destination's control mounted when its label becomes a saved status, so focus stays put.
       <button
         key={shelf}
-        ref={shelf === preferred && action === preferred ? addButton : undefined}
+        ref={shelf === firstShelf && action === firstShelf ? addButton : undefined}
         type="button"
         aria-label={accessibleLabel}
         aria-description={action ? undefined : matchReason}
@@ -117,7 +118,7 @@ export function SaveDestinationActions({
           <p className="rh-album-level-hint">Saves the album. Pressing unconfirmed.</p>
         )}
         {choices.map(renderChoice)}
-        {!existingStatus && (
+        {!existingStatus && !catalogLabel && (
           <details className="rh-destination-options min-w-0">
             <summary aria-label={`Other shelf for ${catalogLabel ?? albumTitle}`}>Other shelf</summary>
             <div className="grid">{renderChoice({ shelf: alternative, action: alternative })}</div>
