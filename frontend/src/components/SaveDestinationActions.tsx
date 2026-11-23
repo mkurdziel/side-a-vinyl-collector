@@ -1,3 +1,5 @@
+import type { SavedMatch } from '../services/api';
+
 type Shelf = 'collection' | 'wishlist';
 export type DestinationAction = Shelf | 'move';
 
@@ -7,6 +9,7 @@ interface SaveDestinationActionsProps {
   albumTitle: string;
   preferred: Shelf;
   existingStatus?: Shelf;
+  existingMatch?: SavedMatch | null;
   canMove?: boolean;
   openingSaved?: boolean;
   pending?: DestinationAction;
@@ -21,7 +24,7 @@ interface DestinationChoice {
 }
 
 export function SaveDestinationActions({
-  albumTitle, preferred, existingStatus, canMove, openingSaved, pending, disabled, onSelect, onOpenSaved,
+  albumTitle, preferred, existingStatus, existingMatch, canMove, openingSaved, pending, disabled, onSelect, onOpenSaved,
 }: SaveDestinationActionsProps) {
   const alternative = preferred === 'collection' ? 'wishlist' : 'collection';
   const choices: DestinationChoice[] = existingStatus
@@ -35,10 +38,11 @@ export function SaveDestinationActions({
     const moving = action === 'move';
     const blocked = !action || !!pending || !!disabled || !!openingSaved;
     const busy = !!action && pending === action;
-    const label = action ? `${moving ? 'Move' : 'Add'} to ${name}` : `In ${name}`;
+    const matchLabel = existingMatch === 'release' ? 'Release ID' : existingMatch === 'barcode' ? 'Barcode' : 'Title';
+    const label = action ? `${moving ? 'Move' : 'Add'} to ${name}` : `${matchLabel} in ${name}`;
     const accessibleLabel = action
       ? `${moving ? 'Move' : 'Add'} ${albumTitle} to ${name}`
-      : `${albumTitle} is in ${name}`;
+      : `${albumTitle}: ${label}`;
     const color = !action
       ? 'border-gray-300 text-gray-600'
       : moving || shelf === preferred

@@ -16,7 +16,9 @@ async function getExistingAlbumStatus(albumId: number): Promise<{ status: string
 }
 
 // Helper to check if an album exists by discogs_id or artist+title
-async function findExistingAlbum(artist: string, title: string, discogsId?: number): Promise<{ status: string; albumId: number } | null> {
+async function findExistingAlbum(artist: string, title: string, discogsId?: number): Promise<{
+  status: string; albumId: number | null; match: 'release' | 'title';
+} | null> {
   // Try discogs_id first (most reliable)
   if (discogsId) {
     const discogsResult = await pool.query(`
@@ -26,7 +28,7 @@ async function findExistingAlbum(artist: string, title: string, discogsId?: numb
       WHERE albums.discogs_id = $1
     `, [discogsId]);
     if (discogsResult.rows.length > 0) {
-      return { status: discogsResult.rows[0].status, albumId: discogsResult.rows[0].album_id };
+      return { status: discogsResult.rows[0].status, albumId: discogsResult.rows[0].album_id, match: 'release' };
     }
   }
   
@@ -37,9 +39,15 @@ async function findExistingAlbum(artist: string, title: string, discogsId?: numb
     JOIN artists ON albums.artist_id = artists.id
     JOIN collections ON collections.album_id = albums.id
     WHERE LOWER(artists.name) = LOWER($1) AND LOWER(albums.title) = LOWER($2)
+    ORDER BY (collections.status = 'collection') DESC, albums.id
+    LIMIT 2
   `, [artist, title]);
   if (titleResult.rows.length > 0) {
-    return { status: titleResult.rows[0].status, albumId: titleResult.rows[0].album_id };
+    return {
+      status: titleResult.rows[0].status,
+      albumId: titleResult.rows.length === 1 ? titleResult.rows[0].album_id : null,
+      match: 'title',
+    };
   }
   
   return null;
@@ -75,6 +83,7 @@ export const scanBarcode = asyncHandler(async (req: Request, res: Response) => {
       source: 'local',
       existingStatus: existing?.status || null,
       existingAlbumId: existing?.albumId || null,
+      existingMatch: existing ? 'barcode' : null,
     });
   }
 
@@ -97,5 +106,6 @@ export const scanBarcode = asyncHandler(async (req: Request, res: Response) => {
     source: 'discogs',
     existingStatus: existing?.status || null,
     existingAlbumId: existing?.albumId || null,
+    existingMatch: existing?.match ?? null,
   });
 });

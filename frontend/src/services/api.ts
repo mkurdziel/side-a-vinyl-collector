@@ -3,6 +3,8 @@
 // - Development (multi-container): Use VITE_API_URL or default to localhost:5001
 const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:5001' : '');
 
+export type SavedMatch = 'title' | 'release' | 'barcode';
+
 /**
  * Get cover art URL for an album
  * This uses the backend endpoint which serves either:
@@ -21,6 +23,7 @@ export interface Album {
   year?: number;
   cover_image_url?: string;
   musicbrainz_id?: string;
+  discogs_id?: number | null;
   local_cover_path?: string;
   cover_art_fetched?: boolean;
   notes?: string;
@@ -66,6 +69,7 @@ export interface DiscogsAlbum {
   inCollection?: boolean;
   inWishlist?: boolean;
   existingAlbumId?: number | null;
+  existingMatch?: SavedMatch | null;
   fromProvider?: string;
 }
 
@@ -191,6 +195,7 @@ class ApiService {
     discogsId: number;
     existingStatus?: 'collection' | 'wishlist' | null;
     existingAlbumId?: number | null;
+    existingMatch?: SavedMatch | null;
   }> {
     return this.request('/api/barcode/scan', {
       method: 'POST',

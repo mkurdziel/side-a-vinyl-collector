@@ -1,15 +1,18 @@
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { toast } from 'react-hot-toast';
 import api, { ApiError } from '../services/api';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 import { ModalDialog } from './ModalDialog';
 import { SaveDestinationActions, type DestinationAction } from './SaveDestinationActions';
+import { LookupRecovery } from './LookupRecovery';
+import type { ManualAlbumDraft } from './ManualAlbumDialog';
 
 type BarcodeMatch = Awaited<ReturnType<typeof api.scanBarcode>> & { barcode: string };
 type LookupFailure = 'invalid' | 'missing' | 'unavailable';
 type Lookup = { status: 'scanning' | 'looking-up' }
   | { status: 'failed'; reason: LookupFailure; barcode: string }
-  | { status: 'found'; match: BarcodeMatch };
+  | { status: 'found'; match: BarcodeMatch }
+  | { status: 'saved'; match: BarcodeMatch; destination: 'collection' | 'wishlist'; movedId?: number; restored?: boolean };
 
 const lookupMessages: Record<LookupFailure, string> = {
   invalid: 'Enter the 8, 12, 13, or 14 digits printed below the barcode.',
@@ -21,26 +24,48 @@ const barcodePattern = /^(?:[0-9]{8}|[0-9]{12,14})$/;
 interface BarcodeScannerProps {
   onClose: () => void;
   onSuccess: () => void;
-  onSearchByName: () => void;
+  onSearchByName: (query?: string, draft?: ManualAlbumDraft) => void;
+  onManual: (draft?: ManualAlbumDraft) => void;
   onMoveSaved: (id: number, title: string) => Promise<boolean>;
+  onUndoMove: (id: number) => Promise<boolean>;
   onOpenSaved: (id: number) => Promise<void>;
   viewMode: 'collection' | 'wishlist';
 }
 
-export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, onMoveSaved, onOpenSaved, viewMode }: BarcodeScannerProps) => {
+export const BarcodeScanner = ({
+  onClose, onSuccess, onSearchByName, onManual, onMoveSaved, onUndoMove, onOpenSaved, viewMode,
+}: BarcodeScannerProps) => {
   const [lookup, setLookup] = useState<Lookup>({ status: 'scanning' });
   const lookupInProgress = useRef(false);
   const [saving, setSaving] = useState<DestinationAction>();
+  const [undoing, setUndoing] = useState(false);
+  const [undoFailed, setUndoFailed] = useState(false);
   const [duplicateId, setDuplicateId] = useState<number>();
   const saveInProgress = useRef(false);
+  const manualInput = useRef<HTMLInputElement>(null);
+  const scannerTitle = useRef<HTMLHeadingElement>(null);
+  const resultTitle = useRef<HTMLHeadingElement>(null);
+  const lastInput = useRef<'camera' | 'manual'>('camera');
+  const focusNextScan = useRef(false);
+  const completedBarcode = useRef<string | undefined>(undefined);
   const [manualBarcode, setManualBarcode] = useState('');
   const scannedResult = lookup.status === 'found' ? lookup.match : null;
   const scanning = lookup.status === 'scanning';
   const lookingUp = lookup.status === 'looking-up';
   const failure = lookup.status === 'failed' && manualBarcode.trim() === lookup.barcode ? lookup.reason : undefined;
 
-  const lookUp = async (barcode: string) => {
-    if (lookupInProgress.current) return;
+  useLayoutEffect(() => {
+    if (lookup.status === 'found' || lookup.status === 'saved') resultTitle.current?.focus();
+    if (lookup.status === 'scanning' && focusNextScan.current) {
+      focusNextScan.current = false;
+      if (lastInput.current === 'manual') manualInput.current?.focus();
+      else scannerTitle.current?.focus();
+    }
+  }, [lookup]);
+
+  const lookUp = async (barcode: string, source: 'camera' | 'manual' = 'camera') => {
+    if (lookupInProgress.current || (source === 'camera' && completedBarcode.current === barcode)) return;
+    lastInput.current = source;
     setDuplicateId(undefined);
 
     setManualBarcode(barcode);
@@ -77,7 +102,7 @@ export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, onMoveSaved
     try {
       if (moveId) {
         if (!await onMoveSaved(moveId, scannedResult.album)) return;
-        onClose();
+        setLookup({ status: 'saved', match: scannedResult, destination: 'collection', movedId: moveId });
         return;
       } else if (adding) {
         await api.addAlbum({
@@ -89,10 +114,9 @@ export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, onMoveSaved
           barcode: scannedResult.barcode,
           status: action,
         });
-        toast.success(`Added “${scannedResult.album}” to ${action === 'collection' ? 'Collection' : 'Wishlist'}.`);
+        setLookup({ status: 'saved', match: scannedResult, destination: action });
+        onSuccess();
       }
-      onSuccess();
-      onClose();
     } catch (error) {
       if (error instanceof ApiError && error.status === 409 && error.existingAlbumId !== undefined) {
         setDuplicateId(error.existingAlbumId);
@@ -106,10 +130,30 @@ export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, onMoveSaved
   };
 
   const handleScanAnother = () => {
+    completedBarcode.current = lookup.status === 'saved' ? lookup.match.barcode : undefined;
+    focusNextScan.current = true;
     setManualBarcode('');
     setLookup({ status: 'scanning' });
     setDuplicateId(undefined);
+    setUndoFailed(false);
     retryCamera();
+  };
+
+  const undoSavedMove = async () => {
+    if (lookup.status !== 'saved' || lookup.movedId === undefined || saveInProgress.current) return;
+    saveInProgress.current = true;
+    setUndoing(true);
+    setUndoFailed(false);
+    try {
+      if (await onUndoMove(lookup.movedId)) {
+        setLookup({ ...lookup, destination: 'wishlist', movedId: undefined, restored: true });
+      } else {
+        setUndoFailed(true);
+      }
+    } finally {
+      saveInProgress.current = false;
+      setUndoing(false);
+    }
   };
 
   const { scannerRef, error, cameras, cameraId, setCameraId, retryCamera } = useBarcodeScanner(lookUp, scanning);
@@ -127,12 +171,12 @@ export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, onMoveSaved
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
               </svg>
             </div>
-            <h2 id="barcode-title" className="text-lg font-bold text-gray-900">Look up a barcode</h2>
+            <h2 ref={scannerTitle} tabIndex={-1} id="barcode-title" className="text-lg font-bold text-gray-900">Look up a barcode</h2>
           </div>
           <button
             className="rh-dialog-close"
             aria-label="Close barcode lookup"
-            disabled={!!saving}
+            disabled={!!saving || undoing}
             onClick={close}
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -142,17 +186,18 @@ export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, onMoveSaved
         </div>
 
         <div className="p-4 overflow-y-auto">
-          {!scannedResult && (
+          {!scannedResult && lookup.status !== 'saved' && (
             <>
               <form className="mb-2" noValidate onSubmit={event => {
                 event.preventDefault();
-                void lookUp(manualBarcode.trim());
+                void lookUp(manualBarcode.trim(), 'manual');
               }}>
                 <label htmlFor="manual-barcode" className="mb-1 block text-sm font-medium text-gray-700">
                   Enter barcode manually
                 </label>
                 <div className="flex gap-2">
                   <input
+                    ref={manualInput}
                     id="manual-barcode"
                     type="text"
                     inputMode="numeric"
@@ -186,7 +231,7 @@ export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, onMoveSaved
               <div className="mb-4 flex flex-wrap gap-x-3">
                 <button
                   type="button"
-                  onClick={onSearchByName}
+                  onClick={() => onSearchByName()}
                   className="min-h-11 rounded-lg px-2 text-sm font-medium text-purple-600 hover:bg-gray-100"
                 >
                   Search by name
@@ -250,53 +295,78 @@ export const BarcodeScanner = ({ onClose, onSuccess, onSearchByName, onMoveSaved
             </>
           )}
 
-        {/* Confirmation Dialog */}
-        {scannedResult && (
-          <div className="mb-2 bg-gray-100 rounded-xl p-4 sm:p-6 border border-gray-300">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4" role="status">Album found</h3>
-            <div className="flex gap-4 mb-4">
-              {scannedResult.coverImageUrl && (
-                <img 
-                  src={scannedResult.coverImageUrl} 
-                  alt={scannedResult.album}
-                  className="w-24 h-24 rounded-lg object-cover shadow-md"
-                />
-              )}
-              <div className="flex-1">
-                <p className="font-semibold text-gray-900">{scannedResult.album}</p>
-                <p className="text-sm text-gray-600">{scannedResult.artist}</p>
-                {scannedResult.year && <p className="text-sm text-gray-500">{scannedResult.year}</p>}
-                <p className="text-xs text-gray-400 mt-1">Barcode: {scannedResult.barcode}</p>
+          {scannedResult && (
+            <div className="space-y-3">
+              <div className="rh-lookup-record">
+                {scannedResult.coverImageUrl && (
+                  <img
+                    src={scannedResult.coverImageUrl}
+                    alt=""
+                    className="size-16 shrink-0 rounded-lg object-cover sm:size-20"
+                  />
+                )}
+                <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                  <h3 ref={resultTitle} tabIndex={-1} className="text-lg font-semibold text-gray-900">{scannedResult.album}</h3>
+                  <p className="text-sm text-gray-600">{scannedResult.artist}</p>
+                  {scannedResult.year && <p className="text-sm text-gray-500">{scannedResult.year}</p>}
+                  <p className="mt-1 text-xs tabular-nums text-gray-600">Barcode {scannedResult.barcode}</p>
+                </div>
+              </div>
+              <div className="grid gap-2">
+                {saving && <p role="status" className="text-sm text-gray-600">Saving this album…</p>}
+                {duplicateId !== undefined ? (
+                  <div className="grid gap-1">
+                    <p role="alert" className="text-sm">This album is already saved.</p>
+                    <button type="button" className="rh-primary-action px-3 text-sm font-semibold"
+                      onClick={() => void onOpenSaved(duplicateId)}>Open saved album</button>
+                  </div>
+                ) : <SaveDestinationActions
+                  albumTitle={scannedResult.album}
+                  preferred={viewMode}
+                  existingStatus={scannedResult.existingStatus ?? undefined}
+                  existingMatch={scannedResult.existingMatch}
+                  canMove={Boolean(scannedResult.existingAlbumId)}
+                  onOpenSaved={scannedResult.existingAlbumId ? () => void onOpenSaved(scannedResult.existingAlbumId!) : undefined}
+                  pending={saving}
+                  onSelect={action => void saveMatch(action)}
+                />}
+                <div className="flex flex-wrap items-start justify-between gap-x-2">
+                  <LookupRecovery draft={{ artist: scannedResult.artist, album: scannedResult.album }}
+                    disabled={!!saving} onSearchByName={onSearchByName} onManual={onManual} />
+                  <button type="button" onClick={handleScanAnother} disabled={!!saving} className="rh-lookup-link">
+                    Scan a different barcode
+                  </button>
+                </div>
               </div>
             </div>
-            <div className="grid gap-2">
-              {saving && <p role="status" className="text-sm text-gray-600">Saving this album…</p>}
-              {duplicateId !== undefined ? (
-                <div className="grid gap-1">
-                  <p role="alert" className="text-sm">This album is already saved.</p>
-                  <button type="button" className="rh-primary-action px-3 text-sm font-semibold"
-                    onClick={() => void onOpenSaved(duplicateId)}>Open saved album</button>
+          )}
+          {lookup.status === 'saved' && (
+            <div className="space-y-3">
+              <div className="rh-lookup-record">
+                <div className="min-w-0 [overflow-wrap:anywhere]">
+                  <h3 ref={resultTitle} tabIndex={-1} className="text-lg font-semibold text-gray-900">{lookup.match.album}</h3>
+                  <p className="text-sm text-gray-600">{lookup.match.artist}</p>
+                  <p role="status" className="mt-2 text-sm font-semibold">
+                    {lookup.restored ? 'Moved back to Wishlist' : lookup.destination === 'collection' ? 'Saved to Collection' : 'Saved to Wishlist'}
+                  </p>
                 </div>
-              ) : <SaveDestinationActions
-                albumTitle={scannedResult.album}
-                preferred={viewMode}
-                existingStatus={scannedResult.existingStatus ?? undefined}
-                canMove={Boolean(scannedResult.existingAlbumId)}
-                onOpenSaved={scannedResult.existingAlbumId ? () => void onOpenSaved(scannedResult.existingAlbumId!) : undefined}
-                pending={saving}
-                onSelect={action => void saveMatch(action)}
-              />}
-              <button
-                type="button"
-                onClick={handleScanAnother}
-                disabled={!!saving}
-                className="w-full px-4 py-2.5 border border-gray-300 hover:bg-gray-100 rounded-lg font-medium transition-colors disabled:opacity-60"
-              >
-                Scan Another
-              </button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" className="rh-primary-action px-4 text-sm font-semibold" disabled={undoing}
+                  onClick={handleScanAnother}>Scan next</button>
+                <button type="button" className="rh-lookup-link" onClick={close} disabled={undoing}>Done</button>
+                {lookup.movedId !== undefined && <button type="button" className="rh-lookup-link" disabled={undoing}
+                  onClick={() => void undoSavedMove()}>{undoing ? 'Undoing…' : 'Undo move'}</button>}
+              </div>
+              {undoFailed && lookup.movedId !== undefined && (
+                <div>
+                  <p role="alert" className="text-sm text-red-600">Could not undo this move. Check the album’s current shelf.</p>
+                  <button type="button" className="rh-lookup-link"
+                    onClick={() => void onOpenSaved(lookup.movedId!)}>Open saved album</button>
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          )}
         </div>
 
       </div>

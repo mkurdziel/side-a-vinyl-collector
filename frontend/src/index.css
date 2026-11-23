@@ -392,6 +392,49 @@ summary:focus-visible,
 .rh-destination-options > summary:hover { background: var(--rh-active-wash); }
 .rh-destination-options > div { margin-block-start: 3px; }
 
+.rh-lookup-link,
+.rh-lookup-recovery > summary {
+  min-block-size: 44px;
+  padding-inline: 8px;
+  align-content: center;
+  border-radius: 8px;
+  color: var(--rh-info);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.rh-lookup-link:hover,
+.rh-lookup-recovery > summary:hover { background: var(--rh-active-wash); }
+
+.rh-lookup-link:disabled { opacity: 0.6; }
+.rh-lookup-recovery > summary { cursor: pointer; }
+.rh-lookup-recovery[open] { background: var(--rh-surface); }
+
+.rh-lookup-record,
+.rh-cover-pick {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--rh-edge);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--rh-surface);
+}
+
+.rh-cover-pick {
+  min-block-size: 104px;
+  cursor: pointer;
+}
+
+.rh-cover-pick:hover { border-color: var(--rh-edge-strong); }
+
+.rh-catalog-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+
 .rh-details-identity {
   display: grid;
   grid-template-columns: clamp(76px, 26vw, 152px) minmax(0, 1fr);

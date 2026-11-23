@@ -32,7 +32,7 @@ export const analyzeImage = asyncHandler(async (req: Request, res: Response) => 
       const matches = await discogsService.searchByQuery(searchQuery, 5);
       matches.forEach(match => {
         if (!matchesMap.has(match.discogsId)) {
-          matchesMap.set(match.discogsId, { ...match, fromProvider: extractedText.provider });
+          matchesMap.set(match.discogsId, { ...match, discogsListing: 'release', fromProvider: extractedText.provider });
         }
       });
     } catch (error) {
@@ -54,7 +54,7 @@ export const analyzeImage = asyncHandler(async (req: Request, res: Response) => 
         const primaryMatches = await discogsService.searchByQuery(primarySearchQuery, 5);
         primaryMatches.forEach(match => {
           if (!matchesMap.has(match.discogsId)) {
-            matchesMap.set(match.discogsId, { ...match, fromProvider: primary.provider });
+            matchesMap.set(match.discogsId, { ...match, discogsListing: 'release', fromProvider: primary.provider });
           }
         });
       } catch (error) {

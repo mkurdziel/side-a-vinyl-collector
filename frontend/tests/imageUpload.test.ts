@@ -13,7 +13,8 @@ import { ImageUploader } from '../src/components/ImageUploader';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let renderer: ReturnType<typeof create> | undefined;
-const props = { onClose: vi.fn(), onSuccess: vi.fn(), onSearchByName: vi.fn(), onMoveSaved: vi.fn(), onOpenSaved: vi.fn(), viewMode: 'collection' as const };
+const focused = vi.fn();
+const props = { onClose: vi.fn(), onSuccess: vi.fn(), onSearchByName: vi.fn(), onManual: vi.fn(), onMoveSaved: vi.fn(), onOpenSaved: vi.fn(), viewMode: 'collection' as const };
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -36,7 +37,11 @@ afterEach(async () => {
 });
 
 async function upload(file: { name: string; type: string; size: number }, viewMode: 'collection' | 'wishlist' = 'collection') {
-  await act(async () => { renderer = create(createElement(ImageUploader, { ...props, viewMode })); });
+  await act(async () => {
+    renderer = create(createElement(ImageUploader, { ...props, viewMode }), {
+      createNodeMock: node => ({ focus: () => focused(node.props.children) }),
+    });
+  });
   await act(async () => renderer!.root.findByType('input').props.onChange({ target: { files: [file] } }));
 }
 
@@ -78,8 +83,8 @@ describe('album image uploads', () => {
     });
     await upload({ name: 'cover.jpg', type: 'image/jpeg', size: 1024 });
     const labels = renderer!.root.findAllByType('button').map(button => button.props['aria-label']);
-    expect(labels).toContain('Third is in Wishlist');
-    expect(labels).toContain('Roseland NYC Live is in Collection');
+    expect(labels).toContain('Third: Title in Wishlist');
+    expect(labels).toContain('Roseland NYC Live: Title in Collection');
     expect(labels.filter(label => label?.startsWith('Move '))).toEqual(['Move Dummy to Collection']);
     await act(async () => renderer!.root.findByProps({ 'aria-label': 'Move Dummy to Collection' }).props.onClick());
     expect(props.onMoveSaved).toHaveBeenCalledExactlyOnceWith(23, 'Dummy');
@@ -111,5 +116,15 @@ describe('album image uploads', () => {
     expect(props.onClose).not.toHaveBeenCalled();
     await act(async () => pending.resolve({}));
     expect(props.onClose).toHaveBeenCalledOnce();
+  });
+
+  it('focuses the photo results and offers recovery even when candidates exist', async () => {
+    await upload({ name: 'cover.jpg', type: 'image/jpeg', size: 1024 });
+    expect(focused).toHaveBeenCalledWith('1 possible match');
+    expect(JSON.stringify(renderer!.toJSON())).toContain('None of these');
+    const manual = renderer!.root.findAllByType('button').find(node => node.children.join('') === 'Add album manually')!;
+    await act(async () => manual.props.onClick());
+    expect(props.onManual).toHaveBeenCalledExactlyOnceWith({ artist: 'Portishead', album: 'Dummy' });
+    expect(addAlbum).not.toHaveBeenCalled();
   });
 });
