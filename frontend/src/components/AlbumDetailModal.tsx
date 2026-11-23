@@ -1,11 +1,12 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { toast } from 'react-hot-toast';
 import api, { type Album, type SearchCoverArtResult, getCoverArtUrl } from '../services/api';
+import { ModalDialog } from './ModalDialog';
 
 interface AlbumDetailModalProps {
   album: Album;
   onClose: () => void;
-  onRefresh: () => void;
+  onRefresh: (updatedAlbum?: Album) => void;
 }
 
 export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModalProps) => {
@@ -16,6 +17,11 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
   const [showSelectionModal, setShowSelectionModal] = useState(false);
   const [candidates, setCandidates] = useState<SearchCoverArtResult[]>([]);
   const [imageDimensions, setImageDimensions] = useState<Record<string, string>>({});
+  const [savingArtwork, setSavingArtwork] = useState(false);
+  const [failedCoverUrl, setFailedCoverUrl] = useState('');
+  const artworkButtonRef = useRef<HTMLButtonElement>(null);
+  const coverVersion = currentAlbum.local_cover_path ? `?v=${encodeURIComponent(currentAlbum.local_cover_path)}` : '';
+  const coverUrl = getCoverArtUrl(currentAlbum.id) + coverVersion;
 
   // Reset local artwork edits when the parent supplies a different album value.
   // React retries this render before committing children, avoiding a stale frame.
@@ -36,35 +42,30 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
       } else {
         toast.error('No cover art found');
       }
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to search for artwork');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not find cover art. Try again.');
     } finally {
       setRefetching(false);
     }
   };
 
   const handleSelectArtwork = async (candidate: SearchCoverArtResult) => {
+    if (savingArtwork) return;
+
+    setSavingArtwork(true);
     try {
-      toast.loading('Updating artwork...', { id: 'update-art' });
+      toast.loading('Updating artwork…', { id: 'update-art' });
       const data = await api.updateCoverArt(currentAlbum.id, candidate.url, candidate.source);
-      
-      toast.success('Artwork updated!', { id: 'update-art' });
-      if (data.album) {
-        setCurrentAlbum(data.album);
-      }
+      const updatedAlbum = { ...currentAlbum, ...data.album };
+
+      toast.success('Artwork updated', { id: 'update-art' });
+      setCurrentAlbum(updatedAlbum);
       setShowSelectionModal(false);
-      onRefresh();
-      
-      // Force reload the image
-      setTimeout(() => {
-        const images = document.querySelectorAll(`img[alt="${currentAlbum.title}"]`);
-        images.forEach((img) => {
-          const imgElement = img as HTMLImageElement;
-          imgElement.src = getCoverArtUrl(currentAlbum.id) + '?t=' + Date.now();
-        });
-      }, 500);
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to update artwork', { id: 'update-art' });
+      onRefresh(updatedAlbum);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not update the artwork. Try another cover.', { id: 'update-art' });
+    } finally {
+      setSavingArtwork(false);
     }
   };
 
@@ -74,8 +75,8 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
       toast.success('Moved to collection');
       onRefresh();
       onClose();
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to move to collection');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to move to Collection');
     }
   };
 
@@ -85,50 +86,28 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
       year: 'numeric',
       month: 'long',
       day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
     });
   };
 
-  const getArtworkSource = () => {
-    // Priority: local_cover_path > cover_image_url source detection
-    if (currentAlbum.local_cover_path) {
-      // Has locally cached cover art
-      if (currentAlbum.cover_image_url?.includes('coverartarchive.org')) {
-        return { source: 'MusicBrainz (Cached Locally)', color: 'text-blue-600', icon: '🎵' };
-      } else {
-        return { source: 'Discogs (Cached Locally)', color: 'text-blue-600', icon: '💿' };
-      }
-    } else if (currentAlbum.cover_image_url) {
-      if (currentAlbum.cover_image_url.includes('coverartarchive.org')) {
-        return { source: 'MusicBrainz Cover Art Archive', color: 'text-blue-600', icon: '🎵' };
-      } else if (currentAlbum.cover_image_url.includes('discogs.com')) {
-        return { source: 'Discogs', color: 'text-blue-600', icon: '💿' };
-      } else {
-        return { source: 'External URL', color: 'text-gray-600', icon: '🌐' };
-      }
-    }
-    return { source: 'No artwork', color: 'text-gray-400', icon: '❌' };
-  };
-
-  const artworkInfo = getArtworkSource();
+  const artworkUrl = currentAlbum.cover_image_url;
+  const artworkSource = artworkUrl?.includes('coverartarchive.org')
+    ? 'MusicBrainz Cover Art Archive'
+    : artworkUrl?.includes('discogs.com')
+      ? 'Discogs'
+      : artworkUrl
+        ? 'External image'
+        : currentAlbum.local_cover_path ? 'Saved artwork' : 'No cover art';
 
   return (
-    <>
-    <div
-      className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <ModalDialog labelledBy="album-details-title" onClose={onClose}>
+      <div className="rh-dialog-panel max-w-2xl">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-200">
-          <h2 className="text-2xl font-bold text-gray-900">Album Details</h2>
+        <div className="rh-dialog-header flex items-center justify-between p-4 sm:p-6 border-b border-gray-200">
+          <h2 id="album-details-title" className="text-xl font-bold text-gray-900">Album details</h2>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
+            className="rh-dialog-close"
+            aria-label="Close album details"
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -137,20 +116,20 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-6">
+        <div className="p-4 sm:p-6 space-y-6">
           {/* Album Artwork */}
           <div className="flex flex-col items-center">
             <div className="w-full max-w-md aspect-square bg-gray-50 rounded-xl overflow-hidden shadow-lg">
-              <img
-                src={getCoverArtUrl(currentAlbum.id)}
-                alt={currentAlbum.title}
-                className="w-full h-full object-cover"
-                onError={(e) => {
-                  const target = e.target as HTMLImageElement;
-                  target.style.display = 'none';
-                  target.parentElement!.innerHTML = '<div class="w-full h-full flex items-center justify-center"><svg class="w-24 h-24 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg></div>';
-                }}
-              />
+              {failedCoverUrl !== coverUrl ? (
+                <img
+                  src={coverUrl}
+                  alt={currentAlbum.title}
+                  className="w-full h-full object-cover"
+                  onError={() => setFailedCoverUrl(coverUrl)}
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-gray-400">Cover unavailable</div>
+              )}
             </div>
           </div>
 
@@ -164,44 +143,26 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
               )}
             </div>
 
-            {/* Metadata */}
-            <div className="space-y-3 pt-4 border-t border-gray-200">
-              {/* Added Date */}
-              <div className="flex items-start gap-3">
-                <span className="text-2xl">📅</span>
-                <div className="flex-1">
-                  <p className="text-sm font-medium text-gray-700">Added to Collection</p>
-                  <p className="text-sm text-gray-600">{formatDate(currentAlbum.added_at)}</p>
-                </div>
+            <dl className="grid grid-cols-1 gap-3 border-t border-gray-200 pt-4 sm:grid-cols-3">
+              <div>
+                <dt className="text-sm font-medium text-gray-700">Shelf</dt>
+                <dd className="text-sm text-gray-600">{currentAlbum.status === 'wishlist' ? 'Wishlist' : 'Collection'}</dd>
               </div>
-
-              {/* Artwork Source */}
-              <div className="flex items-start gap-3">
-                <span className="text-2xl">{artworkInfo.icon}</span>
-                <div className="flex-1">
-                  <p className="text-sm font-medium text-gray-700">Artwork Source</p>
-                  <p className={`text-sm font-medium ${artworkInfo.color}`}>
-                    {artworkInfo.source}
-                  </p>
-                  {currentAlbum.cover_image_url && (
-                    <p className="text-xs text-gray-400 mt-1 truncate max-w-md">
-                      {currentAlbum.cover_image_url}
-                    </p>
-                  )}
-                </div>
+              <div>
+                <dt className="text-sm font-medium text-gray-700">First saved</dt>
+                <dd className="text-sm text-gray-600">{formatDate(currentAlbum.added_at)}</dd>
               </div>
-
-              {/* Notes */}
+              <div>
+                <dt className="text-sm font-medium text-gray-700">Artwork</dt>
+                <dd className="text-sm text-gray-600">{artworkSource}</dd>
+              </div>
               {currentAlbum.notes && (
-                <div className="flex items-start gap-3">
-                  <span className="text-2xl">📝</span>
-                  <div className="flex-1">
-                    <p className="text-sm font-medium text-gray-700">Notes</p>
-                    <p className="text-sm text-gray-600 mt-1 whitespace-pre-wrap">{currentAlbum.notes}</p>
-                  </div>
+                <div className="sm:col-span-3">
+                  <dt className="text-sm font-medium text-gray-700">Notes</dt>
+                  <dd className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-600">{currentAlbum.notes}</dd>
                 </div>
               )}
-            </div>
+            </dl>
           </div>
 
           {/* Actions */}
@@ -209,12 +170,12 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
             {currentAlbum.status === 'wishlist' && (
               <button
                 onClick={handleAddToCollection}
-                className="w-full px-5 py-2.5 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors flex items-center justify-center gap-2"
+                className="w-full px-5 py-2.5 rh-filled-action text-sm font-medium bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors flex items-center justify-center gap-2"
               >
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
-                Add to Collection
+                Move to Collection
               </button>
             )}
 
@@ -227,8 +188,8 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
                     toast.success('Moved to wishlist');
                     onRefresh();
                     onClose();
-                  } catch (error: any) {
-                    toast.error(error.message || 'Failed to move to wishlist');
+                  } catch (error) {
+                    toast.error(error instanceof Error ? error.message : 'Failed to move to Wishlist');
                   }
                 }}
                 className="w-full px-5 py-2.5 text-sm font-medium text-purple-600 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 transition-colors flex items-center justify-center gap-2"
@@ -249,8 +210,8 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
                     toast.success('Album removed entirely');
                     onRefresh();
                     onClose();
-                  } catch (error: any) {
-                    toast.error(error.message || 'Failed to remove album');
+                  } catch (error) {
+                    toast.error(error instanceof Error ? error.message : 'Failed to remove album');
                   }
                 }}
                 className="w-full px-5 py-2.5 text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
@@ -263,13 +224,14 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
             )}
 
             <button
+              ref={artworkButtonRef}
               onClick={handleSearchArtwork}
               disabled={refetching}
-              className="w-full px-5 py-2.5 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              className="w-full px-5 py-2.5 rh-filled-action text-sm font-medium bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {refetching ? (
                 <>
-                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                  <div className="rh-action-spinner" aria-hidden="true"></div>
                   Searching for Artwork...
                 </>
               ) : (
@@ -291,23 +253,16 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
           </div>
         </div>
       </div>
-    </div>
 
-      {/* Cover Art Selection Modal */}
       {showSelectionModal && (
-        <div 
-          className="fixed inset-0 bg-black/80 flex items-center justify-center z-[60] p-4"
-          onClick={() => setShowSelectionModal(false)}
-        >
-          <div 
-            className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[85vh] overflow-hidden flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <ModalDialog labelledBy="choose-cover-title" onClose={() => setShowSelectionModal(false)} returnFocusTo={artworkButtonRef}>
+          <div className="rh-dialog-panel max-w-4xl flex flex-col">
             <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-              <h3 className="text-xl font-bold text-gray-900">Select Cover Art</h3>
+              <h2 id="choose-cover-title" className="text-xl font-bold text-gray-900">Choose cover art</h2>
               <button 
                 onClick={() => setShowSelectionModal(false)}
-                className="text-gray-500 hover:text-gray-700"
+                className="rh-dialog-close"
+                aria-label="Close cover chooser"
               >
                 <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -315,76 +270,57 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh }: AlbumDetailModal
               </button>
             </div>
             
-            <div className="p-6 overflow-y-auto">
+            <div className="p-4 sm:p-6 overflow-y-auto">
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                {candidates.map((candidate, index) => (
-                  <div 
-                    key={`${candidate.source}-${candidate.id}-${index}`}
-                    className="group cursor-pointer relative"
-                    onClick={() => handleSelectArtwork(candidate)}
-                  >
-                    <div className="relative aspect-square rounded-lg overflow-hidden bg-gray-100 border-2 border-transparent group-hover:border-purple-500 transition-all">
-                      <img
-                        src={candidate.url}
-                        alt={candidate.title}
-                        className="w-full h-full object-cover"
-                        onLoad={(e) => {
-                          const img = e.currentTarget;
-                          const key = `${candidate.source}-${candidate.id}-${index}`;
-                          if (!imageDimensions[key]) {
-                            setImageDimensions(prev => ({
-                              ...prev,
-                              [key]: `${img.naturalWidth} x ${img.naturalHeight}`
-                            }));
-                          }
-                        }}
-                        onError={(e) => {
-                          const img = e.currentTarget;
-                          const key = `${candidate.source}-${candidate.id}-${index}`;
-                          setImageDimensions(prev => ({
-                            ...prev,
-                            [key]: 'Failed to load'
-                          }));
-                          // Replace with placeholder
-                          img.style.display = 'none';
-                          const parent = img.parentElement;
-                          if (parent && !parent.querySelector('.image-error-placeholder')) {
-                            const placeholder = document.createElement('div');
-                            placeholder.className = 'image-error-placeholder w-full h-full flex flex-col items-center justify-center bg-gray-100';
-                            placeholder.innerHTML = '<svg class="w-12 h-12 text-gray-300 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg><span class="text-xs text-gray-400">Image unavailable</span>';
-                            parent.insertBefore(placeholder, parent.firstChild);
-                          }
-                        }}
-                      />
-                      <div className="absolute inset-x-0 bottom-0 bg-black/60 p-1 text-center">
-                         <span className="text-[10px] text-white font-medium">
-                           {imageDimensions[`${candidate.source}-${candidate.id}-${index}`] || 'Loading...'}
-                         </span>
-                      </div>
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-                        <span className="opacity-0 group-hover:opacity-100 bg-purple-600 text-white px-3 py-1 rounded-full text-sm font-medium transform translate-y-2 group-hover:translate-y-0 transition-all">
-                          Select
-                        </span>
-                      </div>
-                    </div>
-                    <div className="mt-2">
-                      <div className="flex items-center justify-between">
-                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                          candidate.source === 'MusicBrainz' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'
-                        }`}>
-                          {candidate.source}
-                        </span>
-                        {candidate.year && <span className="text-xs text-gray-500">{candidate.year}</span>}
-                      </div>
-                      <p className="text-sm font-medium text-gray-900 mt-1 truncate">{candidate.title}</p>
-                    </div>
-                  </div>
-                ))}
+                {candidates.map((candidate, index) => {
+                  const key = `${candidate.source}-${candidate.id}-${index}`;
+                  const dimensions = imageDimensions[key];
+                  const failed = dimensions === 'Unavailable';
+
+                  return (
+                    <button
+                      type="button"
+                      key={key}
+                      className="group cursor-pointer relative"
+                      disabled={savingArtwork || failed}
+                      onClick={() => handleSelectArtwork(candidate)}
+                      aria-label={`Use ${candidate.title} cover from ${candidate.source}`}
+                    >
+                      <span className="block aspect-square overflow-hidden rounded-lg border border-gray-300 bg-gray-100 group-hover:border-purple-500">
+                        {failed ? (
+                          <span className="grid h-full place-items-center px-2 text-xs text-gray-400">Image unavailable</span>
+                        ) : (
+                          <img
+                            src={candidate.url}
+                            alt=""
+                            loading="lazy"
+                            className="w-full h-full object-cover"
+                            onLoad={event => {
+                              const { naturalWidth, naturalHeight } = event.currentTarget;
+                              setImageDimensions(previous => ({ ...previous, [key]: `${naturalWidth} × ${naturalHeight}` }));
+                            }}
+                            onError={() => setImageDimensions(previous => ({ ...previous, [key]: 'Unavailable' }))}
+                          />
+                        )}
+                      </span>
+                      <span className="block pt-2 text-left">
+                        <span className="block text-sm font-medium text-gray-900 break-words">{candidate.title}</span>
+                        <span className="block text-xs text-gray-400">{candidate.source}{candidate.year ? ` · ${candidate.year}` : ''}</span>
+                        {!failed && dimensions && <span className="block text-xs text-gray-400">{dimensions}</span>}
+                        {failed ? null : (
+                          <span className="mt-1 block text-sm font-medium text-purple-700">
+                            {savingArtwork ? 'Updating…' : 'Use this cover'}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
-        </div>
+        </ModalDialog>
       )}
-    </>
+    </ModalDialog>
   );
 };

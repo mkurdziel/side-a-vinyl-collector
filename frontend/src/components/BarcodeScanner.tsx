@@ -2,6 +2,9 @@ import { useRef, useState } from 'react';
 import { toast } from 'react-hot-toast';
 import api from '../services/api';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
+import { ModalDialog } from './ModalDialog';
+
+type BarcodeMatch = Awaited<ReturnType<typeof api.scanBarcode>> & { barcode: string };
 
 interface BarcodeScannerProps {
   onClose: () => void;
@@ -12,33 +15,32 @@ interface BarcodeScannerProps {
 export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
   const [scanning, setScanning] = useState(true);
   const lookupInProgress = useRef(false);
-  const [scannedResult, setScannedResult] = useState<any>(null);
-  const [transferring, setTransferring] = useState(false);
+  const [scannedResult, setScannedResult] = useState<BarcodeMatch | null>(null);
+  const [saving, setSaving] = useState<'collection' | 'wishlist' | 'move' | null>(null);
+  const [lookupError, setLookupError] = useState('');
   const [manualBarcode, setManualBarcode] = useState('');
 
   const handleDetected = async (barcode: string) => {
     if (lookupInProgress.current) return;
 
     lookupInProgress.current = true;
+    setLookupError('');
     setScanning(false);
 
     try {
-      toast.loading('Looking up barcode...', { id: 'barcode' });
-
       const result = await api.scanBarcode(barcode);
-
-      toast.success('Album found!', { id: 'barcode' });
       setScannedResult({ ...result, barcode });
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to find album', { id: 'barcode' });
+    } catch {
+      setLookupError('Could not find a record for that barcode. Check the digits and try again.');
       setScanning(true);
       lookupInProgress.current = false;
     }
   };
 
   const handleAddToCollection = async (status: 'collection' | 'wishlist') => {
-    if (!scannedResult) return;
+    if (!scannedResult || saving) return;
 
+    setSaving(status);
     try {
       await api.addAlbum({
         artist: scannedResult.artist,
@@ -53,29 +55,32 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
       toast.success(`Added "${scannedResult.album}" by ${scannedResult.artist} to ${status}`);
       onSuccess();
       onClose();
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to add album');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not add the album. Try again.');
+    } finally {
+      setSaving(null);
     }
   };
 
   const handleTransferToCollection = async () => {
-    if (!scannedResult?.existingAlbumId) return;
+    if (!scannedResult?.existingAlbumId || saving) return;
 
-    setTransferring(true);
+    setSaving('move');
     try {
       await api.updateStatus(scannedResult.existingAlbumId, 'collection');
-      toast.success(`Moved "${scannedResult.album}" by ${scannedResult.artist} to your collection! 🎉`);
+      toast.success(`Moved “${scannedResult.album}” to Collection`);
       onSuccess();
       onClose();
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to move album');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not move the album. Try again.');
     } finally {
-      setTransferring(false);
+      setSaving(null);
     }
   };
 
   const handleScanAnother = () => {
     setScannedResult(null);
+    setManualBarcode('');
     lookupInProgress.current = false;
     setScanning(true);
   };
@@ -83,14 +88,8 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
   const { scannerRef, error, cameras, cameraId, setCameraId } = useBarcodeScanner(handleDetected, scanning);
 
   return (
-    <div
-      className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="bg-white rounded-3xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col relative max-h-[90vh]"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <ModalDialog labelledBy="barcode-title" onClose={onClose}>
+      <div className="rh-dialog-panel max-w-lg flex flex-col">
         <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-white sticky top-0 z-20">
           <div className="flex items-center gap-2">
             <div className="p-1.5 bg-purple-100 rounded-lg">
@@ -98,10 +97,11 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
               </svg>
             </div>
-            <h2 className="text-lg font-bold text-gray-900">Scan Barcode</h2>
+            <h2 id="barcode-title" className="text-lg font-bold text-gray-900">Look up a barcode</h2>
           </div>
           <button
-            className="text-gray-400 hover:text-gray-600 p-2 hover:bg-gray-100 rounded-full transition-all"
+            className="rh-dialog-close"
+            aria-label="Close barcode lookup"
             onClick={onClose}
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -163,6 +163,8 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
             <p className="mb-4 text-sm text-gray-600">
               Keep the whole barcode visible. Move farther back if it looks blurry, or try another camera.
             </p>
+            {!scanning && <p className="mb-2 text-sm text-gray-600" role="status">Looking up barcode…</p>}
+            {lookupError && <p className="mb-2 text-sm text-red-600" role="alert">{lookupError}</p>}
             <form className="mb-4" onSubmit={event => {
               event.preventDefault();
               if (manualBarcode.trim()) void handleDetected(manualBarcode.trim());
@@ -185,7 +187,7 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
                   className="min-w-0 flex-1 rounded-lg border border-gray-300 p-2"
                 />
                 <button type="submit" disabled={!scanning || !manualBarcode.trim()}
-                  className="rounded-lg bg-purple-600 px-4 py-2 text-white disabled:opacity-50">
+                  className="rh-filled-action rounded-lg bg-purple-600 px-4 py-2 disabled:opacity-50">
                   {scanning ? 'Look up' : 'Looking up…'}
                 </button>
               </div>
@@ -195,8 +197,8 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
 
         {/* Confirmation Dialog */}
         {scannedResult && (
-          <div className="mb-6 bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl p-6 border border-purple-200">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Album Found!</h3>
+          <div className="mb-2 bg-gray-100 rounded-xl p-4 sm:p-6 border border-gray-300">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4" role="status">Album found</h3>
             <div className="flex gap-4 mb-4">
               {scannedResult.coverImageUrl && (
                 <img 
@@ -237,19 +239,19 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
               {scannedResult.existingStatus === 'wishlist' && scannedResult.existingAlbumId && (
                 <button
                   onClick={handleTransferToCollection}
-                  disabled={transferring}
-                  className="w-full px-4 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold transition-all shadow-lg hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-3 disabled:opacity-60 disabled:cursor-not-allowed group"
+                  disabled={saving !== null}
+                  className="rh-filled-action w-full px-4 py-3 bg-purple-600 hover:bg-purple-700 rounded-xl font-bold transition-colors flex items-center justify-center gap-3 disabled:opacity-60 group"
                 >
-                  {transferring ? (
+                  {saving === 'move' ? (
                     <>
-                      <div className="w-5 h-5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                      Moving...
+                      <span className="rh-action-spinner" aria-hidden="true" />
+                      Moving…
                     </>
                   ) : (
                     <>
                       {/* Arrow up from wishlist to collection icon */}
                       <div className="flex items-center gap-1.5">
-                        <svg className="w-4 h-4 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
                         </svg>
                         <svg className="w-5 h-5 group-hover:translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -280,21 +282,24 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
                 <>
                   <button
                     onClick={() => handleAddToCollection('collection')}
-                    className="w-full px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition-colors"
+                    disabled={saving !== null}
+                    className="rh-filled-action w-full px-4 py-2.5 bg-purple-600 hover:bg-purple-700 rounded-lg font-medium transition-colors disabled:opacity-60"
                   >
-                    Add to Collection
+                    {saving === 'collection' ? 'Adding to Collection…' : 'Add to Collection'}
                   </button>
                   <button
                     onClick={() => handleAddToCollection('wishlist')}
-                    className="w-full px-4 py-2.5 text-purple-600 bg-purple-50 border border-purple-200 hover:bg-purple-100 rounded-lg font-medium transition-colors"
+                    disabled={saving !== null}
+                    className="w-full px-4 py-2.5 text-purple-600 bg-purple-50 border border-purple-200 hover:bg-purple-100 rounded-lg font-medium transition-colors disabled:opacity-60"
                   >
-                    Add to Wishlist
+                    {saving === 'wishlist' ? 'Adding to Wishlist…' : 'Add to Wishlist'}
                   </button>
                 </>
               )}
               <button
                 onClick={handleScanAnother}
-                className="w-full px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
+                disabled={saving !== null}
+                className="w-full px-4 py-2.5 border border-gray-300 hover:bg-gray-100 rounded-lg font-medium transition-colors disabled:opacity-60"
               >
                 Scan Another
               </button>
@@ -303,15 +308,7 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
         )}
         </div>
 
-        <div className="p-4 border-t border-gray-100 flex justify-center bg-gray-50">
-            <button 
-                className="w-full sm:w-auto px-10 py-3 text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 rounded-xl font-bold transition-all shadow-sm active:scale-95" 
-                onClick={onClose}
-            >
-            Exit Scanner
-            </button>
-        </div>
       </div>
-    </div>
+    </ModalDialog>
   );
 };

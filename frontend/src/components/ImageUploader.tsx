@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { toast } from 'react-hot-toast';
 import api, { type DiscogsAlbum } from '../services/api';
+import { ModalDialog } from './ModalDialog';
 
 interface ImageUploaderProps {
   onClose: () => void;
@@ -14,22 +15,26 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
   const [imagePreview, setImagePreview] = useState<string>('');
   const [confidence, setConfidence] = useState<number>(0);
   const [extractedInfo, setExtractedInfo] = useState<{ artist?: string; album?: string; year?: number; provider?: string; usedFallback?: boolean } | null>(null);
-  const [transferringId, setTransferringId] = useState<number | null>(null);
+  const [savingId, setSavingId] = useState<number | null>(null);
+  const [analysisError, setAnalysisError] = useState('');
+  const destination = viewMode === 'collection' ? 'Collection' : 'Wishlist';
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = '';
+    setAnalysisError('');
 
     // Validate file type
     const isHEIC = /\.(heic|heif)$/i.test(file.name) || /^image\/(heic|heif)$/i.test(file.type);
     if (!file.type.startsWith('image/') && !isHEIC) {
-      toast.error('Please select an image file');
+      setAnalysisError('Choose an image file, such as JPG, PNG, or HEIC.');
       return;
     }
 
     // Validate file size (10MB max)
     if (file.size > 10 * 1024 * 1024) {
-      toast.error('Image must be less than 10MB');
+      setAnalysisError('Choose an image under 10 MB.');
       return;
     }
 
@@ -37,8 +42,12 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
     setMatches([]);
     setExtractedInfo(null);
     setConfidence(0);
+    setAnalyzing(true);
     const reader = new FileReader();
-    reader.onerror = () => toast.error('Could not read image. Please select it again.');
+    reader.onerror = () => {
+      setAnalyzing(false);
+      setAnalysisError('Could not read this image. Choose it again or try another photo.');
+    };
     reader.onload = async () => {
       const base64 = reader.result as string;
 
@@ -51,31 +60,20 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
         setImagePreview('HEIC');
       }
 
-      // Analyze image
-      setAnalyzing(true);
       try {
-        toast.loading('Analyzing image with AI...', { id: 'analyze' });
         const result = await api.analyzeImage(base64);
 
         const aiConfidence = result.extractedText.confidence || 0;
         setConfidence(aiConfidence);
         setExtractedInfo(result.extractedText);
 
-        if (aiConfidence >= 70) {
-          toast.success(`Image analyzed! (${aiConfidence}% confident)`, { id: 'analyze' });
-        } else if (aiConfidence >= 50) {
-          toast('Image analyzed with moderate confidence', { id: 'analyze', icon: '⚠️' });
-        } else {
-          toast('Low confidence - results may not be accurate', { id: 'analyze', icon: '⚠️' });
-        }
-
         if (result.discogsMatches.length === 0) {
-          toast.error('No matches found. Try a clearer image.');
+          setAnalysisError('No matching albums found. Try a clearer photo or search by name.');
         } else {
           setMatches(result.discogsMatches);
         }
-      } catch (error: any) {
-        toast.error(error.message || 'Failed to analyze image', { id: 'analyze' });
+      } catch {
+        setAnalysisError('Could not identify this cover. Try another photo or search by name.');
       } finally {
         setAnalyzing(false);
       }
@@ -85,61 +83,36 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
   };
 
   const handleSelectMatch = async (match: DiscogsAlbum) => {
-    // If already in collection, do nothing
-    if (match.inCollection) return;
+    if (match.inCollection || (match.inWishlist && !match.existingAlbumId) || savingId !== null) return;
 
-    // If in wishlist, transfer to collection
-    if (match.inWishlist && match.existingAlbumId) {
-      await handleTransferToCollection(match);
-      return;
-    }
-
+    setSavingId(match.discogsId);
     try {
-      toast.loading('Adding to collection...', { id: 'add' });
-
-      await api.addAlbum({
-        artist: match.artist,
-        album: match.album,
-        year: match.year,
-        coverImageUrl: match.coverImageUrl,
-        discogsId: match.discogsId,
-        status: viewMode,
-      });
-
-      toast.success(`Added "${match.album}" by ${match.artist} to ${viewMode}`, { id: 'add' });
+      if (match.inWishlist && match.existingAlbumId) {
+        await api.updateStatus(match.existingAlbumId, 'collection');
+        toast.success(`Moved “${match.album}” to Collection`);
+      } else {
+        await api.addAlbum({
+          artist: match.artist,
+          album: match.album,
+          year: match.year,
+          coverImageUrl: match.coverImageUrl,
+          discogsId: match.discogsId,
+          status: viewMode,
+        });
+        toast.success(`Added “${match.album}” to ${destination}`);
+      }
       onSuccess();
       onClose();
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to add album', { id: 'add' });
-    }
-  };
-
-  const handleTransferToCollection = async (match: DiscogsAlbum) => {
-    if (!match.existingAlbumId) return;
-
-    setTransferringId(match.discogsId);
-    try {
-      toast.loading('Moving to collection...', { id: 'transfer' });
-      await api.updateStatus(match.existingAlbumId, 'collection');
-      toast.success(`Moved "${match.album}" by ${match.artist} to your collection! 🎉`, { id: 'transfer' });
-      onSuccess();
-      onClose();
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to move album', { id: 'transfer' });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not save the album. Try again.');
     } finally {
-      setTransferringId(null);
+      setSavingId(null);
     }
   };
 
   return (
-    <div
-      className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <ModalDialog labelledBy="identify-cover-title" onClose={onClose}>
+      <div className="rh-dialog-panel max-w-2xl p-4 sm:p-6">
         <div className="flex justify-between items-center mb-6 border-b border-gray-100 pb-4">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-purple-100 rounded-lg">
@@ -147,10 +120,11 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
             </div>
-            <h2 className="text-xl font-bold text-gray-900">Upload Album Image</h2>
+            <h2 id="identify-cover-title" className="text-xl font-bold text-gray-900">Identify a cover</h2>
           </div>
           <button
-            className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-full"
+            className="rh-dialog-close"
+            aria-label="Close cover identification"
             onClick={onClose}
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -161,12 +135,13 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
 
         <div className="mb-6">
           {!imagePreview ? (
-            <label className="block w-full cursor-pointer group">
+            <label className="rh-upload-label block w-full cursor-pointer rounded-2xl group">
               <input
                 type="file"
                 accept="image/*"
                 onChange={handleFileChange}
-                className="hidden"
+                disabled={analyzing}
+                className="sr-only"
               />
               <div className="relative flex flex-col items-center justify-center w-full h-64 border-2 border-dashed border-gray-300 rounded-2xl bg-gray-50 group-hover:bg-purple-50 group-hover:border-purple-300 transition-all duration-200">
                 <div className="w-16 h-16 mb-4 flex items-center justify-center bg-white rounded-full shadow-sm group-hover:scale-110 transition-transform duration-200">
@@ -175,7 +150,7 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
                   </svg>
                 </div>
-                <p className="mb-2 text-lg font-semibold text-gray-700 group-hover:text-purple-700">Click to upload album cover</p>
+                <p className="mb-2 text-lg font-semibold text-gray-700 group-hover:text-purple-700">Choose a cover photo</p>
                 <p className="text-sm text-gray-500 group-hover:text-purple-500">JPG, PNG, or HEIC (max 10MB)</p>
               </div>
             </label>
@@ -201,9 +176,12 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
                     setMatches([]);
                     setExtractedInfo(null);
                     setConfidence(0);
+                    setAnalysisError('');
                   }}
-                  className="absolute top-4 right-4 bg-white/90 text-gray-700 hover:text-red-600 p-2 rounded-lg shadow-md opacity-0 group-hover:opacity-100 transition-opacity"
+                  disabled={savingId !== null}
+                  className="rh-dialog-close absolute top-4 right-4 bg-white/95 hover:text-red-600"
                   title="Remove image"
+                  aria-label="Remove image"
                 >
                   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -215,17 +193,19 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
         </div>
 
         {analyzing && (
-          <div className="text-center py-8">
+          <div className="text-center py-8" role="status">
             <div className="inline-block w-12 h-12 border-4 border-purple-600/30 border-t-purple-600 rounded-full animate-spin mb-4"></div>
-            <p className="text-lg font-medium text-gray-700">Analyzing with AI Vision...</p>
+            <p className="text-lg font-medium text-gray-700">Looking for matching albums…</p>
           </div>
         )}
+
+        {analysisError && <p className="mb-4 text-sm text-red-600" role="alert">{analysisError}</p>}
 
         {matches.length > 0 && (
           <div className="mb-6">
             <div className="mb-4">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-xl font-bold text-gray-900">AI Detection Results</h3>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                <h3 className="text-xl font-bold text-gray-900" role="status">{matches.length === 1 ? '1 possible match' : `${matches.length} possible matches`}</h3>
                 {confidence > 0 && (
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-gray-600">Confidence:</span>
@@ -280,80 +260,44 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
             </div>
             <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Select the correct album:</h4>
             <div className="space-y-3">
-              {matches.map((match) => (
-                <div
-                  key={match.discogsId}
-                  className={`bg-white rounded-xl border transition-all p-3 flex gap-4 group ${
-                    match.inCollection
-                      ? 'border-green-200 bg-green-50/50 cursor-default'
-                      : match.inWishlist
-                        ? 'border-purple-200 hover:border-emerald-400 hover:shadow-md cursor-pointer'
-                        : 'border-gray-200 hover:border-purple-300 hover:shadow-md cursor-pointer'
-                  }`}
-                  onClick={() => handleSelectMatch(match)}
-                >
-                  {match.coverImageUrl && (
-                    <img
-                      src={match.coverImageUrl}
-                      alt={match.album}
-                      className="w-16 h-16 object-cover rounded-lg shadow-sm"
-                    />
-                  )}
-                  <div className="flex-1 min-w-0 flex flex-col justify-center">
-                    <h4 className={`font-bold truncate transition-colors ${
-                      match.inCollection ? 'text-green-800' : 'text-gray-900 group-hover:text-purple-700'
-                    }`}>{match.album}</h4>
-                    <p className="text-gray-600 truncate">{match.artist}</p>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      {match.year && <span className="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{match.year}</span>}
-                      {match.fromProvider && match.confidence !== undefined && (
-                        <span className="text-xs text-gray-400">
-                           {match.confidence}% match
-                        </span>
+              {matches.map(match => {
+                const canSave = !match.inCollection && (!match.inWishlist || match.existingAlbumId);
+                const action = match.inWishlist ? 'Move to Collection' : `Add to ${destination}`;
+
+                return (
+                  <article key={match.discogsId} className="rounded-xl border border-gray-300 p-3">
+                    <div className="flex items-start gap-3">
+                      {match.coverImageUrl && (
+                        <img src={match.coverImageUrl} alt="" loading="lazy" className="size-14 rounded-lg object-cover" />
                       )}
-                      {/* Status badge */}
-                      {match.inCollection && (
-                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 bg-green-100 px-2 py-0.5 rounded-full">
-                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                          </svg>
-                          In Collection
-                        </span>
-                      )}
-                      {match.inWishlist && (
-                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full">
-                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                          </svg>
-                          In Wishlist
-                        </span>
+                      <div className="min-w-0">
+                        <h4 className="font-semibold text-gray-900 break-words">{match.album}</h4>
+                        <p className="text-sm text-gray-600 break-words">
+                          {match.artist}{match.year ? ` · ${match.year}` : ''}
+                        </p>
+                        {match.confidence !== undefined && (
+                          <p className="mt-1 text-xs text-gray-400">{match.confidence}% match</p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      {match.inCollection && <span className="text-sm text-green-700">In Collection</span>}
+                      {match.inWishlist && <span className="text-sm text-purple-700">In Wishlist</span>}
+                      {canSave && (
+                        <button
+                          type="button"
+                          className="rh-filled-action rounded-lg bg-purple-600 px-3 text-sm font-semibold hover:bg-purple-700 disabled:opacity-60"
+                          onClick={() => void handleSelectMatch(match)}
+                          disabled={savingId !== null}
+                          aria-label={`${action}: ${match.album}`}
+                        >
+                          {savingId === match.discogsId ? 'Saving…' : action}
+                        </button>
                       )}
                     </div>
-                  </div>
-                  <div className="flex items-center px-2">
-                    {match.inCollection ? (
-                      <svg className="w-5 h-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
-                    ) : match.inWishlist ? (
-                      transferringId === match.discogsId ? (
-                        <div className="w-5 h-5 border-2 border-emerald-300 border-t-emerald-600 rounded-full animate-spin" />
-                      ) : (
-                        <div className="flex items-center gap-1 bg-purple-600 text-white rounded-lg px-2.5 py-1.5 text-xs font-bold shadow-sm group-hover:shadow-md transition-all group-hover:scale-105">
-                          <svg className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                          </svg>
-                          <span className="whitespace-nowrap">Move to Collection</span>
-                        </div>
-                      )
-                    ) : (
-                      <svg className="w-5 h-5 text-gray-300 group-hover:text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                      </svg>
-                    )}
-                  </div>
-                </div>
-              ))}
+                  </article>
+                );
+              })}
             </div>
           </div>
         )}
@@ -367,6 +311,6 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
             </button>
         </div>
       </div>
-    </div>
+    </ModalDialog>
   );
 };
