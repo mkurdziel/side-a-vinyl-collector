@@ -3,13 +3,14 @@ import { act, create } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Album, DiscogsAlbum, SearchResult } from '../src/services/api';
 
-const { getAlbums, search, addAlbum } = vi.hoisted(() => ({
+const { getAlbums, search, addAlbum, updateStatus } = vi.hoisted(() => ({
   getAlbums: vi.fn(),
   search: vi.fn(),
   addAlbum: vi.fn(),
+  updateStatus: vi.fn(),
 }));
 vi.mock('../src/services/api', () => ({
-  default: { getAlbums, search, addAlbum, checkDiscogsConfig: async () => ({ configured: true }) },
+  default: { getAlbums, search, addAlbum, updateStatus, checkDiscogsConfig: async () => ({ configured: true }) },
   getCoverArtUrl: (id: number) => `/api/cover-art/${id}`,
 }));
 vi.mock('react-hot-toast', () => ({
@@ -115,6 +116,29 @@ describe('library and catalog search', () => {
     expect(JSON.stringify(renderer.toJSON())).not.toContain('Late collection entry');
   });
 
+  it('keeps a global query and matches visible when switching the default shelf', async () => {
+    search.mockResolvedValue({ local: [saved], discogs: [catalog] });
+    getAlbums.mockImplementation(async (shelf: string) => ({ albums: shelf === 'wishlist' ? [saved] : [] }));
+    await renderLibrary();
+    await editSearch('Coltrane');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+
+    await act(async () => button('Wishlist').props.onClick());
+    await act(async () => button('Wishlist').props.onClick());
+
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Coltrane');
+    expect(button('Wishlist').props['aria-pressed']).toBe(true);
+    expect(button('Open Blue Train by John Coltrane')).toBeDefined();
+    expect(button('Add Giant Steps to Wishlist')).toBeDefined();
+    const status = renderer.root.findByType('header').findByProps({ role: 'status' });
+    expect(status.findByType('span').children.join('')).toBe('1 saved album · 1 catalog match');
+
+    await act(async () => button('Back to Wishlist').props.onClick());
+    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('');
+    expect(status.findByType('span').children.join('')).toBe('1 album in Wishlist');
+  });
+
   it('serializes the two add destinations for the same catalog record', async () => {
     const add = Promise.withResolvers<{ album: Album }>();
     search.mockResolvedValue({ local: [], discogs: [catalog] });
@@ -131,7 +155,7 @@ describe('library and catalog search', () => {
     expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status: 'wishlist' }));
     expect(button('Add Giant Steps to Collection').props['aria-disabled']).toBe(true);
     await act(async () => add.resolve({ album: { ...saved, id: 2, title: 'Giant Steps' } }));
-    expect(button('Giant Steps is in Wishlist').props['aria-disabled']).toBe(true);
+    expect(renderer.root.findAllByProps({ 'aria-label': 'Giant Steps is in Wishlist' })).toHaveLength(2);
     expect(button('Add Giant Steps to Collection')).toBeUndefined();
   });
 
@@ -156,7 +180,35 @@ describe('library and catalog search', () => {
     expect(search.mock.calls[2][0]).toBe('Coltrane');
 
     await act(async () => staleSearch.resolve(match));
-    expect(button('Giant Steps is in Wishlist')).toBeDefined();
+    expect(renderer.root.findAllByProps({ 'aria-label': 'Giant Steps is in Wishlist' })).toHaveLength(2);
     expect(button('Add Giant Steps to Collection')).toBeUndefined();
+  });
+
+  it('moves a wishlist result by its saved ID and updates catalog and saved results together', async () => {
+    const moving = Promise.withResolvers<void>();
+    const album = { ...saved, id: 42, title: 'Giant Steps' };
+    search.mockResolvedValue({
+      local: [album],
+      discogs: [{ ...catalog, inWishlist: true, existingAlbumId: album.id }],
+    });
+    updateStatus.mockReturnValueOnce(moving.promise);
+    await renderLibrary();
+    await editSearch('Coltrane');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+
+    const moveButtons = () => renderer.root.findAllByType('button')
+      .filter(node => node.props['aria-label'] === 'Move Giant Steps to Collection');
+    expect(moveButtons()).toHaveLength(2);
+    await act(async () => {
+      for (const button of moveButtons()) button.props.onClick();
+    });
+
+    expect(updateStatus).toHaveBeenCalledExactlyOnceWith(album.id, 'collection');
+    expect(moveButtons().every(node => node.props['aria-disabled'])).toBe(true);
+    await act(async () => moving.resolve());
+
+    expect(moveButtons()).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ 'aria-label': 'Giant Steps is in Collection' })).toHaveLength(2);
+    expect(getAlbums).toHaveBeenCalledTimes(2);
   });
 });

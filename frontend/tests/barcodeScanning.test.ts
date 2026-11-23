@@ -2,18 +2,20 @@ import { createElement } from 'react';
 import { act, create } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { quagga, scanBarcode } = vi.hoisted(() => ({
+const { quagga, scanBarcode, addAlbum, updateStatus } = vi.hoisted(() => ({
   quagga: {
     init: vi.fn(), start: vi.fn(), stop: vi.fn(), onDetected: vi.fn(), offDetected: vi.fn(),
     CameraAccess: { enumerateVideoDevices: vi.fn() },
   },
   scanBarcode: vi.fn(),
+  addAlbum: vi.fn(),
+  updateStatus: vi.fn(),
 }));
 vi.mock('@ericblade/quagga2', () => ({ default: quagga }));
 vi.mock('react-hot-toast', () => ({
   toast: { loading: vi.fn(), success: vi.fn(), error: vi.fn() },
 }));
-vi.mock('../src/services/api', () => ({ default: { scanBarcode } }));
+vi.mock('../src/services/api', () => ({ default: { scanBarcode, addAlbum, updateStatus } }));
 
 import { useBarcodeScanner } from '../src/hooks/useBarcodeScanner';
 import { BarcodeScanner } from '../src/components/BarcodeScanner';
@@ -159,5 +161,40 @@ describe('barcode lookup requests', () => {
     expect(JSON.stringify(renderer!.toJSON())).toContain('Back Ultra Wide Camera');
     await act(async () => renderer!.root.findByType('select').props.onChange({ target: { value: 'rear-main' } }));
     expect(quagga.init.mock.calls.at(-1)![0].inputStream.constraints.deviceId).toEqual({ exact: 'rear-main' });
+  });
+
+  it('prefers the active shelf and saves one barcode match when both destinations are clicked', async () => {
+    scanBarcode.mockResolvedValue({ artist: 'Portishead', album: 'Dummy', discogsId: 17 });
+    const save = Promise.withResolvers<void>();
+    addAlbum.mockReturnValueOnce(save.promise);
+    await mount(createElement(BarcodeScanner, { ...props, viewMode: 'wishlist' }));
+    await act(async () => quagga.onDetected.mock.calls[0]![0](result));
+
+    const addButtons = renderer!.root.findAllByType('button')
+      .filter(button => button.props['aria-label']?.startsWith('Add Dummy to '));
+    expect(addButtons.map(button => button.props['aria-label'])).toEqual([
+      'Add Dummy to Wishlist', 'Add Dummy to Collection',
+    ]);
+    await act(async () => {
+      addButtons[0].props.onClick();
+      addButtons[1].props.onClick();
+    });
+    expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      barcode: '0602537340436', discogsId: 17, status: 'wishlist',
+    }));
+    await act(async () => save.resolve());
+    expect(props.onSuccess).toHaveBeenCalledOnce();
+  });
+
+  it('moves a wishlisted barcode match without adding a new record', async () => {
+    scanBarcode.mockResolvedValue({
+      artist: 'Portishead', album: 'Dummy', existingStatus: 'wishlist', existingAlbumId: 19,
+    });
+    await mount(createElement(BarcodeScanner, props));
+    await act(async () => quagga.onDetected.mock.calls[0]![0](result));
+
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Move Dummy to Collection' }).props.onClick());
+    expect(updateStatus).toHaveBeenCalledExactlyOnceWith(19, 'collection');
+    expect(addAlbum).not.toHaveBeenCalled();
   });
 });

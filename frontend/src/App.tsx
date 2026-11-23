@@ -7,6 +7,7 @@ import { ImageUploader } from './components/ImageUploader';
 import { DiscogsImporter } from './components/DiscogsImporter';
 import { AlbumDetailModal } from './components/AlbumDetailModal';
 import { SettingsModal } from './components/SettingsModal';
+import { SaveDestinationActions, type DestinationAction } from './components/SaveDestinationActions';
 
 type Shelf = Album['status'];
 type SortBy = 'title' | 'artist' | 'date';
@@ -34,6 +35,8 @@ function catalogKey(album: DiscogsAlbum) {
   // Catalog providers supply different IDs. They are deduplicated by artist and title.
   return JSON.stringify([album.artist.toLowerCase(), album.album.toLowerCase()]);
 }
+
+const savedAlbumKey = (id: number) => `saved:${id}`;
 
 function AlbumCover({ src }: { src?: string }) {
   const [failed, setFailed] = useState(false);
@@ -76,17 +79,18 @@ function App() {
   const [selectedAlbum, setSelectedAlbum] = useState<Album | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [discogsConfigured, setDiscogsConfigured] = useState(false);
-  const [pendingAdds, setPendingAdds] = useState<Record<string, Shelf>>({});
-  const [addErrors, setAddErrors] = useState<Record<string, string>>({});
+  const [pendingSaves, setPendingSaves] = useState<Partial<Record<string, DestinationAction>>>({});
+  const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
   const [artworkRevisions, setArtworkRevisions] = useState<Record<number, number>>({});
   const [sortBy, setSortBy] = useState<SortBy>(() => {
     const saved = localStorage.getItem('albumSortBy');
     return saved === 'artist' || saved === 'date' ? saved : 'title';
   });
-  const inFlightAdds = useRef(new Set<string>());
+  const inFlightSaves = useRef(new Set<string>());
   const searchRequest = useRef<SearchRequest | null>(null);
   const latestQuery = useRef('');
   const searchInput = useRef<HTMLInputElement>(null);
+  const activeShelfButton = useRef<HTMLButtonElement>(null);
 
   const viewMode = shelfRequest.view;
   const currentShelf = shelfResult?.request.view === viewMode &&
@@ -154,14 +158,12 @@ function App() {
   const changeSearch = (value: string) => {
     latestQuery.current = value;
     setSearchQuery(value);
-    setAddErrors({});
+    setSaveErrors({});
     runSearch(value, { delay: 400 });
   };
 
   const showShelf = (view: Shelf) => {
-    if (view === viewMode && !searchQuery) return;
-    changeSearch('');
-    if (view !== viewMode) setShelfRequest({ view, revision: shelfRequest.revision + 1 });
+    setShelfRequest(request => request.view === view ? request : { view, revision: request.revision + 1 });
   };
 
   const refreshLibrary = (updatedArtwork?: Album) => {
@@ -173,13 +175,68 @@ function App() {
     if (latestQuery.current.trim().length >= 2) runSearch(latestQuery.current, { keepResults: true });
   };
 
-  const handleCatalogAdd = async (album: DiscogsAlbum, destination: Shelf) => {
-    const key = catalogKey(album);
-    if (inFlightAdds.current.has(key)) return;
-    inFlightAdds.current.add(key);
-    setPendingAdds(prev => ({ ...prev, [key]: destination }));
-    setAddErrors(prev => ({ ...prev, [key]: '' }));
+  const updateSearchMembership = (albumId: number, status: Shelf, addition?: { key: string; album: Album }) => {
+    setSearchState(current => {
+      if (current.status !== 'ready') return current;
+
+      const { local, discogs } = current.results;
+      let updatedLocal = local.map(album => album.id === albumId ? { ...album, status } : album);
+      if (addition && !local.some(album => album.id === albumId) &&
+          discogs.some(match => catalogKey(match) === addition.key)) {
+        updatedLocal = [...updatedLocal, addition.album];
+      }
+
+      return {
+        status: 'ready',
+        results: {
+          ...current.results,
+          local: updatedLocal,
+          discogs: discogs.map(match =>
+            match.existingAlbumId === albumId || (addition && catalogKey(match) === addition.key)
+              ? {
+                  ...match,
+                  existingAlbumId: albumId,
+                  inCollection: status === 'collection',
+                  inWishlist: status === 'wishlist',
+                }
+              : match),
+        },
+      };
+    });
+  };
+
+  const saveFromSearch = async (key: string, title: string, action: DestinationAction, save: () => Promise<void>) => {
+    if (inFlightSaves.current.has(key)) return;
+    inFlightSaves.current.add(key);
+    setPendingSaves(prev => ({ ...prev, [key]: action }));
+    setSaveErrors(prev => ({ ...prev, [key]: '' }));
     try {
+      await save();
+      toast.success(action === 'move'
+        ? `“${title}” moved to Collection.`
+        : `“${title}” added to ${shelfLabel[action]}.`);
+      refreshShelf();
+      // A search that started before this save can carry the old membership.
+      if (searchRequest.current) runSearch(latestQuery.current, { keepResults: true });
+    } catch (error) {
+      const fallback = action === 'move' ? 'Could not move this album.' : 'Could not add this album.';
+      setSaveErrors(prev => ({
+        ...prev,
+        [key]: error instanceof Error ? error.message : `${fallback} Try again.`,
+      }));
+    } finally {
+      inFlightSaves.current.delete(key);
+      setPendingSaves(prev => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
+  };
+
+  const handleCatalogAdd = (album: DiscogsAlbum, destination: Shelf) => {
+    const key = catalogKey(album);
+    return saveFromSearch(key, album.album, destination, async () => {
       const { album: saved } = await api.addAlbum({
         artist: album.artist,
         album: album.album,
@@ -188,50 +245,26 @@ function App() {
         discogsId: album.discogsId,
         status: destination,
       });
-      setSearchState(current => {
-        if (current.status !== 'ready' || !current.results.discogs.some(match => catalogKey(match) === key)) {
-          return current;
-        }
-        const { local, discogs } = current.results;
-        return {
-          status: 'ready',
-          results: {
-            ...current.results,
-            local: local.some(match => match.id === saved.id) ? local : [...local, saved],
-            discogs: discogs.map(match => catalogKey(match) !== key ? match : {
-              ...match,
-              inCollection: destination === 'collection',
-              inWishlist: destination === 'wishlist',
-            }),
-          },
-        };
-      });
-      toast.success(`“${album.album}” added to ${shelfLabel[destination]}.`);
-      refreshShelf();
-      // A search that started before this save can carry the old membership.
-      if (searchRequest.current) runSearch(latestQuery.current, { keepResults: true });
-    } catch (error) {
-      setAddErrors(prev => ({
-        ...prev,
-        [key]: error instanceof Error ? error.message : 'Could not add this album. Try again.',
-      }));
-    } finally {
-      inFlightAdds.current.delete(key);
-      setPendingAdds(prev => {
-        const next = { ...prev };
-        delete next[key];
-        return next;
-      });
-    }
+      updateSearchMembership(saved.id, saved.status, { key, album: saved });
+    });
   };
 
+  const moveWishlistAlbum = (albumId: number, title: string) =>
+    saveFromSearch(savedAlbumKey(albumId), title, 'move', async () => {
+      await api.updateStatus(albumId, 'collection');
+      updateSearchMembership(albumId, 'collection');
+    });
+
   const handleRemove = async (album: Album) => {
+    const key = savedAlbumKey(album.id);
+    if (inFlightSaves.current.has(key)) return;
     const moveToWishlist = album.status === 'collection';
     const message = moveToWishlist
       ? `Move “${album.title}” from Collection to Wishlist?`
       : `Remove “${album.title}” from Wishlist?`;
     if (!confirm(message)) return;
 
+    inFlightSaves.current.add(key);
     try {
       if (moveToWishlist) await api.updateStatus(album.id, 'wishlist');
       else await api.deleteAlbum(album.id);
@@ -241,11 +274,14 @@ function App() {
       refreshLibrary();
     } catch {
       toast.error(moveToWishlist ? 'Could not move this album.' : 'Could not remove this album.');
+    } finally {
+      inFlightSaves.current.delete(key);
     }
   };
 
   const results = searchState.status === 'ready' ? searchState.results : null;
   const queryLength = searchQuery.trim().length;
+  const searchActive = queryLength >= 2;
   const shelfAlbums = currentShelf?.status === 'ready' ? currentShelf.albums : [];
   const sortedAlbums = [...(results?.local ?? shelfAlbums)].sort((first, second) => {
     if (sortBy === 'artist') return first.artist_name.localeCompare(second.artist_name);
@@ -259,6 +295,7 @@ function App() {
         const revision = artworkRevisions[album.id];
         const src = `${getCoverArtUrl(album.id)}${revision ? `?v=${revision}` : ''}`;
         const quickAction = album.status === 'collection' ? 'Move to Wishlist' : 'Remove from Wishlist';
+        const key = savedAlbumKey(album.id);
         return (
           <article key={album.id} className="rh-album-card relative rounded-xl border border-gray-200">
             <div className="rh-album-cover flex aspect-square items-center justify-center overflow-hidden">
@@ -274,9 +311,19 @@ function App() {
             </div>
             <AlbumMeta title={album.title} artist={album.artist_name} year={album.year} />
             {results && (
-              <span className="mb-3 ml-3 inline-block rounded-md bg-gray-100 px-2 py-1 text-xs text-gray-900">
-                In {shelfLabel[album.status]}
-              </span>
+              <div className="relative z-20 grid gap-1.5 p-2 pt-0">
+                <SaveDestinationActions
+                  albumTitle={album.title}
+                  preferred={viewMode}
+                  existingStatus={album.status}
+                  canMove={album.status === 'wishlist'}
+                  pending={pendingSaves[key]}
+                  onSelect={action => {
+                    if (action === 'move') void moveWishlistAlbum(album.id, album.title);
+                  }}
+                />
+                {saveErrors[key] && <p role="alert" className="px-1 text-xs text-red-600">{saveErrors[key]}</p>}
+              </div>
             )}
             <button
               type="button"
@@ -289,6 +336,7 @@ function App() {
               type="button"
               className="rh-album-quick-action absolute right-1 top-1 z-20 grid size-11 place-items-center rounded-lg border border-gray-300 bg-gray-100 text-gray-900 hover:bg-gray-50"
               aria-label={`${quickAction} — ${album.title}`}
+              aria-disabled={!!pendingSaves[key]}
               title={quickAction}
               onClick={() => void handleRemove(album)}
             >
@@ -342,27 +390,41 @@ function App() {
           </div>
 
           <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-            <div className="rh-view-switcher flex" role="group" aria-label="Library view">
-              {shelves.map(shelf => (
-                <button
-                  key={shelf}
-                  type="button"
-                  className="rh-view-tab text-sm font-medium text-gray-500 transition-colors"
-                  onClick={() => showShelf(shelf)}
-                  aria-pressed={viewMode === shelf}
-                >
-                  {shelfLabel[shelf]}
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center gap-2">
+              {searchActive && <span className="text-sm text-gray-600">Default shelf</span>}
+              <div className="rh-view-switcher flex" role="group" aria-label={searchActive ? 'Default save shelf' : 'Library view'}>
+                {shelves.map(shelf => (
+                  <button
+                    key={shelf}
+                    ref={viewMode === shelf ? activeShelfButton : undefined}
+                    type="button"
+                    className="rh-view-tab text-sm font-medium text-gray-500 transition-colors"
+                    onClick={() => showShelf(shelf)}
+                    aria-pressed={viewMode === shelf}
+                  >
+                    {shelfLabel[shelf]}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2 sm:flex-1">
-              <div className="rh-library-count text-sm" aria-live="polite">
-                {currentShelf?.status === 'ready' && (
+              <div className="rh-library-count text-sm" role="status" aria-atomic="true">
+                {searchActive ? (
+                  <>
+                    {searchState.status === 'pending' && 'Searching your library and catalogs…'}
+                    {searchState.status === 'error' && 'Search results unavailable'}
+                    {results && (
+                      <span>
+                        {results.local.length} saved {results.local.length === 1 ? 'album' : 'albums'} · {results.discogs.length} catalog {results.discogs.length === 1 ? 'match' : 'matches'}
+                      </span>
+                    )}
+                  </>
+                ) : currentShelf?.status === 'ready' && (
                   <span>{shelfAlbums.length} {shelfAlbums.length === 1 ? 'album' : 'albums'} in {shelfLabel[viewMode]}</span>
                 )}
               </div>
               <div className="ml-auto flex items-center gap-2">
-                <label htmlFor="sort-select" className="text-sm text-gray-600">Sort</label>
+                <label htmlFor="sort-select" className="text-sm text-gray-600">{searchActive ? 'Sort saved albums' : 'Sort'}</label>
                 <select
                   id="sort-select"
                   value={sortBy}
@@ -380,47 +442,49 @@ function App() {
       </header>
 
       <main className="rh-main rh-shell mx-auto px-6 py-5 sm:py-6">
-        <div className="rh-command-bar flex flex-col gap-2 sm:flex-row">
+        <div className="rh-command-bar flex flex-col gap-2 sm:flex-row sm:items-end">
           <form
             role="search"
-            className="flex min-w-0 flex-1 gap-2"
+            className="min-w-0 flex-1"
             onSubmit={event => {
               event.preventDefault();
               runSearch(searchQuery);
             }}
           >
-            <div className="rh-search relative min-w-0 flex-1">
-              <label htmlFor="album-search" className="sr-only">Search saved albums and catalogs</label>
-              <input
-                ref={searchInput}
-                id="album-search"
-                type="text"
-                enterKeyHint="search"
-                className={`w-full border px-3 py-2 ${searchQuery ? 'pr-12' : ''}`}
-                placeholder="Album or artist"
-                value={searchQuery}
-                onChange={event => changeSearch(event.target.value)}
-              />
-              {searchQuery && (
-                <button
-                  type="button"
-                  className="absolute right-1 top-1/2 grid size-11 -translate-y-1/2 place-items-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-900"
-                  aria-label="Clear search"
-                  title="Clear search"
-                  onClick={() => {
-                    changeSearch('');
-                    searchInput.current?.focus();
-                  }}
-                >
-                  <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              )}
+            <label htmlFor="album-search" className="mb-1.5 block text-sm text-gray-600">Search saved albums and catalogs</label>
+            <div className="flex gap-2">
+              <div className="rh-search relative min-w-0 flex-1">
+                <input
+                  ref={searchInput}
+                  id="album-search"
+                  type="text"
+                  enterKeyHint="search"
+                  className={`w-full border px-3 py-2 ${searchQuery ? 'pr-12' : ''}`}
+                  placeholder="Album or artist"
+                  value={searchQuery}
+                  onChange={event => changeSearch(event.target.value)}
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    className="absolute right-1 top-1/2 grid size-11 -translate-y-1/2 place-items-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-900"
+                    aria-label="Clear search"
+                    title="Clear search"
+                    onClick={() => {
+                      changeSearch('');
+                      searchInput.current?.focus();
+                    }}
+                  >
+                    <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+              <button type="submit" className={`${secondaryButton} disabled:opacity-60`} disabled={!searchActive}>
+                Search
+              </button>
             </div>
-            <button type="submit" className={`${secondaryButton} disabled:opacity-60`} disabled={queryLength < 2}>
-              Search
-            </button>
           </form>
           <button
             type="button"
@@ -437,14 +501,21 @@ function App() {
 
         <div role="status" className="text-sm text-gray-600" aria-atomic="true">
           {queryLength === 1 && <p className="mb-4">Enter at least two characters to search.</p>}
-          {searchState.status === 'pending' && <p className="py-8">Searching your library and catalogs…</p>}
-          {results && (results.local.length || results.discogs.length) ? (
-            <p className="mb-4">
-              {results.local.length} saved {results.local.length === 1 ? 'album' : 'albums'} · {results.discogs.length} catalog {results.discogs.length === 1 ? 'match' : 'matches'}
-            </p>
-          ) : null}
-          {queryLength < 2 && !currentShelf && <p className="py-8">Loading {shelfLabel[viewMode]}…</p>}
+          {!searchActive && !currentShelf && <p className="py-8">Loading {shelfLabel[viewMode]}…</p>}
         </div>
+
+        {searchActive && (
+          <button
+            type="button"
+            className="mb-4 min-h-11 rounded-lg px-2 text-sm font-medium text-purple-600 hover:bg-gray-100"
+            onClick={() => {
+              changeSearch('');
+              activeShelfButton.current?.focus();
+            }}
+          >
+            Back to {shelfLabel[viewMode]}
+          </button>
+        )}
 
         {searchState.status === 'error' && (
           <div className="flex flex-wrap items-center gap-3 py-5">
@@ -479,8 +550,9 @@ function App() {
                 <div className={albumGrid}>
                   {results.discogs.map(album => {
                     const key = catalogKey(album);
-                    const savedShelf = album.inCollection ? 'collection' : album.inWishlist ? 'wishlist' : null;
-                    const pending = pendingAdds[key];
+                    const savedShelf = album.inCollection ? 'collection' : album.inWishlist ? 'wishlist' : undefined;
+                    const albumId = album.existingAlbumId;
+                    const saveKey = albumId == null ? key : savedAlbumKey(albumId);
                     return (
                       <article key={key} className="rh-album-card flex flex-col rounded-xl border border-gray-200">
                         <div className="rh-album-cover flex aspect-square items-center justify-center overflow-hidden">
@@ -488,32 +560,22 @@ function App() {
                         </div>
                         <AlbumMeta title={album.album} artist={album.artist} year={album.year} />
                         <div className="mt-auto grid gap-1.5 p-2 pt-0">
-                          {shelves.map(destination => {
-                            if (savedShelf && savedShelf !== destination) return null;
-                            const label = shelfLabel[destination];
-                            return (
-                              <button
-                                key={destination}
-                                type="button"
-                                aria-disabled={!!pending || !!savedShelf}
-                                aria-busy={pending === destination}
-                                tabIndex={savedShelf ? -1 : undefined}
-                                aria-label={savedShelf ? `${album.album} is in ${label}` : `Add ${album.album} to ${label}`}
-                                className={`min-h-11 rounded-lg border px-1 text-xs font-semibold transition-colors ${savedShelf
-                                  ? 'border-gray-300 text-gray-600'
-                                  : destination === viewMode
-                                    ? 'border-transparent bg-purple-600 text-[var(--rh-ink-inverse)] hover:bg-purple-700'
-                                    : 'border-gray-300 bg-gray-100 text-gray-900 hover:bg-gray-50'}`}
-                                onClick={() => {
-                                  if (!savedShelf) void handleCatalogAdd(album, destination);
-                                }}
-                              >
-                                {savedShelf ? `In ${label}` : pending === destination ? 'Adding…' : `Add to ${label}`}
-                              </button>
-                            );
-                          })}
-                          {addErrors[key] && (
-                            <p role="alert" className="px-1 text-xs text-red-600">{addErrors[key]}</p>
+                          <SaveDestinationActions
+                            albumTitle={album.album}
+                            preferred={viewMode}
+                            existingStatus={savedShelf}
+                            canMove={savedShelf === 'wishlist' && albumId != null}
+                            pending={pendingSaves[saveKey]}
+                            onSelect={action => {
+                              if (action === 'move') {
+                                if (albumId != null) void moveWishlistAlbum(albumId, album.album);
+                              } else {
+                                void handleCatalogAdd(album, action);
+                              }
+                            }}
+                          />
+                          {saveErrors[saveKey] && (
+                            <p role="alert" className="px-1 text-xs text-red-600">{saveErrors[saveKey]}</p>
                           )}
                         </div>
                       </article>
@@ -525,13 +587,13 @@ function App() {
           </div>
         )}
 
-        {queryLength < 2 && currentShelf?.status === 'error' && (
+        {!searchActive && currentShelf?.status === 'error' && (
           <div className="flex flex-wrap items-center gap-3 py-5">
             <p role="alert" className="text-sm">Couldn’t load {shelfLabel[viewMode]}.</p>
             <button type="button" className={secondaryButton} onClick={refreshShelf}>Retry</button>
           </div>
         )}
-        {queryLength < 2 && currentShelf?.status === 'ready' && (
+        {!searchActive && currentShelf?.status === 'ready' && (
           sortedAlbums.length ? renderSavedAlbums() : (
             <div className="py-10 text-center">
               <h2 className="text-lg font-semibold">Your {shelfLabel[viewMode].toLowerCase()} is empty</h2>

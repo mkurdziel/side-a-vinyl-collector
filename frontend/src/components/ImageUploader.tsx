@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { toast } from 'react-hot-toast';
 import api, { type DiscogsAlbum } from '../services/api';
 import { ModalDialog } from './ModalDialog';
+import { SaveDestinationActions, type DestinationAction } from './SaveDestinationActions';
 
 interface ImageUploaderProps {
   onClose: () => void;
@@ -15,9 +16,9 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
   const [imagePreview, setImagePreview] = useState<string>('');
   const [confidence, setConfidence] = useState<number>(0);
   const [extractedInfo, setExtractedInfo] = useState<{ artist?: string; album?: string; year?: number; provider?: string; usedFallback?: boolean } | null>(null);
-  const [savingId, setSavingId] = useState<number | null>(null);
+  const [saving, setSaving] = useState<{ id: number; action: DestinationAction }>();
+  const saveInProgress = useRef(false);
   const [analysisError, setAnalysisError] = useState('');
-  const destination = viewMode === 'collection' ? 'Collection' : 'Wishlist';
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -82,31 +83,36 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
     reader.readAsDataURL(file);
   };
 
-  const handleSelectMatch = async (match: DiscogsAlbum) => {
-    if (match.inCollection || (match.inWishlist && !match.existingAlbumId) || savingId !== null) return;
+  const saveMatch = async (match: DiscogsAlbum, action: DestinationAction) => {
+    if (match.inCollection || saveInProgress.current) return;
+    const moveId = action === 'move' && match.inWishlist ? match.existingAlbumId : undefined;
+    const adding = action !== 'move' && !match.inWishlist;
+    if (!moveId && !adding) return;
 
-    setSavingId(match.discogsId);
+    saveInProgress.current = true;
+    setSaving({ id: match.discogsId, action });
     try {
-      if (match.inWishlist && match.existingAlbumId) {
-        await api.updateStatus(match.existingAlbumId, 'collection');
-        toast.success(`Moved “${match.album}” to Collection`);
-      } else {
+      if (moveId) {
+        await api.updateStatus(moveId, 'collection');
+        toast.success(`Moved “${match.album}” to Collection.`);
+      } else if (adding) {
         await api.addAlbum({
           artist: match.artist,
           album: match.album,
           year: match.year,
           coverImageUrl: match.coverImageUrl,
           discogsId: match.discogsId,
-          status: viewMode,
+          status: action,
         });
-        toast.success(`Added “${match.album}” to ${destination}`);
+        toast.success(`Added “${match.album}” to ${action === 'collection' ? 'Collection' : 'Wishlist'}.`);
       }
       onSuccess();
       onClose();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not save the album. Try again.');
     } finally {
-      setSavingId(null);
+      saveInProgress.current = false;
+      setSaving(undefined);
     }
   };
 
@@ -178,7 +184,7 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
                     setConfidence(0);
                     setAnalysisError('');
                   }}
-                  disabled={savingId !== null}
+                  disabled={!!saving}
                   className="rh-dialog-close absolute top-4 right-4 bg-white/95 hover:text-red-600"
                   title="Remove image"
                   aria-label="Remove image"
@@ -261,8 +267,7 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
             <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Select the correct album:</h4>
             <div className="space-y-3">
               {matches.map(match => {
-                const canSave = !match.inCollection && (!match.inWishlist || match.existingAlbumId);
-                const action = match.inWishlist ? 'Move to Collection' : `Add to ${destination}`;
+                const existingStatus = match.inCollection ? 'collection' : match.inWishlist ? 'wishlist' : undefined;
 
                 return (
                   <article key={match.discogsId} className="rounded-xl border border-gray-300 p-3">
@@ -280,20 +285,16 @@ export const ImageUploader = ({ onClose, onSuccess, viewMode }: ImageUploaderPro
                         )}
                       </div>
                     </div>
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      {match.inCollection && <span className="text-sm text-green-700">In Collection</span>}
-                      {match.inWishlist && <span className="text-sm text-purple-700">In Wishlist</span>}
-                      {canSave && (
-                        <button
-                          type="button"
-                          className="rh-filled-action rounded-lg bg-purple-600 px-3 text-sm font-semibold hover:bg-purple-700 disabled:opacity-60"
-                          onClick={() => void handleSelectMatch(match)}
-                          disabled={savingId !== null}
-                          aria-label={`${action}: ${match.album}`}
-                        >
-                          {savingId === match.discogsId ? 'Saving…' : action}
-                        </button>
-                      )}
+                    <div className="mt-3">
+                      <SaveDestinationActions
+                        albumTitle={match.album}
+                        preferred={viewMode}
+                        existingStatus={existingStatus}
+                        canMove={Boolean(match.existingAlbumId)}
+                        pending={saving?.id === match.discogsId ? saving.action : undefined}
+                        disabled={!!saving}
+                        onSelect={action => void saveMatch(match, action)}
+                      />
                     </div>
                   </article>
                 );

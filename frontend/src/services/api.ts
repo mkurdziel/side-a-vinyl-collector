@@ -43,7 +43,7 @@ export interface DiscogsAlbum {
   discogsId: number;
   inCollection?: boolean;
   inWishlist?: boolean;
-  existingAlbumId?: number;
+  existingAlbumId?: number | null;
   fromProvider?: string;
   confidence?: number;
 }
