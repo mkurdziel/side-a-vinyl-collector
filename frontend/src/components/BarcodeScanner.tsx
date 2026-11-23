@@ -3,6 +3,7 @@ import { toast } from 'react-hot-toast';
 import api from '../services/api';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 import { ModalDialog } from './ModalDialog';
+import { SaveDestinationActions, type DestinationAction } from './SaveDestinationActions';
 
 type BarcodeMatch = Awaited<ReturnType<typeof api.scanBarcode>> & { barcode: string };
 
@@ -12,11 +13,12 @@ interface BarcodeScannerProps {
   viewMode: 'collection' | 'wishlist';
 }
 
-export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
+export const BarcodeScanner = ({ onClose, onSuccess, viewMode }: BarcodeScannerProps) => {
   const [scanning, setScanning] = useState(true);
   const lookupInProgress = useRef(false);
   const [scannedResult, setScannedResult] = useState<BarcodeMatch | null>(null);
-  const [saving, setSaving] = useState<'collection' | 'wishlist' | 'move' | null>(null);
+  const [saving, setSaving] = useState<DestinationAction>();
+  const saveInProgress = useRef(false);
   const [lookupError, setLookupError] = useState('');
   const [manualBarcode, setManualBarcode] = useState('');
 
@@ -37,44 +39,38 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
     }
   };
 
-  const handleAddToCollection = async (status: 'collection' | 'wishlist') => {
-    if (!scannedResult || saving) return;
+  const saveMatch = async (action: DestinationAction) => {
+    if (!scannedResult || saveInProgress.current) return;
+    const { existingStatus, existingAlbumId } = scannedResult;
+    const moveId = action === 'move' && existingStatus === 'wishlist' ? existingAlbumId : undefined;
+    const adding = action !== 'move' && !existingStatus;
+    if (!moveId && !adding) return;
 
-    setSaving(status);
+    saveInProgress.current = true;
+    setSaving(action);
     try {
-      await api.addAlbum({
-        artist: scannedResult.artist,
-        album: scannedResult.album,
-        year: scannedResult.year,
-        coverImageUrl: scannedResult.coverImageUrl,
-        discogsId: scannedResult.discogsId,
-        barcode: scannedResult.barcode,
-        status,
-      });
-
-      toast.success(`Added "${scannedResult.album}" by ${scannedResult.artist} to ${status}`);
+      if (moveId) {
+        await api.updateStatus(moveId, 'collection');
+        toast.success(`Moved “${scannedResult.album}” to Collection.`);
+      } else if (adding) {
+        await api.addAlbum({
+          artist: scannedResult.artist,
+          album: scannedResult.album,
+          year: scannedResult.year,
+          coverImageUrl: scannedResult.coverImageUrl,
+          discogsId: scannedResult.discogsId,
+          barcode: scannedResult.barcode,
+          status: action,
+        });
+        toast.success(`Added “${scannedResult.album}” to ${action === 'collection' ? 'Collection' : 'Wishlist'}.`);
+      }
       onSuccess();
       onClose();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not add the album. Try again.');
+      toast.error(error instanceof Error ? error.message : 'Could not save the album. Try again.');
     } finally {
-      setSaving(null);
-    }
-  };
-
-  const handleTransferToCollection = async () => {
-    if (!scannedResult?.existingAlbumId || saving) return;
-
-    setSaving('move');
-    try {
-      await api.updateStatus(scannedResult.existingAlbumId, 'collection');
-      toast.success(`Moved “${scannedResult.album}” to Collection`);
-      onSuccess();
-      onClose();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not move the album. Try again.');
-    } finally {
-      setSaving(null);
+      saveInProgress.current = false;
+      setSaving(undefined);
     }
   };
 
@@ -212,93 +208,21 @@ export const BarcodeScanner = ({ onClose, onSuccess }: BarcodeScannerProps) => {
                 <p className="text-sm text-gray-600">{scannedResult.artist}</p>
                 {scannedResult.year && <p className="text-sm text-gray-500">{scannedResult.year}</p>}
                 <p className="text-xs text-gray-400 mt-1">Barcode: {scannedResult.barcode}</p>
-                {/* Status badge for existing albums */}
-                {scannedResult.existingStatus && (
-                  <div className={`inline-flex items-center gap-1 mt-2 px-2.5 py-1 rounded-full text-xs font-semibold ${
-                    scannedResult.existingStatus === 'collection'
-                      ? 'bg-green-100 text-green-700'
-                      : 'bg-purple-100 text-purple-700'
-                  }`}>
-                    {scannedResult.existingStatus === 'collection' ? (
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
-                    ) : (
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                      </svg>
-                    )}
-                    {scannedResult.existingStatus === 'collection' ? 'In Collection' : 'In Wishlist'}
-                  </div>
-                )}
               </div>
             </div>
-            
-            <div className="flex flex-col gap-2">
-              {/* If album is in the wishlist, show prominent transfer button */}
-              {scannedResult.existingStatus === 'wishlist' && scannedResult.existingAlbumId && (
-                <button
-                  onClick={handleTransferToCollection}
-                  disabled={saving !== null}
-                  className="rh-filled-action w-full px-4 py-3 bg-purple-600 hover:bg-purple-700 rounded-xl font-bold transition-colors flex items-center justify-center gap-3 disabled:opacity-60 group"
-                >
-                  {saving === 'move' ? (
-                    <>
-                      <span className="rh-action-spinner" aria-hidden="true" />
-                      Moving…
-                    </>
-                  ) : (
-                    <>
-                      {/* Arrow up from wishlist to collection icon */}
-                      <div className="flex items-center gap-1.5">
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                        </svg>
-                        <svg className="w-5 h-5 group-hover:translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                        </svg>
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                        </svg>
-                      </div>
-                      <span>Move to Collection</span>
-                    </>
-                  )}
-                </button>
-              )}
-
-              {/* If album is already in collection, show info badge */}
-              {scannedResult.existingStatus === 'collection' && (
-                <div className="w-full px-4 py-3 bg-green-50 border-2 border-green-200 text-green-700 rounded-xl font-medium flex items-center justify-center gap-2">
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                  Already in your Collection
-                </div>
-              )}
-
-              {/* Standard add buttons - only show if album doesn't already exist */}
-              {!scannedResult.existingStatus && (
-                <>
-                  <button
-                    onClick={() => handleAddToCollection('collection')}
-                    disabled={saving !== null}
-                    className="rh-filled-action w-full px-4 py-2.5 bg-purple-600 hover:bg-purple-700 rounded-lg font-medium transition-colors disabled:opacity-60"
-                  >
-                    {saving === 'collection' ? 'Adding to Collection…' : 'Add to Collection'}
-                  </button>
-                  <button
-                    onClick={() => handleAddToCollection('wishlist')}
-                    disabled={saving !== null}
-                    className="w-full px-4 py-2.5 text-purple-600 bg-purple-50 border border-purple-200 hover:bg-purple-100 rounded-lg font-medium transition-colors disabled:opacity-60"
-                  >
-                    {saving === 'wishlist' ? 'Adding to Wishlist…' : 'Add to Wishlist'}
-                  </button>
-                </>
-              )}
+            <div className="grid gap-2">
+              <SaveDestinationActions
+                albumTitle={scannedResult.album}
+                preferred={viewMode}
+                existingStatus={scannedResult.existingStatus ?? undefined}
+                canMove={Boolean(scannedResult.existingAlbumId)}
+                pending={saving}
+                onSelect={action => void saveMatch(action)}
+              />
               <button
+                type="button"
                 onClick={handleScanAnother}
-                disabled={saving !== null}
+                disabled={!!saving}
                 className="w-full px-4 py-2.5 border border-gray-300 hover:bg-gray-100 rounded-lg font-medium transition-colors disabled:opacity-60"
               >
                 Scan Another
