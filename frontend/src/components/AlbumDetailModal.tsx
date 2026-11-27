@@ -138,19 +138,19 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, shelfActions, back
               <dd className="text-sm text-gray-600">{formatDate(currentAlbum.added_at)}</dd>
             </div>
             <div>
-              <dt className="text-sm font-medium text-gray-700">Artwork</dt>
+              <dt className="text-sm font-medium text-gray-700">Cover image source</dt>
               <dd className="text-sm text-gray-600">{artworkSource}</dd>
             </div>
             <div>
-              <dt className="text-sm font-medium text-gray-700">Catalog source</dt>
+              <dt className="text-sm font-medium text-gray-700">Saved pressing</dt>
               <dd className="text-sm text-gray-600">
+                {source?.kind !== 'pressing' && <p>Pressing unconfirmed</p>}
                 {source?.url ? (
                   <a className="rh-comparison-source" href={source.url} target="_blank" rel="noreferrer">
                     {source.kind === 'pressing' ? `Discogs release ${currentAlbum.discogs_id}` : `${source.label} · ${source.type}`}
                     <span className="sr-only"> · {savedCopyLabel(currentAlbum)} (opens in a new tab)</span>
                   </a>
-                ) : source?.type ?? 'Unavailable'}
-                {source?.kind !== 'pressing' && <p>Pressing unconfirmed</p>}
+                ) : null}
               </dd>
             </div>
             {currentAlbum.notes && (

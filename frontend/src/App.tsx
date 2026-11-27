@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Toaster, toast } from 'react-hot-toast';
 import api, { type Album, type DiscogsAlbum, type SearchResult, getCoverArtUrl, isExactSavedMatch } from './services/api';
-import { applyLookupShelfEdits, catalogRecordLabel, catalogSaveReference, catalogSource, savedCopyLabel, type LookupShelfEdits } from './albumDisplay';
+import { applyLookupShelfEdits, catalogRecordLabel, catalogSaveReference, catalogSource, listingEvidence, savedCopyLabel, type LookupShelfEdits } from './albumDisplay';
 import type { OpenSavedAlbum, SavedAlbumOutcome } from './components/PressingComparison';
 import { AddMenu } from './components/AddMenu';
 import { BarcodeScanner } from './components/BarcodeScanner';
@@ -30,6 +30,7 @@ type ShelfMove = { albumId: number; title: string; from: Shelf; to: Shelf };
 type SaveIssue = { message: string; albumId?: number; stale?: boolean };
 
 const shelves: Shelf[] = ['collection', 'wishlist'];
+const resultKinds: ResultKind[] = ['saved', 'catalog'];
 const sortLabels: Record<SortBy, string> = { title: 'Album title', artist: 'Artist name', date: 'Date added' };
 const shelfLabel: Record<Shelf, string> = { collection: 'Collection', wishlist: 'Wishlist' };
 const albumGrid = 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4';
@@ -85,12 +86,12 @@ function AlbumCover({ src }: { src?: string }) {
   );
 }
 
-function AlbumMeta({ title, artist, year }: { title: string; artist: string; year?: number }) {
+function AlbumMeta({ title, artist, year, shelf }: { title: string; artist: string; year?: number; shelf?: Shelf }) {
   return (
     <div className="rh-album-meta p-3">
-      <h3 className="line-clamp-2 text-sm text-gray-900" title={title}>{title}</h3>
-      <p className="mt-0.5 truncate text-xs" title={artist}>{artist}</p>
-      {year ? <p className="rh-album-year text-xs">{year}</p> : null}
+      <h3 className={`${shelf ? '' : 'line-clamp-2'} text-sm text-gray-900`} title={title}>{title}</h3>
+      <p className={`mt-0.5 ${shelf ? '' : 'truncate'} text-xs`} title={artist}>{artist}</p>
+      {(year || shelf) && <p className="rh-album-year text-xs">{[year, shelf && shelfLabel[shelf]].filter(Boolean).join(' · ')}</p>}
     </div>
   );
 }
@@ -128,10 +129,9 @@ function SaveIssueNotice({ issue, issueKey, loadingAlbumId, onOpen }: {
   );
 }
 
-function ShelfActions({ album, detailed = false, showShelf, pending, issue, loadingAlbumId, onMove, onRemove, onOpenIssue }: {
+function ShelfActions({ album, detailed = false, pending, issue, loadingAlbumId, onMove, onRemove, onOpenIssue }: {
   album: Album;
   detailed?: boolean;
-  showShelf?: boolean;
   pending?: SaveAction;
   issue?: SaveIssue;
   loadingAlbumId?: number;
@@ -160,7 +160,6 @@ function ShelfActions({ album, detailed = false, showShelf, pending, issue, load
     <div className="grid gap-1.5">
       {detailed ? <>{move}{remove}</> : (
         <>
-          {showShelf && <p className="px-1 text-xs text-gray-600" aria-label={`${album.title} is in ${shelfLabel[album.status]}`}>{shelfLabel[album.status]}</p>}
           {inWishlist && move}
           <details className="min-w-0">
             <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-1 rounded-lg px-1 text-xs font-semibold text-gray-600 hover:bg-gray-100"
@@ -225,6 +224,8 @@ function App() {
   const searchSettings = useRef<{ scope: SearchScope; shelf: Shelf }>({ scope: 'saved', shelf: 'collection' });
   const searchSort = useRef(sortBy);
   const searchInput = useRef<HTMLInputElement>(null);
+  const catalogHeading = useRef<HTMLHeadingElement>(null);
+  const savedHeading = useRef<HTMLHeadingElement>(null);
   const activeShelfButton = useRef<HTMLButtonElement>(null);
   const undoButton = useRef<HTMLButtonElement>(null);
 
@@ -267,20 +268,35 @@ function App() {
     for (const request of Object.values(pageRequests.current)) request.abort();
   }, []);
 
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if (event.code !== 'KeyF' || !event.altKey || !event.shiftKey || event.ctrlKey || event.metaKey || event.defaultPrevented) return;
+      const source = event.target;
+      if (source instanceof Element && source.closest('input, textarea, select, [contenteditable], dialog')) return;
+      if (!searchInput.current || document.querySelector('dialog[open]')) return;
+      event.preventDefault();
+      searchInput.current.focus();
+    };
+    window.addEventListener?.('keydown', shortcut);
+    return () => window.removeEventListener?.('keydown', shortcut);
+  }, []);
+
   const refreshShelf = () => setShelfRequest(request => ({ ...request, revision: request.revision + 1 }));
 
-  const runSearch = (value: string, { delay = 0, keepResults = false, savedOnly = false } = {}) => {
+  const runSearch = (value: string, { delay = 0, keepResults = false, only, retryFrom }: {
+    delay?: number; keepResults?: boolean; only?: ResultKind; retryFrom?: HTMLButtonElement;
+  } = {}) => {
     const query = value.trim();
     const { scope, shelf } = searchSettings.current;
     const sort = searchSort.current;
-    const kinds: ResultKind[] = savedOnly && query.length >= 2 ? ['saved'] : ['saved', 'catalog'];
+    const kinds = only && query.length >= 2 ? [only] : resultKinds;
     for (const kind of kinds) {
       cancelSearch(searchRequests.current[kind]);
       delete searchRequests.current[kind];
       pageRequests.current[kind]?.abort();
       delete pageRequests.current[kind];
     }
-    setLoadingMore(current => savedOnly ? { ...current, saved: undefined } : {});
+    setLoadingMore(current => only && query.length >= 2 ? { ...current, [only]: undefined } : {});
     if (query.length < 2) {
       setSearchState({ status: 'idle' });
       setCatalogState({ status: 'idle' });
@@ -306,7 +322,13 @@ function App() {
       const fetchResults = async () => {
         try {
           const results = await api.search(query, request.controller.signal, kind, scope === 'shelf' ? shelf : undefined, 0, sort);
-          if (!request.controller.signal.aborted) setResult({ status: 'ready', results });
+          if (request.controller.signal.aborted) return;
+          if (!results.errors?.length && retryFrom && retryFrom.ownerDocument.activeElement === retryFrom) {
+            const heading = kind === 'catalog' ? catalogHeading : savedHeading;
+            // The retry button is about to disappear. Use a stable destination only if it still has focus.
+            (heading.current ?? searchInput.current)?.focus({ preventScroll: true });
+          }
+          setResult({ status: 'ready', results });
         } catch {
           if (!request.controller.signal.aborted) setResult({ status: 'error' });
         } finally {
@@ -543,9 +565,9 @@ function App() {
     return moveRecord({ ...lastShelfMove, from: lastShelfMove.to, to: lastShelfMove.from }, lastShelfMove);
   };
 
-  const openCatalogManualEntry = () => setManualEntry({
-    draft: draftForSearch(searchQuery, detectedDraft),
-    shelf: saveShelf,
+  const openManualEntry = () => setManualEntry({
+    draft: searchActive ? draftForSearch(searchQuery, detectedDraft) : {},
+    shelf: searchActive && searchScope === 'catalog' ? saveShelf : viewMode,
   });
 
   const showAlbumDetails = (album: Album, opener?: HTMLButtonElement, backToMatches = false) => {
@@ -689,13 +711,14 @@ function App() {
   const catalogCount = catalogResults?.discogs.length ?? 0;
   const queryLength = searchQuery.trim().length;
   const searchActive = queryLength >= 2;
+  const catalogUnavailable = catalogState.status === 'error' || !!catalogResults?.errors?.length;
   const shelfAlbums = currentShelf?.status === 'ready' ? currentShelf.albums : [];
   const sortedAlbums = results?.local ?? sortAlbums(shelfAlbums, sortBy);
 
   const changeSort = (next: SortBy) => {
     searchSort.current = next;
     setSortBy(next);
-    if (searchActive) runSearch(latestQuery.current, { keepResults: true, savedOnly: true });
+    if (searchActive) runSearch(latestQuery.current, { keepResults: true, only: 'saved' });
   };
 
   const startRemoval = (album: Album) => {
@@ -708,15 +731,15 @@ function App() {
   const openSaveIssue = (id: number, key: string) => void openSavedAlbum(id, { issueKey: key });
 
   const savedGrid = (savedCount > 0 || (!searchActive && currentShelf?.status === 'ready')) && (
-    <div className={albumGrid}>
+    <div className={searchActive ? 'rh-saved-results' : albumGrid}>
       {sortedAlbums.map(album => {
         const revision = artworkRevisions[album.id] ?? album.local_cover_path ?? libraryArtworkRevision;
         const src = `${getCoverArtUrl(album.id)}${revision ? `?v=${encodeURIComponent(revision)}` : ''}`;
         const key = savedAlbumKey(album.id);
         const pending = pendingSaves[key];
         return (
-          <article key={album.id} className="rh-album-card relative flex flex-col rounded-xl border border-gray-200">
-            <div className="rh-album-cover flex aspect-square items-center justify-center overflow-hidden">
+          <article key={album.id} className={searchActive ? 'rh-saved-result' : 'rh-album-card relative flex flex-col rounded-xl border border-gray-200'}>
+            <div className="rh-album-cover relative flex aspect-square items-center justify-center overflow-hidden">
               <AlbumCover key={src} src={src} />
               {!album.cover_art_fetched && (
                 <span className="absolute left-2 top-2 z-10 rounded-full bg-yellow-400 p-1 text-yellow-900" title="Unverified artwork">
@@ -727,20 +750,20 @@ function App() {
                 </span>
               )}
             </div>
-            <AlbumMeta title={album.title} artist={album.artist_name} year={album.year} />
+            <AlbumMeta title={album.title} artist={album.artist_name} year={album.year} shelf={searchActive ? album.status : undefined} />
             <button
               type="button"
-              className="absolute inset-0 z-10 cursor-pointer rounded-[inherit]"
+              className={searchActive ? 'rh-lookup-link rh-saved-open' : 'absolute inset-0 z-10 cursor-pointer rounded-[inherit]'}
               aria-label={`Open ${savedCopyLabel(album)}`}
               aria-haspopup="dialog"
               aria-disabled={!!pending}
               onClick={event => {
                 if (!pending) showAlbumDetails(album, event.currentTarget);
               }}
-            />
-            <div className="relative z-20 mt-auto grid gap-1.5 p-2 pt-0">
+            >{searchActive && 'Open album'}</button>
+            <div className={searchActive ? 'rh-saved-actions' : 'relative z-20 mt-auto grid gap-1.5 p-2 pt-0'}>
               <ShelfActions album={album} pending={pending} issue={saveErrors[key]}
-                showShelf={searchActive} loadingAlbumId={loadingAlbumId}
+                loadingAlbumId={loadingAlbumId}
                 onMove={moveAlbum} onRemove={startRemoval} onOpenIssue={openSaveIssue} />
             </div>
           </article>
@@ -808,9 +831,8 @@ function App() {
             </button>
           </div>
 
-          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
+          {!searchActive && <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
             <div className="rh-shelf-controls flex items-center gap-2">
-              {searchActive && <span className="text-xs font-medium text-gray-600">Browse</span>}
               <div className="rh-view-switcher flex" role="group" aria-label="Browse shelf">
                 {shelves.map(shelf => (
                   <button
@@ -826,36 +848,15 @@ function App() {
                 ))}
               </div>
             </div>
-            {searchActive && <p className="text-xs text-gray-600">
-              {searchScope === 'shelf' ? `Searching ${shelfLabel[viewMode]}`
-                : searchScope === 'catalog' ? 'Searching both shelves and catalogs' : 'Searching both shelves'}
-            </p>}
             <div className="flex flex-wrap items-center justify-between gap-2 sm:flex-1">
-              <div className="rh-library-count text-sm" role={searchActive && results ? undefined : "status"} aria-atomic="true">
-                {searchActive ? (
-                  <>
-                    {searchState.status === 'pending' && 'Searching saved albums…'}
-                    {searchState.status === 'error' && 'Saved search unavailable'}
-                    {results && !savedLoading && <span>{savedCount}{results.nextOffset !== undefined ? '+' : ''} saved {savedCount === 1 ? 'match' : 'matches'}</span>}
-                  </>
-                ) : currentShelf?.status === 'ready' && (
+              <div className="rh-library-count text-sm" role="status" aria-atomic="true">
+                {currentShelf?.status === 'ready' && (
                   <span>{shelfAlbums.length} {shelfAlbums.length === 1 ? 'album' : 'albums'} in {shelfLabel[viewMode]}</span>
                 )}
               </div>
-              {searchActive ? (
-                <button
-                  type="button"
-                  className="min-h-11 shrink-0 rounded-lg px-1 text-sm font-medium text-purple-600 hover:bg-gray-100"
-                  onClick={() => {
-                    changeSearch('');
-                    activeShelfButton.current?.focus();
-                  }}
-                >
-                  Back to {shelfLabel[viewMode]}
-                </button>
-              ) : <SortControl sort={sortBy} onChange={changeSort} />}
+              <SortControl sort={sortBy} onChange={changeSort} />
             </div>
-          </div>
+          </div>}
         </div>
       </header>
 
@@ -870,15 +871,15 @@ function App() {
             }}
           >
             <div className="rh-search-scope flex flex-wrap items-center gap-2">
-              <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">Search scope</label>
+              <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">Search in</label>
               <select
                 id="search-scope"
                 value={searchScope}
                 onChange={event => changeScope(event.target.value as SearchScope)}
                 className="max-w-full rounded-lg border border-gray-300 px-2 text-sm"
               >
-                <option value="saved">All saved albums</option>
-                <option value="shelf">This shelf · {shelfLabel[viewMode]}</option>
+                <option value="saved">Collection and Wishlist</option>
+                <option value="shelf">{shelfLabel[viewMode]} only</option>
                 <option value="catalog">Saved albums and catalogs</option>
               </select>
             </div>
@@ -890,6 +891,7 @@ function App() {
                   id="album-search"
                   type="text"
                   enterKeyHint="search"
+                  aria-keyshortcuts="Alt+Shift+F"
                   className={`w-full border px-2 py-2 sm:px-3 ${searchQuery ? 'pr-11 sm:pr-12' : ''}`}
                   placeholder="Album or artist"
                   value={searchQuery}
@@ -981,62 +983,64 @@ function App() {
         </div>
 
         {searchActive && (
-          <nav className="rh-result-nav" aria-label="Search shortcuts">
-            <button type="button" onClick={focusSearch}>Back to search</button>
-            {!!savedCount && <a href="#saved-results-title">Saved matches</a>}
-            {searchScope === 'catalog' && <a href="#catalog-results-title">Catalogs</a>}
-          </nav>
-        )}
-
-        {searchState.status === 'error' && (
-          <div className="flex flex-wrap items-center gap-3 py-5">
-            <p role="alert" className="text-sm">Saved album search couldn’t finish.</p>
-            <button type="button" className={secondaryButton} onClick={() => {
-              focusSearch();
-              runSearch(searchQuery, { keepResults: true });
-            }}>Retry saved search</button>
+          <div className="rh-result-tools">
+            <nav className="rh-result-nav" aria-label="Search results">
+              <button type="button" onClick={() => {
+                changeSearch('');
+                window.requestAnimationFrame(() => activeShelfButton.current?.focus());
+              }}>Back to {shelfLabel[viewMode]}</button>
+              {searchScope === 'catalog' && <a href="#saved-results-title">Saved</a>}
+              {searchScope === 'catalog' && <a href="#catalog-results-title">Catalogs</a>}
+            </nav>
+            <details className="rh-search-tips">
+              <summary>Search tips</summary>
+              <div>
+                <p>Use the album title and artist together to narrow a search. Catalogs can find records that aren’t on either shelf.</p>
+                <p>Use the catalog number on the sleeve or label to identify a particular pressing.</p>
+                <p className="rh-keyboard-tip">Focus search with <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd>.</p>
+              </div>
+            </details>
           </div>
         )}
 
-        {results && (
-          savedCount ? (
-            <section className="mb-8" aria-labelledby="saved-results-title">
+        {searchActive && (
+            <section className="mb-6" aria-labelledby="saved-results-title">
               <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-                <h2 id="saved-results-title" tabIndex={-1} className="rh-result-heading text-lg font-semibold">Saved albums</h2>
-                {searchScope !== 'catalog' && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search catalogs too</button>}
-                <SortControl sort={sortBy} onChange={changeSort} />
+                <h2 ref={savedHeading} id="saved-results-title" tabIndex={-1} className="rh-result-heading text-lg font-semibold">Saved albums</h2>
+                {savedCount > 0 && searchScope !== 'catalog' && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search catalogs too</button>}
+                {savedCount > 0 && <SortControl sort={sortBy} onChange={changeSort} />}
               </div>
-              <p role="status" aria-atomic="true" className="mb-3 text-sm text-gray-600">
-                {savedLoading ? `Updating saved results by ${sortLabels[sortBy].toLowerCase()}…` :
-                  `Showing ${results.nextOffset !== undefined ? 'the first ' : ''}${savedCount} saved ${savedCount === 1 ? 'match' : 'matches'}, sorted by ${sortLabels[sortBy].toLowerCase()}.`}
-              </p>
-              <div aria-busy={savedLoading}>{savedGrid}</div>
-              {renderContinuation('saved', results)}
-            </section>
-          ) : (
-            <div className="py-6" role="status">
-              <p className="text-sm text-gray-600">No saved albums match “{searchQuery.trim()}”.</p>
-              {searchScope !== 'catalog' && (
-                <button type="button" className="mt-2 min-h-11 rounded-lg px-2 text-sm font-medium text-purple-600 hover:bg-gray-100" onClick={() => {
-                  changeScope('catalog');
-                  focusSearch();
-                }}>
-                  Search catalogs too
-                </button>
+              {searchState.status === 'error' && (
+                <div className="rh-search-recovery">
+                  <p role="status" className="text-sm">{savedLoading ? 'Retrying saved albums…' : 'Saved album search couldn’t finish.'}</p>
+                  <button type="button" className={secondaryButton} aria-disabled={savedLoading}
+                    onClick={event => {
+                      if (!savedLoading) runSearch(searchQuery, { keepResults: true, only: 'saved', retryFrom: event.currentTarget });
+                    }}>Retry saved search</button>
+                </div>
               )}
-            </div>
-          )
+              {!results && searchState.status !== 'error' && <p role="status" className="text-sm text-gray-600">Searching saved albums…</p>}
+              {results && savedCount > 0 && <>
+                <p role="status" aria-atomic="true" className="mb-2 text-sm text-gray-600">
+                  {savedLoading ? `Updating saved results by ${sortLabels[sortBy].toLowerCase()}…` :
+                    `Showing ${results.nextOffset !== undefined ? 'the first ' : ''}${savedCount} saved ${savedCount === 1 ? 'match' : 'matches'}, sorted by ${sortLabels[sortBy].toLowerCase()}.`}
+                </p>
+                <div aria-busy={savedLoading}>{savedGrid}</div>
+                {renderContinuation('saved', results)}
+              </>}
+              {results && savedCount === 0 && <>
+                <p role="status" className="text-sm text-gray-600 [overflow-wrap:anywhere]">No saved albums match “{searchQuery.trim()}”.</p>
+                {searchScope !== 'catalog' && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search catalogs too</button>}
+              </>}
+            </section>
         )}
 
         {searchActive && searchScope === 'catalog' && (
           <section aria-labelledby="catalog-results-title">
             <div className={`rh-catalog-bar${catalogCount > 0 ? ' rh-catalog-bar-sticky' : ''}`}>
-              <div className="min-w-0">
-                <h2 id="catalog-results-title" tabIndex={-1} className="rh-result-heading text-lg font-semibold">Catalog albums</h2>
-                <p className="text-xs text-gray-600">Search includes both saved shelves</p>
-              </div>
+              <h2 ref={catalogHeading} id="catalog-results-title" tabIndex={-1} className="rh-result-heading text-lg font-semibold">Catalog albums</h2>
               <label className="rh-catalog-destination text-sm text-gray-600">
-                Catalog save shelf
+                Save new matches to
                 <select id="catalog-save-shelf" value={saveShelf}
                   onChange={event => setSaveShelf(event.target.value as Shelf)}
                   className="min-h-11 max-w-full rounded-lg border border-gray-300 px-2.5">
@@ -1044,13 +1048,13 @@ function App() {
                 </select>
               </label>
             </div>
-            {catalogLoading && <p role="status" className="mb-3 text-sm text-gray-600">Searching catalogs…</p>}
-            {(catalogState.status === 'error' || !!catalogResults?.errors?.length) && (
-              <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-gray-300 p-3">
-                <p role="status" className="text-sm">Some catalog results are temporarily unavailable.</p>
-                <button type="button" className={secondaryButton} disabled={catalogLoading} onClick={() => {
-                  focusSearch();
-                  runSearch(searchQuery, { keepResults: true });
+            {catalogLoading && !catalogUnavailable && <p role="status" className="mb-3 text-sm text-gray-600">Searching catalogs…</p>}
+            {catalogUnavailable && (
+              <div className="rh-search-recovery mb-3">
+                <p role="status" className="text-sm">{catalogLoading ? 'Retrying catalogs…' : catalogCount > 0
+                  ? 'Some catalogs couldn’t respond. These matches are still available.' : 'Catalog search couldn’t finish.'}</p>
+                <button type="button" className={secondaryButton} aria-disabled={catalogLoading} onClick={event => {
+                  if (!catalogLoading) runSearch(searchQuery, { keepResults: true, only: 'catalog', retryFrom: event.currentTarget });
                 }}>Retry catalogs</button>
               </div>
             )}
@@ -1061,12 +1065,12 @@ function App() {
                 )}
                 <div className="flex flex-wrap gap-2">
                   <button type="button" className="rh-lookup-link" onClick={() => searchInput.current?.focus()}>Refine search</button>
-                  <button type="button" className={secondaryButton} onClick={openCatalogManualEntry}>Add album manually</button>
+                  <button type="button" className={secondaryButton} onClick={openManualEntry}>Add album manually</button>
                 </div>
               </div>
             )}
             {!!catalogCount && catalogResults && (
-                <div className={`rh-catalog-grid ${albumGrid}`}>
+                <div className="rh-catalog-grid">
                   {catalogResults.discogs.map(album => {
                     const key = catalogKey(album);
                     const savedShelf = album.inCollection ? 'collection' : album.inWishlist ? 'wishlist' : undefined;
@@ -1083,17 +1087,14 @@ function App() {
                         <div className="rh-catalog-identity">
                           <h3 className="text-sm font-semibold">{album.album}</h3>
                           <p className="mt-0.5 text-xs text-gray-600">{album.artist}{album.year ? ` · ${album.year}` : ''}</p>
+                          <p className="rh-catalog-edition">{listingEvidence(source)}{source?.kind === 'pressing' && ` · ${album.discogsId}`}</p>
                           {source?.url ? (
                             <a href={source.url} target="_blank" rel="noreferrer" className="rh-catalog-source">
-                              {source.label} · {source.type}<span className="sr-only"> for {catalogLabel} (opens in a new tab)</span>
+                              View on {source.label}<span className="sr-only"> · {catalogLabel} (opens in a new tab)</span>
                             </a>
-                          ) : (
-                            <p className="mt-2 text-xs text-gray-600">
-                              {source && `${source.label} · `}{source?.kind === 'album' ? source.type : 'Pressing unconfirmed'}
-                            </p>
-                          )}
+                          ) : null}
                         </div>
-                        <div className="rh-catalog-actions grid gap-1.5 p-2 pt-0">
+                        <div className="rh-catalog-actions grid gap-1.5">
                           {(saveErrors[saveKey]?.albumId === undefined || savedShelf) && <SaveDestinationActions
                             albumTitle={album.album}
                             catalogLabel={catalogLabel}
@@ -1128,7 +1129,7 @@ function App() {
             {!!catalogCount && catalogResults && (
               <>
                 {renderContinuation('catalog', catalogResults)}
-                <button type="button" className="rh-lookup-link mt-2" onClick={openCatalogManualEntry}>Add album manually</button>
+                <button type="button" className="rh-lookup-link mt-2" onClick={openManualEntry}>Add album manually</button>
               </>
             )}
           </section>
@@ -1173,7 +1174,7 @@ function App() {
           }}
           onManualClick={() => {
             setShowAddMenu(false);
-            setManualEntry({ draft: {}, shelf: viewMode });
+            openManualEntry();
           }}
           onImportClick={() => {
             setShowAddMenu(false);

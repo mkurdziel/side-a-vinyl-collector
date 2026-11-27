@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import api, { type PressingDetails, type SavedTitleMatch } from '../services/api';
-import { listingEvidence, savedCatalogSource, savedCopyContext, savedCopyLabel, type CatalogSource } from '../albumDisplay';
+import { listingEvidence, savedCatalogSource, savedCopyContext, savedCopyLabel, savedPressingLabel, type CatalogSource } from '../albumDisplay';
 import { ModalDialog } from './ModalDialog';
 
 export type SavedAlbumOutcome = 'opened' | 'removed' | 'unavailable';
@@ -89,6 +89,7 @@ export function PressingComparison({
   const savedDetails = savedRelease ? details[savedRelease] : null;
   const loadingDetails = lookupDetails === undefined || savedDetails === undefined;
   const lookupRecord = [title, lookup?.artist].filter(Boolean).join(' by ');
+  const selectedShelf = selected?.status === 'collection' ? 'Collection' : 'Wishlist';
   const action = openingId === selected?.id ? 'Opening saved copy…'
     : failedId === selected?.id ? 'Retry opening saved copy' : 'Open saved album';
   const sourceLink = (context: string, record: string, source?: CatalogSource) => source?.url && (
@@ -102,7 +103,6 @@ export function PressingComparison({
       .filter(([, lookupValue, savedValue]) => lookupValue || savedValue),
     ['Year', lookup?.year, selected?.year],
     ['Discogs release ID', lookupRelease, savedRelease],
-    ['Shelf', '—', selected ? (selected.status === 'wishlist' ? 'Wishlist' : 'Collection') : undefined],
   ];
 
   return (
@@ -120,15 +120,8 @@ export function PressingComparison({
           <div>
             <p className="font-semibold">{title}</p>
             {lookup?.artist && <p className="text-sm text-gray-600">{lookup.artist}</p>}
-            <p className="mt-2 max-w-prose text-sm text-gray-600">
-              Side A saves one entry per artist and title.
-              {lookup?.source?.url
-                ? ' If this is a different pressing, use the source listing to check it or search for a different album.'
-                : ' Check the sleeve for a catalog number before deciding which copy you have.'}
-            </p>
-            <p className="mt-1 text-sm text-gray-600">
-              Check the catalog number on the sleeve or record label. An album overview can include several pressings.
-            </p>
+            {selected && <p className="rh-comparison-outcome mt-2" aria-live="polite">Saved in {selectedShelf} · {savedPressingLabel(selected)}</p>}
+            <p className="mt-2 max-w-prose text-sm text-gray-600">Side A saves one entry per artist and title. Check the catalog number on the sleeve or record label to identify your pressing.</p>
           </div>
           {removed && (
             <p ref={removalNotice} role="status" tabIndex={-1} className="rounded-lg border border-gray-300 p-2 text-sm">
@@ -167,7 +160,7 @@ export function PressingComparison({
             <table className="rh-pressing-table">
               <caption className="sr-only">Catalog evidence for {lookupRecord}</caption>
               <thead>
-                <tr><th scope="col">Evidence</th><th scope="col">Lookup</th><th scope="col">Saved copy</th></tr>
+                <tr><th scope="col">Evidence</th><th scope="col">Catalog match</th><th scope="col">Saved copy</th></tr>
               </thead>
               <tbody>
                 {evidence.map(([label, lookupValue, savedValue]) => (
