@@ -29,6 +29,10 @@ export function savedCopyLabel(album: SavedTitleMatch) {
   return `${album.title} by ${album.artist_name}, ${savedCopyContext(album)}`;
 }
 
+export function savedPressingLabel(album: SavedTitleMatch) {
+  return savedCatalogSource(album)?.kind === 'pressing' ? 'Specific release' : 'Pressing unconfirmed';
+}
+
 export function savedCopyContext(album: SavedTitleMatch) {
   const shelf = album.status === 'wishlist' ? 'Wishlist' : 'Collection';
   const edition = album.discogs_id ? `Discogs release ${album.discogs_id}` : `saved record ${album.id}`;
