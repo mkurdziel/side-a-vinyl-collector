@@ -52,7 +52,8 @@ describe('pressing candidate evidence', () => {
     });
     const comparison = renderer!.root.findByType('table');
     expect(textOf(comparison.findByType('thead'))).toContain('Saved pressing 22');
-    expect(textOf(comparison.findByType('thead'))).toContain('Suggested pressing 21');
+    expect(textOf(comparison.findByType('thead'))).toContain('Catalog example 21');
+    expect(textOf(renderer!.root)).toContain('Check your copy’s country.');
     const evidenceRows = comparison.findByType('tbody').findAllByType('tr');
     expect(evidenceRows.map(textOf)).toEqual(['CountryDiffersUSCanada', 'FormatVinylVinyl', 'MixStereoUnlisted']);
     expect(evidenceRows.map(row => row.props.className)).toEqual(['rh-evidence-priority', undefined, undefined]);
@@ -200,9 +201,11 @@ describe('pressing candidate evidence', () => {
       renderer = create(picker(), { createNodeMock: node => node.type === 'ul' ? { querySelector } : null });
     });
     const preview = () => textOf(renderer!.root.findByType('table').findByType('thead'));
-    expect(preview()).toBe('EvidenceSaved pressing 1Suggested pressing 2');
-    expect(textOf(radioLabels()[1])).toContain('Suggested pressing');
-    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Suggested pressing · Find in list' }).props.onClick());
+    expect(preview()).toBe('EvidenceSaved pressing 1Catalog example 2');
+    expect(textOf(radioLabels()[1])).not.toContain('Catalog example');
+    const findAction = button('Find in list · Catalog example 2');
+    expect(findAction.children[0]).toBe('Find in list');
+    await act(async () => findAction.props.onClick());
     expect(querySelector).toHaveBeenCalledExactlyOnceWith('input[value="2"]');
     expect(focus).toHaveBeenCalledOnce();
     expect(onSelect).not.toHaveBeenCalled();
@@ -228,7 +231,10 @@ describe('pressing candidate evidence', () => {
       .mockResolvedValueOnce({ pressing: { matrixRunouts: [{ value: 'YEX-102' }] } });
     await act(async () => { renderer = create(createElement(CandidatePicker, { choices, onSelect, searchedNumber: 'S-5233' })); });
     const fieldset = renderer!.root.findByType('fieldset');
-    expect(textOf(fieldset)).toContain('S-5233 is shared by 3 pressings in these results.');
+    const initialText = textOf(fieldset);
+    expect(initialText).toContain('S-5233 is shared by 3 pressings in these results.');
+    expect(initialText.indexOf('Look for etched or stamped runout marks')).toBeLessThan(initialText.indexOf('Compare runout markings'));
+    expect(initialText.indexOf('Where to check your record')).toBeLessThan(initialText.indexOf('Catalog number S-5233'));
     expect(textOf(fieldset)).toContain('LP · Mono');
     expect(radios()).toEqual([1, 2, 3]);
     expect(getPressingDetails).not.toHaveBeenCalled();

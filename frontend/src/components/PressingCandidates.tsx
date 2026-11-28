@@ -122,7 +122,6 @@ interface PreviewColumn {
   choice: PressingCandidate;
   label: string;
   state?: EvidenceState;
-  onFind?: () => void;
 }
 
 function PressingPreview({ reference, target, searchedNumber }: {
@@ -144,13 +143,9 @@ function PressingPreview({ reference, target, searchedNumber }: {
     <caption className="sr-only">Pressing evidence preview</caption>
     <thead><tr>
       <th scope="col">Evidence</th>
-      {columns.map(({ choice, label, onFind }) => {
-        const heading = <>{label} <span className="rh-pressing-preview__release">{choice.releaseId}</span></>;
-        return <th key={choice.releaseId} scope="col">
-          {onFind ? <button type="button" className="rh-pressing-preview__find"
-            aria-label={`${label} · Find in list`} onClick={onFind}>{heading}</button> : heading}
-        </th>;
-      })}
+      {columns.map(({ choice, label }) => <th key={choice.releaseId} scope="col">
+        {label} <span className="rh-pressing-preview__release">{choice.releaseId}</span>
+      </th>)}
     </tr></thead>
     <tbody>{!rows.length && <tr><td colSpan={columns.length + 1}>No physical details listed yet.</td></tr>}
     {rows.map(({ label, values, differs }) => <tr key={label} className={differs ? 'rh-evidence-priority' : undefined}>
@@ -162,7 +157,7 @@ function PressingPreview({ reference, target, searchedNumber }: {
   </table>;
 }
 
-export function RecordEvidenceHelp() {
+function RecordEvidenceHelp() {
   return <details className="rh-pressing-secondary text-sm text-gray-600">
     <summary>Where to check your record</summary>
     <p className="max-w-prose pb-2">Look for the catalog number on the sleeve or center label. Check the label name and format, such as mono or stereo. The runout is the smooth band between the last track and the center label. Compare its etched or stamped markings with the Discogs listing.</p>
@@ -233,13 +228,23 @@ function PressingListingDetails({ choice }: { choice: PressingCandidate }) {
   );
 }
 
-export function PressingSelectionSummary({ choice, compact, formats, searchedNumber, id }: {
+export function PressingSelectionSummary({ choice, compact, formats, searchedNumber, id, identityOnly }: {
   choice: PressingCandidate;
   compact?: boolean;
   formats?: readonly string[];
   searchedNumber?: string;
   id?: string;
+  identityOnly?: boolean;
 }) {
+  if (identityOnly) {
+    const number = candidateNumber(choice, searchedNumber);
+    return <p id={id} className="text-xs text-gray-600">
+      <span className="font-semibold text-gray-900">Selected pressing</span>
+      {' · '}{number && <><span className="sr-only">Catalog number </span>{number} · </>}
+      Discogs<span className="sr-only"> release</span> {choice.releaseId}
+    </p>;
+  }
+
   const markings = choice.pressing?.matrixRunouts ?? [];
   return <div id={id} className={`min-w-0 text-gray-600 [overflow-wrap:anywhere] ${compact ? 'text-xs' : 'border-t border-gray-200 pt-2 text-sm'}`}>
     <p className="mb-0.5 text-xs font-semibold text-gray-900">Selected pressing</p>
@@ -350,7 +355,7 @@ export function PressingCandidates({
   uncertainAction = 'If you’re unsure, go back without choosing a pressing.',
 }: Props) {
   const name = useId();
-  const guideId = useId();
+  const sharedNumberId = useId();
   const candidatesId = useId();
   const mediumId = useId();
   const shortlistId = useId();
@@ -395,7 +400,6 @@ export function PressingCandidates({
     (pinnedIds.includes(choice.releaseId) || (checkingRunouts && visible.includes(choice)))
   )) : [];
   const compareGrid = checkingRunouts && visible.length > 1;
-  const showRunoutGuide = checkingRunouts || pinned.length > 0;
   const inlineRunouts = checkingRunouts ? visible.filter(choice => !pinnedIds.includes(choice.releaseId)) : [];
   const visibleMissing = allRunoutsMissing(inlineRunouts, evidence);
   const pinnedMissing = allRunoutsMissing(pinned, evidence);
@@ -406,14 +410,17 @@ export function PressingCandidates({
   const savedChoice = withDetails.find(choice => choice.releaseId === savedReleaseId);
   const saved = savedReleaseId === undefined ? undefined : withPressingEvidence(savedChoice ?? { releaseId: savedReleaseId }, savedEvidence, 'release');
   const first = saved ?? visible[0];
-  const suggested = !selection && first ? firstAlternative(first, visible, searchedNumber) ?? (saved ? undefined : first) : undefined;
-  const target = selection ?? suggested ?? (visible.length ? saved : undefined);
+  const example = !selection && first ? firstAlternative(first, visible, searchedNumber) ?? (saved ? undefined : first) : undefined;
+  const target = selection ?? example ?? (visible.length ? saved : undefined);
   const reference = target && !selectedOutsideMedia && target.releaseId !== savedReleaseId
     ? saved ?? visible.find(choice => choice.releaseId !== target.releaseId)
     : undefined;
   const targetLabel = selectedOutsideMedia ? 'Selected pressing outside filter'
     : selection ? (target?.releaseId === savedReleaseId ? 'Saved pressing selected' : 'Selected pressing')
-      : suggested ? 'Suggested pressing' : 'Saved pressing';
+      : example ? 'Catalog example' : 'Saved pressing';
+  const exampleFacts = example && reference ? comparisonRows(reference, example, searchedNumber) : [];
+  const firstDifference = exampleFacts.find(fact => fact.differs);
+  const sharedExampleNumber = exampleFacts.some(fact => fact.label === 'Catalog no.' && fact.values.every(Boolean) && !fact.differs);
 
   useLayoutEffect(() => {
     if (!focusRequest) return;
@@ -459,23 +466,34 @@ export function PressingCandidates({
   if (!unique.length) return null;
 
   return (
-    <fieldset disabled={disabled} aria-describedby={shared || showRunoutGuide ? guideId : undefined}
+    <fieldset disabled={disabled} aria-describedby={shared ? sharedNumberId : undefined}
       className="@container min-w-0 space-y-2 [overflow-wrap:anywhere]">
       <legend className="text-sm font-semibold">Pressings from Discogs</legend>
       {requests.map(({ releaseId }) => <EvidenceRequest key={releaseId} releaseId={releaseId}
         loadDetails={loadDetails ?? loadLocally} onResult={recordEvidence} />)}
-      {target && <PressingPreview searchedNumber={searchedNumber}
-        reference={reference && { choice: reference, label: saved ? 'Saved pressing' : 'Catalog reference', state: evidenceState(reference) }}
-        target={{
-          choice: target.releaseId === savedReleaseId && saved ? saved : withPressingEvidence(target, selectedEvidence, 'release'),
-          label: targetLabel,
-          state: evidenceState(target),
-          onFind: available.some(choice => choice.releaseId === target.releaseId) ? () => findChoice(target.releaseId) : undefined,
-        }} />}
-      {(shared || showRunoutGuide) && <div id={guideId} className="space-y-1 text-xs text-gray-600">
-        {shared && <p>{shared.number} is shared by {shared.count} pressings in these results.</p>}
-        {showRunoutGuide && <p>Look for etched or stamped markings in the smooth band between the last track and the center label.</p>}
+      {target && (unique.length > 1 || reference) && <div>
+        <PressingPreview searchedNumber={searchedNumber}
+          reference={reference && { choice: reference, label: saved ? 'Saved pressing' : 'Catalog reference', state: evidenceState(reference) }}
+          target={{
+            choice: target.releaseId === savedReleaseId && saved ? saved : withPressingEvidence(target, selectedEvidence, 'release'),
+            label: targetLabel,
+            state: evidenceState(target),
+          }} />
+        <div className="rh-pressing-preview__caption">
+          {example && <p className="text-xs text-gray-600">
+            {sharedExampleNumber && !shared && 'Same catalog number. '}
+            {firstDifference ? `Check your copy’s ${firstDifference.label.toLowerCase().replace('catalog no.', 'catalog number')}.`
+              : 'Check the label and format on your copy.'}
+          </p>}
+          {available.some(choice => choice.releaseId === target.releaseId) && <button type="button"
+            className="rh-lookup-link rh-pressing-preview__find" onClick={() => findChoice(target.releaseId)}>
+            Find in list<span className="sr-only"> · {targetLabel} {target.releaseId}</span>
+          </button>}
+        </div>
       </div>}
+      {shared && <p id={sharedNumberId} className="text-xs text-gray-600">
+        {shared.number} is shared by {shared.count} pressings in these results.
+      </p>}
       {pinned.length > 0 && (
         <section aria-labelledby={shortlistId} className="min-w-0 space-y-2 border-y border-gray-200 py-2">
           <div>
@@ -513,7 +531,20 @@ export function PressingCandidates({
           {pinnedMissing && <MissingRunouts choices={pinned} uncertainAction={uncertainAction} />}
         </section>
       )}
-      {selectedOffPage && <PressingSelectionSummary choice={selection} formats={formats} searchedNumber={searchedNumber} />}
+      {selectedOffPage && <details className="rh-pressing-secondary">
+        <summary>Selected pressing details</summary>
+        <PressingSelectionSummary choice={selection} formats={formats} searchedNumber={searchedNumber} />
+      </details>}
+      <div className="rh-pressing-evidence-tools">
+        <p className="text-xs text-gray-600">Look for etched or stamped runout marks just inside the last track.</p>
+        <div className="flex flex-wrap items-center gap-x-3">
+          <button type="button" ref={runoutToggle} className="rh-lookup-link -ml-2 text-left" aria-expanded={checkingRunouts} aria-controls={candidatesId}
+            onClick={() => setCheckingRunouts(current => !current)}>
+            {checkingRunouts ? 'Hide runout markings' : available.length > 1 ? 'Compare runout markings' : 'Check runout markings'}
+          </button>
+          <RecordEvidenceHelp />
+        </div>
+      </div>
       <div className="flex flex-wrap items-center gap-x-3">
         {offerMediaFilter && <div className="flex flex-wrap items-center gap-x-2 text-sm text-gray-600">
           <label htmlFor={mediumId}>Media</label>
@@ -524,10 +555,6 @@ export function PressingCandidates({
             {media.map(name => <option key={name} value={name}>{name}</option>)}
           </select>
         </div>}
-        <button type="button" ref={runoutToggle} className="rh-lookup-link -ml-2 text-left" aria-expanded={checkingRunouts} aria-controls={candidatesId}
-          onClick={() => setCheckingRunouts(current => !current)}>
-          {checkingRunouts ? 'Hide runout markings' : available.length > 1 ? 'Compare runout markings' : 'Check runout markings'}
-        </button>
         <button type="button" className="rh-lookup-link -ml-2 text-left" aria-expanded={showListingTools} aria-controls={candidatesId}
           onClick={() => setShowListingTools(current => !current)}>
           {showListingTools ? (allowPinning ? 'Hide listing details and pins' : 'Hide listing details') : (allowPinning ? 'Listing details and pins' : 'Listing details')}
@@ -563,8 +590,7 @@ export function PressingCandidates({
                   <input type="radio" name={name} value={releaseId} checked={checked} onChange={() => onSelect(releaseId)}
                     className="mt-1 shrink-0 accent-blue-600" />
                   <span className="min-w-0">
-                  {checked ? <span className="rh-pressing-candidate-role">{releaseId === savedReleaseId ? 'Saved pressing selected' : 'Selected pressing'}</span>
-                    : releaseId === suggested?.releaseId && <span className="rh-pressing-candidate-role">Suggested pressing</span>}
+                  {checked && <span className="rh-pressing-candidate-role">{releaseId === savedReleaseId ? 'Saved pressing selected' : 'Selected pressing'}</span>}
                     <PressingFacts choice={choice} varying={varying} formats={formats} searchedNumber={searchedNumber} />
                   {releaseId === savedReleaseId && !checked && <span className="block text-gray-600">Your saved pressing</span>}
                     {choice.catalogNumberMatch === 'unverified' && <span className="block text-gray-600">Check the number on the listing.</span>}
@@ -584,7 +610,6 @@ export function PressingCandidates({
         })}
       </ul>
       {visibleMissing && <MissingRunouts choices={inlineRunouts} uncertainAction={uncertainAction} />}
-      <RecordEvidenceHelp />
     </fieldset>
   );
 }
