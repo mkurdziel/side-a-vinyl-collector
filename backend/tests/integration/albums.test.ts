@@ -115,6 +115,42 @@ describe('Album CRUD Operations', () => {
         .send({ artist: 'Fixture Artist', album: 'Invalid overview', catalogListing: { ...catalogListing, id: '12345' } })
         .expect(400);
     });
+
+    it('applies a pressing decision to a newly saved membership without changing an existing saved copy', async () => {
+      const album = { artist: 'Fixture Artist', album: 'Re-added album', barcode: '0602537340436' };
+      const catalogListing = { source: 'discogs', kind: 'master', id: 12345 };
+      const created = await request(app).post('/api/albums').send({ ...album, discogsId: 2219 }).expect(201);
+      const id = created.body.album.id;
+      const albumUrl = `/api/albums/${id}`;
+      await testPool.query('UPDATE albums SET local_cover_path = $1 WHERE id = $2', ['cover/fixture.jpg', id]);
+      await request(app).patch(`${albumUrl}/notes`).send({ notes: 'Saved copy notes' }).expect(200);
+
+      const duplicate = await request(app).post('/api/albums')
+        .send({ ...album, catalogListing, status: 'wishlist', applyCatalogReference: true }).expect(409);
+      expect(duplicate.body.existingAlbumId).toBe(id);
+      expect((await request(app).get(albumUrl).expect(200)).body.album).toMatchObject({
+        discogs_id: 2219, catalog_listing: null, notes: 'Saved copy notes', status: 'collection',
+      });
+
+      await request(app).delete(albumUrl).expect(200);
+      const unconfirmed = await request(app).post('/api/albums')
+        .send({ ...album, catalogListing, status: 'wishlist', applyCatalogReference: true }).expect(201);
+      expect(unconfirmed.body.album).toMatchObject({
+        id, discogs_id: null, catalog_listing: catalogListing, status: 'wishlist', local_cover_path: 'cover/fixture.jpg',
+      });
+
+      await request(app).delete(albumUrl).expect(200);
+      await request(app).post('/api/albums').send({ ...album, applyCatalogReference: 'true' }).expect(400);
+      await request(app).post('/api/albums')
+        .send({ ...album, applyCatalogReference: true, discogsId: 2220, catalogListing }).expect(400);
+      const confirmed = await request(app).post('/api/albums')
+        .send({ ...album, discogsId: 2220, applyCatalogReference: true }).expect(201);
+      expect(confirmed.body.album).toMatchObject({
+        id, discogs_id: 2220, catalog_listing: null, status: 'collection', local_cover_path: 'cover/fixture.jpg',
+      });
+      const barcode = await testPool.query('SELECT album_id FROM barcodes WHERE barcode = $1', [album.barcode]);
+      expect(barcode.rows).toEqual([{ album_id: id }]);
+    });
   });
 
   describe('GET /api/albums', () => {

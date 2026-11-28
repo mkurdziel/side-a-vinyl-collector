@@ -3,7 +3,7 @@ import { toast } from 'react-hot-toast';
 import api, { ApiError, type Album } from '../services/api';
 import { ModalDialog } from './ModalDialog';
 
-export type ManualAlbumDraft = { artist?: string; album?: string };
+export type ManualAlbumDraft = { artist?: string; album?: string; searchText?: string };
 type Shelf = Album['status'];
 
 interface Props {
@@ -20,10 +20,26 @@ export function ManualAlbumDialog({ draft, initialShelf, onClose, onSaved, onOpe
   const [error, setError] = useState('');
   const [duplicateId, setDuplicateId] = useState<number>();
   const inFlight = useRef(false);
+  const reference = useRef<HTMLInputElement>(null);
+  const artistField = useRef<HTMLInputElement>(null);
+  const titleField = useRef<HTMLInputElement>(null);
   const label = destination === 'collection' ? 'Collection' : 'Wishlist';
 
   const close = () => {
     if (!inFlight.current) onClose();
+  };
+
+  const clearIssue = () => {
+    setError('');
+    setDuplicateId(undefined);
+  };
+
+  const copyReferenceTo = (field: HTMLInputElement | null) => {
+    const text = reference.current?.value.trim();
+    if (!field || !text) return;
+    field.value = text;
+    clearIssue();
+    field.focus();
   };
 
   const save = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -63,23 +79,31 @@ export function ManualAlbumDialog({ draft, initialShelf, onClose, onSaved, onOpe
           <h2 id="manual-album-title" className="text-xl font-bold">Add album manually</h2>
         </header>
         <form onSubmit={save} className="space-y-4 p-4 sm:p-5">
-          <fieldset disabled={saving} className="grid min-w-0 gap-3" onChange={() => {
-            setError('');
-            setDuplicateId(undefined);
-          }}>
+          <fieldset disabled={saving} className="grid min-w-0 gap-3">
+            {draft.searchText && <div className="grid gap-1 rounded-lg border border-gray-300 px-3 py-2">
+              <label className="grid gap-1.5 text-sm font-medium">
+                Previous search
+                <input ref={reference} maxLength={255} defaultValue={draft.searchText}
+                  className="min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-base" />
+              </label>
+              <div className="-ml-2 flex flex-wrap gap-x-2">
+                <button type="button" className="rh-lookup-link" onClick={() => copyReferenceTo(artistField.current)}>Use as artist</button>
+                <button type="button" className="rh-lookup-link" onClick={() => copyReferenceTo(titleField.current)}>Use as title</button>
+              </div>
+            </div>}
             <label className="grid gap-1.5 text-sm font-medium">
               Artist
-              <input autoFocus name="artist" required maxLength={255} defaultValue={draft.artist?.slice(0, 255)}
+              <input ref={artistField} autoFocus name="artist" required maxLength={255} defaultValue={draft.artist?.slice(0, 255)} onChange={clearIssue}
                 className="min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-base" />
             </label>
             <label className="grid gap-1.5 text-sm font-medium">
               Album title
-              <input name="album" required maxLength={255} defaultValue={draft.album?.slice(0, 255)}
+              <input ref={titleField} name="album" required maxLength={255} defaultValue={draft.album?.slice(0, 255)} onChange={clearIssue}
                 className="min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-base" />
             </label>
             <label className="grid gap-1.5 text-sm font-medium">
               Save to
-              <select value={destination} onChange={event => setDestination(event.target.value as Shelf)}
+              <select value={destination} onChange={event => { setDestination(event.target.value as Shelf); clearIssue(); }}
                 className="min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-base">
                 <option value="collection">Collection</option>
                 <option value="wishlist">Wishlist</option>

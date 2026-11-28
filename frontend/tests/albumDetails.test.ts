@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { act, create, type ReactTestInstance } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Album, PressingDetails } from '../src/services/api';
+import type { Album, DiscogsAlbum, PressingDetails } from '../src/services/api';
 import { ApiError } from '../src/services/api';
 
 const { getPressingDetails, searchCoverArt, updateCoverArt } = vi.hoisted(() => ({
@@ -16,6 +16,8 @@ vi.mock('../src/services/api', async importOriginal => ({
   getCoverArtUrl: (id: number) => `/api/cover-art/${id}`,
 }));
 import { AlbumDetailModal } from '../src/components/AlbumDetailModal';
+import { CatalogPressingPicker } from '../src/components/CatalogPressingPicker';
+import { PressingSelectionSummary } from '../src/components/PressingCandidates';
 import { PressingComparison } from '../src/components/PressingComparison';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -218,9 +220,10 @@ describe('pressing comparison evidence', () => {
     const onClose = vi.fn();
     const outcomeFocus = vi.fn();
     const triggerFocus = vi.fn();
-    getPressingDetails.mockResolvedValue({ pressing: null });
+    getPressingDetails.mockImplementation(async id => ({ pressing: id === 430 ? { format: 'Vinyl · LP' } : null }));
     await act(async () => {
-      renderer = create(createComparison([saved], { lookupChoices: [alternate], onSavePressing, onUndoPressing, onClose }), {
+      renderer = create(createComparison([saved], { lookupChoices: [alternate, { ...alternate, releaseId: 450 }, { ...alternate, releaseId: 460 }],
+        onSavePressing, onUndoPressing, onClose }), {
         createNodeMock: node => {
           if (node.props.role === 'status' && !node.props.className) return { focus: outcomeFocus };
           if (node.props.children === 'Use this pressing') return { focus: triggerFocus };
@@ -230,10 +233,15 @@ describe('pressing comparison evidence', () => {
     });
     expect(button('Use this pressing')).toBeUndefined();
     await act(async () => choose(430));
+    await act(async () => button('More pressings').props.onClick());
+    expect(radio(430)).toBeUndefined();
     await act(async () => button('Use this pressing').props.onClick());
     const confirmation = renderer!.root.findByProps({ role: 'group' });
-    expect(textOf(confirmation)).toContain('ALT-30 · 2017 · Vinyl LP · Discogs release 430 for Dummy in Collection');
-    expect(textOf(confirmation)).toContain('This will replace Discogs release 420');
+    expect(textOf(confirmation)).toContain('Replace the pressing for Dummy in Collection?');
+    expect(textOf(confirmation)).toContain('Currently saved as Discogs release 420.');
+    expect(confirmation.findByType(PressingSelectionSummary).props.choice).toMatchObject({
+      releaseId: 430, pressing: { catalogNumber: 'ALT-30', format: 'Vinyl · LP' }, year: 2017,
+    });
     expect(onSavePressing).not.toHaveBeenCalled();
     await act(async () => button('Cancel').props.onClick());
     expect(triggerFocus).toHaveBeenCalledOnce();
@@ -243,7 +251,7 @@ describe('pressing comparison evidence', () => {
     await act(async () => button('Confirm pressing').props.onClick());
     expect(onSavePressing).toHaveBeenCalledExactlyOnceWith(saved, 430);
     expect(button('Saving pressing…').props['aria-busy']).toBe(true);
-    expect(radio(430).props.disabled || renderer!.root.findAllByType('fieldset').some(fieldset => fieldset.props.disabled)).toBe(true);
+    expect(renderer!.root.findByType('fieldset').props.disabled).toBe(true);
     await act(async () => {
       button('Saving pressing…').props.onClick();
       renderer!.root.findByProps({ 'aria-label': 'Close pressing review' }).props.onClick();
@@ -325,8 +333,24 @@ describe('pressing comparison evidence', () => {
     expect(textOf(renderer!.root)).toContain('The saved pressing changed. Check the updated evidence before confirming again.');
     expect(button('Retry saving pressing')).toBeUndefined();
     await act(async () => button('Use this pressing').props.onClick());
-    expect(textOf(renderer!.root.findByProps({ role: 'group' }))).toContain('This will replace Discogs release 440');
+    expect(textOf(renderer!.root.findByProps({ role: 'group' }))).toContain('Currently saved as Discogs release 440.');
     expect(onSavePressing).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { discogs_id: 420, label: 'Keep current pressing' },
+    { discogs_id: null, label: 'Leave pressing unconfirmed' },
+  ])('offers $label beside confirmation when Discogs has no details', async ({ discogs_id, label }) => {
+    getPressingDetails.mockResolvedValue({ pressing: null });
+    const onSavePressing = vi.fn();
+    const onClose = vi.fn();
+    await act(async () => { renderer = create(createComparison([{ ...album, discogs_id }], { onSavePressing, onClose })); });
+    expect(button(label)).toBeDefined();
+    await act(async () => button('Use this pressing').props.onClick());
+    expect(renderer!.root.findByProps({ role: 'group' }).findAllByType('button').map(textOf)).toContain(label);
+    await act(async () => button(label).props.onClick());
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onSavePressing).not.toHaveBeenCalled();
   });
 
   it('removes a saved copy on a save 404 and focuses the remaining copy', async () => {
@@ -385,5 +409,51 @@ describe('pressing comparison evidence', () => {
     await act(async () => renderer!.update(render('ready')));
     expect(textOf(renderer!.root)).toContain('No matching Discogs pressings found.');
     expect(button('Back to album')).toBeDefined();
+  });
+});
+
+describe('saving a new catalog pressing', () => {
+  const releases: DiscogsAlbum[] = [410, 420, 430, 440].map(id => ({
+    id, discogsId: id, discogsListing: 'release', album: album.title, artist: album.artist_name, year: 1994,
+    pressing: { catalogNumber: `PL-${id}`, country: 'UK', format: 'Vinyl LP' },
+  }));
+  const createPicker = (overrides: Partial<Parameters<typeof CatalogPressingPicker>[0]>) => createElement(CatalogPressingPicker, {
+    album: { ...releases[0], pressingChoices: releases }, destination: 'collection',
+    opener: { current: null }, fallback: { current: null }, onSave: vi.fn(), onClose: vi.fn(), ...overrides,
+  });
+  const button = (label: string) => renderer!.root.findAllByType('button').find(control => textOf(control) === label)!;
+
+  it('keeps enriched evidence beside Save pressing after the selected candidate leaves the page', async () => {
+    getPressingDetails.mockImplementation(async releaseId => ({ pressing: releaseId === 410 ? { label: 'Go! Beat' } : null }));
+    const onSave = vi.fn().mockResolvedValue(true);
+    const onClose = vi.fn();
+    await act(async () => { renderer = create(createPicker({ onSave, onClose })); });
+    await act(async () => renderer!.root.findAllByType('input').find(control => control.props.value === 410)!.props.onChange());
+    await act(async () => button('Compare runout markings').props.onClick());
+    await act(async () => button('More pressings').props.onClick());
+    expect(renderer!.root.findAllByType('input').some(control => control.props.value === 410)).toBe(false);
+    const commit = renderer!.root.findByProps({ 'aria-label': 'Save album' });
+    expect(commit.findByType(PressingSelectionSummary).props.choice).toMatchObject({
+      releaseId: 410, pressing: { catalogNumber: 'PL-410', label: 'Go! Beat', country: 'UK', format: 'Vinyl LP' },
+    });
+    await act(async () => renderer!.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() }));
+    expect(onSave).toHaveBeenCalledExactlyOnceWith(releases[0]);
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('can save the album without a pressing after finding no runout evidence', async () => {
+    getPressingDetails.mockResolvedValue({ pressing: null });
+    const onSaveWithoutPressing = vi.fn().mockResolvedValue(true);
+    const onSave = vi.fn();
+    const onClose = vi.fn();
+    await act(async () => { renderer = create(createPicker({ onSave, onSaveWithoutPressing, onClose })); });
+    await act(async () => button('Compare runout markings').props.onClick());
+    expect(textOf(renderer!.root)).toContain('Discogs lists no runout markings');
+    const saveWithout = 'Save without pressing to Collection';
+    expect(renderer!.root.findByProps({ 'aria-label': 'Save album' }).findAllByType('button').map(textOf)).toContain(saveWithout);
+    await act(async () => button(saveWithout).props.onClick());
+    expect(onSaveWithoutPressing).toHaveBeenCalledOnce();
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledOnce();
   });
 });

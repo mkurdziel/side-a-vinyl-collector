@@ -7,6 +7,21 @@ export interface PressingCandidate {
   catalogNumberMatch?: 'exact' | 'unverified';
 }
 
+export function withPressingEvidence(choice: PressingCandidate, details?: PressingDetails | null,
+  priority: 'listing' | 'release' = 'listing'): PressingCandidate {
+  if (!details) return choice;
+  const summary = { ...choice.pressing, year: choice.pressing?.year ?? choice.year };
+  const [first, fallback] = priority === 'release' ? [details, summary] : [summary, details];
+  return { ...choice, pressing: {
+    catalogNumber: first.catalogNumber?.trim() || fallback.catalogNumber?.trim(),
+    label: first.label?.trim() || fallback.label?.trim(),
+    country: first.country?.trim() || fallback.country?.trim(),
+    format: first.format?.trim() || fallback.format?.trim(),
+    year: first.year ?? fallback.year,
+    matrixRunouts: details.matrixRunouts?.length ? details.matrixRunouts : summary.matrixRunouts,
+  } };
+}
+
 function catalogNumberKey(value: string) {
   return value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().match(/[\p{L}\p{N}]+/gu)?.join('') ?? '';
 }

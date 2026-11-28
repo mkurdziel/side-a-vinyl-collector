@@ -109,9 +109,9 @@ class DiscogsService {
     }
   }
 
-  async searchByBarcode(barcode: string): Promise<DiscogsAlbum | null> {
-    const cacheKey = `barcode:${barcode}`;
-    const cached = await this.getCached<DiscogsAlbum>(cacheKey);
+  async searchByBarcode(barcode: string): Promise<(DiscogsAlbum & { otherAlbumMatches?: boolean }) | null> {
+    const cacheKey = `barcode:v2:${barcode}`;
+    const cached = await this.getCached<DiscogsAlbum & { otherAlbumMatches?: boolean }>(cacheKey);
     if (cached) return cached;
 
     try {
@@ -122,14 +122,17 @@ class DiscogsService {
         return response.data;
       });
 
-      if (result.results && result.results.length > 0) {
-        const release = result.results[0];
-        const album = this.parseDiscogsRelease(release);
-        await this.setCache(cacheKey, album);
-        return album;
-      }
-
-      return null;
+      const releases = (result.results ?? []).filter(release => Number.isSafeInteger(release.id) && release.id > 0)
+        .map(release => ({ ...this.parseDiscogsRelease(release), discogsListing: 'release' as const,
+          pressing: this.parseSearchPressing(release) }));
+      const first = releases[0];
+      if (!first) return null;
+      const pressingChoices = releases.filter(release =>
+        release.artist.toLowerCase() === first.artist.toLowerCase() && release.album.toLowerCase() === first.album.toLowerCase()
+        && (!first.masterId || !release.masterId || release.masterId === first.masterId));
+      const album = { ...first, pressingChoices, otherAlbumMatches: pressingChoices.length < releases.length };
+      await this.setCache(cacheKey, album);
+      return album;
     } catch (error) {
       this.logError('Discogs barcode search error:', error);
       this.throwSearchError(error, 'Failed to search Discogs by barcode');

@@ -1,7 +1,8 @@
-import { useEffect, useId, useRef, useState, type RefObject } from 'react';
-import type { Album, DiscogsAlbum } from '../services/api';
+import { useCallback, useEffect, useId, useRef, useState, type RefObject } from 'react';
+import type { Album, DiscogsAlbum, PressingDetails } from '../services/api';
+import { withPressingEvidence } from '../services/pressingEvidence';
 import { ModalDialog } from './ModalDialog';
-import { PressingCandidates, type PressingCandidate } from './PressingCandidates';
+import { PressingCandidates, PressingSelectionSummary, type PressingCandidate } from './PressingCandidates';
 
 interface Props {
   album: DiscogsAlbum;
@@ -11,8 +12,8 @@ interface Props {
   duplicate?: boolean;
   onClose: () => void;
   onSave: (release: DiscogsAlbum) => Promise<boolean>;
-  onSaveWithoutPressing: () => Promise<boolean>;
-  onOpenDuplicate?: () => void;
+  onSaveWithoutPressing?: () => Promise<boolean>;
+  onOpenDuplicate?: (opener: HTMLButtonElement) => void;
   opener: RefObject<HTMLButtonElement | null>;
   fallback: RefObject<HTMLElement | null>;
 }
@@ -24,6 +25,7 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
   const openDuplicate = useRef<HTMLButtonElement>(null);
   const saveInProgress = useRef(false);
   const [selectedId, setSelectedId] = useState<number>();
+  const [evidence, setEvidence] = useState<Partial<Record<number, PressingDetails>>>({});
   const [saving, setSaving] = useState<'pressing' | 'album'>();
   const [unexpectedIssue, setUnexpectedIssue] = useState<string>();
   const releases = album.pressingChoices?.length ? album.pressingChoices : [album];
@@ -34,8 +36,12 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
     catalogNumberMatch: release.catalogNumberMatch,
   }));
   const pressing = releases.find(release => release.discogsId === selectedId);
+  const selectedChoice = choices.find(choice => choice.releaseId === selectedId);
   const shelf = destination === 'collection' ? 'Collection' : 'Wishlist';
   const saveIssue = unexpectedIssue ?? issue;
+  const recordEvidence = useCallback((releaseId: number, details: PressingDetails) => {
+    setEvidence(current => current[releaseId] === details ? current : { ...current, [releaseId]: details });
+  }, []);
 
   useEffect(() => {
     if (duplicate && !saving) openDuplicate.current?.focus();
@@ -46,12 +52,12 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
   };
 
   const save = async (release?: DiscogsAlbum) => {
-    if (saveInProgress.current || duplicate) return;
+    if (saveInProgress.current || duplicate || (!release && !onSaveWithoutPressing)) return;
     saveInProgress.current = true;
     setUnexpectedIssue(undefined);
     setSaving(release ? 'pressing' : 'album');
     try {
-      const saved = release ? await onSave(release) : await onSaveWithoutPressing();
+      const saved = release ? await onSave(release) : await onSaveWithoutPressing?.();
       if (saved) onClose();
     } catch {
       setUnexpectedIssue('Couldn’t save this album. Try again.');
@@ -80,26 +86,30 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
           if (pressing) return save(pressing);
         }}>
           <PressingCandidates choices={choices} searchedNumber={searchedNumber} selectedId={selectedId}
-            onSelect={setSelectedId} disabled={!!saving || duplicate} />
-          {saveIssue && <p id={issueId} role="alert" className="text-sm text-red-600">{saveIssue}</p>}
-          <div className="flex flex-wrap items-center justify-end gap-1.5">
-            <button type="button" className="rh-lookup-link aria-disabled:opacity-60" onClick={close}
-              aria-disabled={!!saving}>Back to results</button>
-            {duplicate ? onOpenDuplicate && (
-              <button ref={openDuplicate} type="button" className="rh-primary-action px-3 text-sm font-semibold"
-                aria-describedby={saveIssue ? issueId : undefined} onClick={onOpenDuplicate}>Open saved album</button>
-            ) : (
-              <>
-                <button type="button" className="rh-lookup-link aria-disabled:opacity-60" onClick={() => save()}
-                  aria-disabled={!!saving} aria-busy={saving === 'album'} aria-describedby={saveIssue ? issueId : undefined}>
-                  {saving === 'album' ? `Saving album to ${shelf}…` : `Save without pressing to ${shelf}`}
-                </button>
-                <button type="submit" className="rh-primary-action px-3 text-sm font-semibold aria-disabled:opacity-60"
-                  aria-disabled={!pressing || !!saving} aria-busy={saving === 'pressing'} aria-describedby={saveIssue ? issueId : undefined}>
-                  {saving === 'pressing' ? `Saving pressing to ${shelf}…` : `Save pressing to ${shelf}`}
-                </button>
-              </>
-            )}
+            onSelect={setSelectedId} onReadEvidence={recordEvidence} disabled={!!saving || duplicate}
+            uncertainAction={onSaveWithoutPressing ? 'If you’re unsure, save the album without a pressing.' : undefined} />
+          <div className="grid gap-2 border-t border-gray-200 pt-3" role="group" aria-label={duplicate ? 'Saved album' : 'Save album'}>
+            {selectedChoice && !duplicate && <PressingSelectionSummary choice={withPressingEvidence(selectedChoice, evidence[selectedChoice.releaseId])} />}
+            {saveIssue && <p id={issueId} role="alert" className="text-sm text-red-600">{saveIssue}</p>}
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              <button type="button" className="rh-lookup-link aria-disabled:opacity-60" onClick={close}
+                aria-disabled={!!saving}>Back to results</button>
+              {duplicate ? onOpenDuplicate && (
+                <button ref={openDuplicate} type="button" className="rh-primary-action px-3 text-sm font-semibold"
+                  aria-describedby={saveIssue ? issueId : undefined} onClick={event => onOpenDuplicate(event.currentTarget)}>Open saved album</button>
+              ) : (
+                <>
+                  {onSaveWithoutPressing && <button type="button" className="rh-lookup-link aria-disabled:opacity-60" onClick={() => save()}
+                    aria-disabled={!!saving} aria-busy={saving === 'album'} aria-describedby={saveIssue ? issueId : undefined}>
+                    {saving === 'album' ? `Saving album to ${shelf}…` : `Save without pressing to ${shelf}`}
+                  </button>}
+                  <button type="submit" className="rh-primary-action px-3 text-sm font-semibold aria-disabled:opacity-60"
+                    aria-disabled={!pressing || !!saving} aria-busy={saving === 'pressing'} aria-describedby={saveIssue ? issueId : undefined}>
+                    {saving === 'pressing' ? `Saving pressing to ${shelf}…` : `Save pressing to ${shelf}`}
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         </form>
       </div>

@@ -156,6 +156,7 @@ class ApiService {
     coverImageUrl?: string;
     discogsId?: number;
     catalogListing?: CatalogListing;
+    applyCatalogReference?: boolean;
     barcode?: string;
     status?: 'collection' | 'wishlist';
   }): Promise<{ album: Album }> {
@@ -241,6 +242,11 @@ class ApiService {
     year?: number;
     coverImageUrl?: string;
     discogsId: number;
+    masterId?: number;
+    pressing?: PressingDetails;
+    pressingChoices?: DiscogsAlbum[];
+    catalogListing?: CatalogListing | null;
+    otherAlbumMatches?: boolean;
     existingStatus?: 'collection' | 'wishlist' | null;
     existingAlbumId?: number | null;
     existingMatch?: SavedMatch | null;

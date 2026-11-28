@@ -43,7 +43,7 @@ export const AddMenu = ({
             </span>
             <span className="min-w-0">
               <span className="block text-base font-semibold text-gray-900 mb-1">Search by name</span>
-              <span className="block text-sm text-gray-600">Find an artist or album in your library and the catalogs.</span>
+              <span className="block text-sm text-gray-600">Find an artist or album. Choose your shelves or online catalogs.</span>
             </span>
           </button>
 

@@ -136,7 +136,8 @@ function parseCatalogListing(value: unknown): CatalogListing | null {
 }
 
 export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
-  const { artist: artistInput, album: albumInput, year, coverImageUrl, discogsId: releaseId, barcode, status } = req.body;
+  const { artist: artistInput, album: albumInput, year, coverImageUrl, discogsId: releaseId, barcode, status,
+    applyCatalogReference } = req.body;
   const catalogListing = parseCatalogListing(req.body.catalogListing);
   const discogsId = catalogListing ? null : releaseId;
   const artist = typeof artistInput === 'string' ? artistInput.trim() : '';
@@ -151,6 +152,12 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
   if (status != null && !isShelf(status)) {
     throw new AppError('Choose Collection or Wishlist', 400);
   }
+  if (applyCatalogReference !== undefined && typeof applyCatalogReference !== 'boolean') {
+    throw new AppError('Choose whether to apply the catalog reference', 400);
+  }
+  if (applyCatalogReference && releaseId != null && (catalogListing || !isDatabaseId(releaseId))) {
+    throw new AppError('Choose a valid Discogs release or an album listing', 400);
+  }
 
   const client = await pool.connect();
 
@@ -164,6 +171,7 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
       WHERE albums.discogs_id = $3 OR (lower(artists.name) = lower($1) AND lower(albums.title) = lower($2))
       ORDER BY (albums.discogs_id = $3) DESC NULLS LAST, (collections.album_id IS NOT NULL) DESC, albums.id
       LIMIT 1
+      FOR UPDATE OF albums
     `, [artist, album, discogsId || null]);
 
     let albumId = existing.rows[0]?.id;
@@ -189,6 +197,11 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
     if (!membership.rowCount) {
       await client.query('ROLLBACK');
       return res.status(409).json({ error: 'This album is already saved.', status: 'error', existingAlbumId: albumId });
+    }
+
+    if (applyCatalogReference && existing.rows.length) {
+      await client.query('UPDATE albums SET discogs_id = $1, catalog_listing = $2 WHERE id = $3',
+        [discogsId ?? null, catalogListing, albumId]);
     }
 
     // If barcode provided, store mapping

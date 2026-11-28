@@ -225,11 +225,11 @@ describe('barcode lookup requests', () => {
 
   it('keeps manual entry active on Scan next without initializing the camera', async () => {
     scanBarcode.mockResolvedValue({ artist: 'Portishead', album: 'Dummy', discogsId: 19 });
-    addAlbum.mockResolvedValue({});
+    addAlbum.mockResolvedValue({ album: { id: 23, discogs_id: null } });
     await mount(createElement(BarcodeScanner, props));
     await act(async () => renderer!.root.findByType('input').props.onChange({ target: { value: '0602537340436' } }));
     await act(async () => renderer!.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() }));
-    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Add Dummy to Collection' }).props.onClick());
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Save without pressing to Collection · Dummy' }).props.onClick());
     const next = renderer!.root.findAllByType('button').find(button => button.children.join('') === 'Scan next')!;
     await act(async () => next.props.onClick());
     expect(quagga.init).not.toHaveBeenCalled();
@@ -249,33 +249,39 @@ describe('barcode lookup requests', () => {
   });
 
   it('prefers the active shelf and saves one barcode match when both destinations are clicked', async () => {
-    scanBarcode.mockResolvedValue({ artist: 'Portishead', album: 'Dummy', discogsId: 17 });
-    const save = Promise.withResolvers<void>();
+    scanBarcode.mockResolvedValue({ artist: 'Portishead', album: 'Dummy', discogsId: 17, masterId: 108, coverImageUrl: 'https://example.test/cover.jpg' });
+    const save = Promise.withResolvers<object>();
     addAlbum.mockReturnValueOnce(save.promise);
     await mount(createElement(BarcodeScanner, { ...props, viewMode: 'wishlist' }));
     await startBarcodeCamera();
     await act(async () => quagga.onDetected.mock.calls[0]![0](result));
 
     const addButtons = renderer!.root.findAllByType('button')
-      .filter(button => button.props['aria-label']?.startsWith('Add Dummy to '));
+      .filter(button => button.props['aria-label']?.startsWith('Save without pressing to '));
     expect(addButtons.map(button => button.props['aria-label'])).toEqual([
-      'Add Dummy to Wishlist', 'Add Dummy to Collection',
+      'Save without pressing to Wishlist · Dummy', 'Save without pressing to Collection · Dummy',
     ]);
     await act(async () => {
       addButtons[0].props.onClick();
       addButtons[1].props.onClick();
     });
-    expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      barcode: '0602537340436', discogsId: 17, status: 'wishlist',
-    }));
+    expect(addAlbum).toHaveBeenCalledExactlyOnceWith({
+      artist: 'Portishead', album: 'Dummy', barcode: '0602537340436', coverImageUrl: 'https://example.test/cover.jpg',
+      catalogListing: { source: 'discogs', kind: 'master', id: 108 }, status: 'wishlist', applyCatalogReference: true,
+    });
     expect(renderer!.root.findByProps({ 'aria-label': 'Close barcode lookup' }).props.disabled).toBe(true);
     await act(async () => renderer!.root.findByProps({ labelledBy: 'barcode-title' }).props.onClose());
     expect(props.onClose).not.toHaveBeenCalled();
-    await act(async () => save.resolve());
+    await act(async () => save.resolve({ album: { id: 23, discogs_id: null } }));
     expect(props.onSuccess).toHaveBeenCalledOnce();
     expect(props.onClose).not.toHaveBeenCalled();
-    expect(focused).toHaveBeenCalledWith('Dummy');
-    expect(JSON.stringify(renderer!.toJSON())).toContain('Saved to Wishlist');
+    expect(focused).toHaveBeenLastCalledWith('Open saved album');
+    expect(JSON.stringify(renderer!.toJSON())).toContain('Pressing unconfirmed');
+    const open = renderer!.root.findAllByType('button').find(node => node.children.join('') === 'Open saved album')!;
+    const opener = { isConnected: true };
+    props.onOpenSaved.mockResolvedValueOnce('opened');
+    await act(async () => open.props.onClick({ currentTarget: opener }));
+    expect(props.onOpenSaved).toHaveBeenCalledExactlyOnceWith(23, opener, true);
     const next = renderer!.root.findAllByType('button').find(node => node.children.join('') === 'Scan next')!;
     await act(async () => next.props.onClick());
 
@@ -284,6 +290,37 @@ describe('barcode lookup requests', () => {
     expect(scanBarcode).toHaveBeenCalledOnce();
     await act(async () => detectNext({ codeResult: { code: '012345678905', decodedCodes: [{ error: 0.05 }] } }));
     expect(scanBarcode).toHaveBeenLastCalledWith('012345678905');
+  });
+
+  it('requires a specific barcode candidate and retains that choice across a retry', async () => {
+    const release = { artist: 'Portishead', album: 'Dummy', discogsListing: 'release' as const };
+    scanBarcode.mockResolvedValue({ ...release, discogsId: 17, coverImageUrl: 'https://example.test/cover.jpg', pressingChoices: [
+      { ...release, id: 17, discogsId: 17, pressing: { catalogNumber: 'ABC-123', country: 'US' } },
+      { ...release, id: 19, discogsId: 19, pressing: { catalogNumber: 'ABC-123', country: 'UK' } },
+    ] });
+    addAlbum.mockRejectedValueOnce(new ApiError('Could not save. Try again.', 503))
+      .mockResolvedValueOnce({ album: { id: 23, discogs_id: 19 } });
+    await mount(createElement(BarcodeScanner, props));
+    await startBarcodeCamera();
+    await act(async () => quagga.onDetected.mock.calls[0]![0](result));
+    const opener = { isConnected: true };
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Review pressings for Dummy in Wishlist' })
+      .props.onClick({ currentTarget: opener }));
+    const picker = renderer!.root.findByType('form');
+    const submit = () => act(async () => picker.props.onSubmit({ preventDefault: vi.fn() }));
+    expect(picker.findAllByProps({ type: 'radio' }).map(choice => choice.props.checked)).toEqual([false, false]);
+    await submit();
+    expect(addAlbum).not.toHaveBeenCalled();
+    await act(async () => picker.findAllByProps({ type: 'radio' })[1].props.onChange());
+    await submit();
+    expect(picker.findAllByProps({ type: 'radio' })[1].props.checked).toBe(true);
+    expect(picker.findByProps({ role: 'alert' }).children).toEqual(['Could not save. Try again.']);
+    expect(addAlbum).toHaveBeenLastCalledWith({ artist: 'Portishead', album: 'Dummy', discogsId: 19,
+      coverImageUrl: 'https://example.test/cover.jpg', barcode: '0602537340436', status: 'wishlist', applyCatalogReference: true });
+    await submit();
+    expect(renderer!.root.findAllByProps({ type: 'radio' })).toHaveLength(0);
+    expect(focused).toHaveBeenLastCalledWith('Open saved album');
+    expect(JSON.stringify(renderer!.toJSON())).toContain('Discogs release 19');
   });
 
   it('moves and undoes a wishlisted barcode match inside the open scanner', async () => {

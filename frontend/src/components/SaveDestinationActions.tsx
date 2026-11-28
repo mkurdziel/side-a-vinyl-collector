@@ -28,6 +28,7 @@ interface SaveDestinationActionsProps {
   onSelect: (action: DestinationAction) => void;
   onOpenSaved?: OpenSavedAlbum;
   onReviewPressings?: (opener: HTMLButtonElement) => void;
+  onReviewNewPressings?: (destination: Shelf, opener: HTMLButtonElement) => void;
   reviewFirst?: boolean;
   onSavePressing?: SavePressing;
   onUndoPressing?: UndoPressing;
@@ -41,7 +42,8 @@ interface DestinationChoice {
 
 export function SaveDestinationActions({
   albumTitle, catalogLabel, preferred, existingStatus, existingMatch, existingAlbumId, savedHere, titleMatches, lookup, lookupChoices, searchedNumber, onSearch, searchLabel,
-  openingSaved, pending, disabled, onSelect, onOpenSaved, onReviewPressings, reviewFirst, onSavePressing, onUndoPressing, onSavedCopyRemoved,
+  openingSaved, pending, disabled, onSelect, onOpenSaved, onReviewPressings, onReviewNewPressings, reviewFirst,
+  onSavePressing, onUndoPressing, onSavedCopyRemoved,
 }: SaveDestinationActionsProps) {
   const [comparing, setComparing] = useState(false);
   const statusId = useId();
@@ -77,7 +79,7 @@ export function SaveDestinationActions({
     const opensDialog = reviewIsPrimary || (!!existingStatus && (canOpen || canCompare));
     const savedRecordLabel = titleOnly && matches.length === 1 ? savedCopyLabel(matches[0]) : catalogLabel;
     const primaryLabel = !existingStatus ? (pending === destination ? `Adding to ${name}…`
-      : reviewIsPrimary ? 'Review pressings' : onReviewPressings ? `Add album to ${name}` : `Add to ${name}`)
+      : reviewIsPrimary ? 'Review pressings' : onReviewPressings ? `Save without pressing to ${name}` : `Add to ${name}`)
       : compareFirst ? 'Review pressings' : openingSaved ? 'Opening album…' : canOpen ? 'Open saved album' : 'Saved album';
     const savedLabel = titleOnly && !savedHere ? `Title already in ${matchedShelves}`
       : `${existingMatch === 'release' ? 'This pressing' : 'Album'} saved in ${matchedShelves}`;
@@ -90,9 +92,6 @@ export function SaveDestinationActions({
           {existingStatus && <>{savedLabel}{titleOnly && savedPressing && ` · ${savedEdition}`}</>}
         </p>
         {titleOnly && !savedHere && <p className="rh-album-level-hint">One saved entry per artist and title.</p>}
-        {!existingStatus && onReviewPressings && <p className="rh-album-level-hint">
-          {reviewIsPrimary ? 'Check the sleeve or label before saving.' : 'Adding the album leaves its pressing unconfirmed.'}
-        </p>}
         {/* The Add control becomes the saved-record action on the same DOM node. */}
         <button type="button" data-catalog-primary ref={element => {
           addButton.current = element;
@@ -113,8 +112,8 @@ export function SaveDestinationActions({
           {primaryLabel}
         </button>
         {reviewIsPrimary && <button type="button" className="rh-lookup-link text-left" aria-disabled={blocked}
-          aria-label={`Save album without pressing to ${name} · ${catalogLabel}`}
-          onClick={() => { if (!blocked) onSelect(destination); }}>Save album without pressing</button>}
+          aria-label={`Save without pressing to ${name} · ${catalogLabel}`}
+          onClick={() => { if (!blocked) onSelect(destination); }}>Save without pressing to {name}</button>}
         {!existingStatus && onReviewPressings && !reviewIsPrimary && <button type="button" className="rh-lookup-link text-left"
           aria-disabled={blocked} aria-haspopup="dialog" aria-label={reviewLabel}
           onClick={event => { if (!blocked) onReviewPressings(event.currentTarget); }}>Review pressings</button>}
@@ -164,9 +163,10 @@ export function SaveDestinationActions({
     const moving = action === 'move';
     const unavailable = !action || blocked;
     const busy = !!action && pending === action;
-    const label = action ? `${moving ? 'Move' : 'Add'} to ${name}` : `Saved in ${name}`;
+    const canReview = action === shelf && !!onReviewNewPressings;
+    const label = canReview ? `Save without pressing to ${name}` : action ? `${moving ? 'Move' : 'Add'} to ${name}` : `Saved in ${name}`;
     const matchReason = existingMatch === 'release' ? 'Matched by Discogs release' : 'Matched by barcode';
-    const accessibleLabel = action
+    const accessibleLabel = canReview ? `${label} · ${albumTitle}` : action
       ? `${moving ? 'Move' : 'Add'} ${albumTitle} to ${name}`
       : `${albumTitle}: ${label}`;
     const color = !action
@@ -176,22 +176,26 @@ export function SaveDestinationActions({
         : 'border-gray-300 bg-gray-100 text-gray-900 hover:bg-gray-50';
 
     return (
-      // Keep the destination's control mounted when its label becomes a saved status, so focus stays put.
-      <button
-        key={shelf}
-        ref={shelf === firstShelf && action === firstShelf ? addButton : undefined}
-        type="button"
-        aria-label={accessibleLabel}
-        aria-description={action ? undefined : matchReason}
-        aria-disabled={unavailable}
-        aria-busy={busy}
-        tabIndex={action ? undefined : -1}
-        className={`min-h-11 rounded-lg border px-2 py-1.5 text-xs font-semibold transition-colors ${color}`}
-        onClick={() => { if (action && !unavailable) onSelect(action); }}
-      >
-        {busy ? `${moving ? 'Moving' : 'Adding'} to ${name}…` : label}
-        {!action && <span className="block font-normal">{matchReason}</span>}
-      </button>
+      <div key={shelf} className="grid gap-1">
+        {canReview && <button type="button" className="rh-lookup-link text-left" aria-haspopup="dialog" aria-disabled={blocked}
+          aria-label={`Review pressings for ${albumTitle} in ${name}`} onClick={event => {
+            if (!blocked) onReviewNewPressings(shelf, event.currentTarget);
+          }}>Review pressings</button>}
+        <button
+          ref={shelf === firstShelf && action === firstShelf ? addButton : undefined}
+          type="button"
+          aria-label={accessibleLabel}
+          aria-description={action ? undefined : matchReason}
+          aria-disabled={unavailable}
+          aria-busy={busy}
+          tabIndex={action ? undefined : -1}
+          className={`min-h-11 rounded-lg border px-2 py-1.5 text-xs font-semibold transition-colors ${color}`}
+          onClick={() => { if (action && !unavailable) onSelect(action); }}
+        >
+          {busy ? `${moving ? 'Moving' : 'Adding'} to ${name}…` : label}
+          {!action && <span className="block font-normal">{matchReason}</span>}
+        </button>
+      </div>
     );
   };
 
