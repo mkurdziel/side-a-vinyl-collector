@@ -112,6 +112,10 @@ describe('library and catalog search', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
     expect(search).not.toHaveBeenCalled();
     expect(button('Search').props.disabled).toBe(false);
+    expect(button('Search').findByType('span').props.className).toBeUndefined();
+    expect(renderer.root.findByProps({ id: 'album-search' }).props['aria-describedby']).toBe('short-search-scope');
+    expect(renderer.root.findByProps({ id: 'short-search-scope' }).children.join(''))
+      .toBe('Exact names in Collection and Wishlist. Online catalogs need two characters.');
 
     await act(async () => renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }));
     expect(search).toHaveBeenCalledExactlyOnceWith('O', expect.any(AbortSignal), 'saved', undefined, 0, 'title');
@@ -125,6 +129,13 @@ describe('library and catalog search', () => {
     await editSearch('É');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
     expect(search).toHaveBeenCalledTimes(1);
+    await chooseScope('wishlist');
+    expect(renderer.root.findByProps({ id: 'short-search-scope' }).children.join(''))
+      .toBe('One character checks for an exact title or artist in Wishlist.');
+    search.mockResolvedValueOnce({ local: [], discogs: [] });
+    await act(async () => renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }));
+    expect(search).toHaveBeenLastCalledWith('É', expect.any(AbortSignal), 'saved', 'wishlist', 0, 'title');
+    expect(JSON.stringify(renderer.toJSON())).toContain('No exact title or artist matches “É” in Wishlist.');
   });
 
   it('cancels a queued search when cleared and ignores an older response', async () => {
@@ -736,11 +747,15 @@ describe('library and catalog search', () => {
     expect(button('Load more saved albums')).toBeDefined();
   });
 
-  it('uses the explicit identifier lookup and only saves the edition the collector chose', async () => {
-    const first = { ...catalog, discogsListing: 'release' as const, pressing: { catalogNumber: 'ABC-123' } };
-    const second = { ...first, id: 102, discogsId: 102, year: 2020, pressing: { catalogNumber: 'ABC-123', format: 'Vinyl' } };
-    searchCatalogNumber.mockResolvedValue({ local: [], discogs: [{ ...first, pressingChoices: [first, second], catalogNumberMatch: 'exact' }] });
-    addAlbum.mockResolvedValue({ album: { ...saved, title: catalog.album, status: 'collection', discogs_id: 102 } });
+  it('paginates all fetched editions for an exact number and saves only the chosen pressing', async () => {
+    const choices = Array.from({ length: 9 }, (_, index) => {
+      const id = 101 + index;
+      return { ...catalog, id, discogsId: id, discogsListing: 'release' as const, ...(index > 0 && { year: 2020 }),
+        catalogNumberMatch: 'exact' as const, pressing: { catalogNumber: 'ABC-123', format: 'Vinyl' } };
+    });
+    searchCatalogNumber.mockResolvedValue({ local: [], catalogSampled: true,
+      discogs: [{ ...choices[0], pressingChoices: choices, pressingSampled: true }] });
+    addAlbum.mockResolvedValue({ album: { ...saved, title: catalog.album, status: 'collection', discogs_id: 109 } });
     await renderLibrary();
     await act(async () => button('Add Album').props.onClick());
     await act(async () => renderer.root.findByType(AddMenu).props.onCatalogNumberClick());
@@ -756,10 +771,20 @@ describe('library and catalog search', () => {
       .props.onClick({ currentTarget: { closest: () => null } }));
     const picker = renderer.root.findByType(CatalogPressingPicker);
     expect(addAlbum).not.toHaveBeenCalled();
-    expect(picker.findAllByType('input')).toHaveLength(2);
-    await act(async () => picker.findByProps({ value: 102 }).props.onChange());
+    const radioIds = () => picker.findAllByType('input').map(radio => radio.props.value);
+    expect(radioIds()).toEqual([101, 102, 103]);
+    const link = picker.findAllByType('a').find(node => node.props.href.startsWith('https://www.discogs.com/search/'))!;
+    expect(new URL(link.props.href).searchParams.get('q')).toBe('John Coltrane Giant Steps ABC-123');
+    await act(async () => button('More pressings').props.onClick());
+    expect(radioIds()).toEqual([104, 105, 106]);
+    await act(async () => button('More pressings').props.onClick());
+    expect(radioIds()).toEqual([107, 108, 109]);
+    expect(picker.findAllByType('input').every(radio => !radio.props.checked)).toBe(true);
+    expect(addAlbum).not.toHaveBeenCalled();
+    await act(async () => picker.findByProps({ value: 109 }).props.onChange());
+    expect(JSON.stringify(renderer.toJSON())).toContain('Only part of the Discogs results are shown.');
     await act(async () => picker.findByType('form').props.onSubmit({ preventDefault: () => {} }));
-    expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ discogsId: 102, status: 'collection' }));
+    expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ discogsId: 109, status: 'collection' }));
     expect(addAlbum.mock.lastCall?.[0].year).toBeUndefined();
   });
 
@@ -784,7 +809,7 @@ describe('library and catalog search', () => {
     expect(annotations).toContain('Discogs lists this number for your saved release.');
     expect(annotations).toContain('Same album on your shelf. Its pressing is unconfirmed.');
     const catalogHeader = renderer.root.findByProps({ className: 'rh-catalog-bar rh-catalog-bar-sticky' });
-    expect(catalogHeader.findByProps({ role: 'status' }).children.join('')).toContain('2 matches. Refine the search for more matches.');
+    expect(catalogHeader.findByProps({ role: 'status' }).children.join('')).toContain('2 matches. Discogs returned a partial list.');
     expect(JSON.stringify(renderer.toJSON())).toContain('Catalog number unverified');
   });
 

@@ -16,6 +16,7 @@ interface AlbumDetailModalProps {
 type PressingResult = { status: 'loading' | 'failed' } | { status: 'ready'; pressing: PressingDetails | null };
 type ArtworkOperation = { kind: 'search' | 'save'; albumId: number };
 type ArtworkNotice = 'empty' | 'failed' | 'updated';
+type ArtworkSide = 'current' | 'selected';
 
 function artworkRelease(source: SearchCoverArtResult['source'] | undefined, id: string | number | undefined) {
   if (source === 'Discogs' && typeof id === 'number') {
@@ -49,7 +50,7 @@ function artworkFromUrl(url: string | undefined, cached: boolean) {
   return { source: url ? 'External image' : cached ? 'Saved artwork' : 'Source unlisted', identified: false };
 }
 
-function ArtworkFigure({ label, title, source, sourceIdentified = true, year, release, dimensions, unavailable, children }: {
+function ArtworkFigure({ label, title, source, sourceIdentified = true, year, release, dimensions, unavailable, onEnlarge, enlargeButtonRef, children }: {
   label: string;
   title?: string;
   source: string;
@@ -58,6 +59,8 @@ function ArtworkFigure({ label, title, source, sourceIdentified = true, year, re
   release?: ReturnType<typeof artworkRelease>;
   dimensions?: string;
   unavailable?: boolean;
+  onEnlarge?: () => void;
+  enlargeButtonRef?: RefObject<HTMLButtonElement | null>;
   children: ReactNode;
 }) {
   const headingId = useId();
@@ -70,6 +73,8 @@ function ArtworkFigure({ label, title, source, sourceIdentified = true, year, re
       <div className="aspect-square overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
         {unavailable ? <p className="grid h-full place-items-center p-2 text-center text-xs text-gray-600">Image unavailable</p> : children}
       </div>
+      {onEnlarge && !unavailable && <button ref={enlargeButtonRef} type="button" className="rh-lookup-link -ml-2 text-left sm:hidden"
+        aria-label={`Enlarge ${label.toLowerCase()}`} onClick={onEnlarge}>Enlarge {label === 'Current artwork' ? 'current' : 'selected'}</button>}
       <div className="space-y-0.5 text-xs text-gray-600">
         {title && <p className="text-sm font-medium text-gray-900">{title}</p>}
         <p>{source}{hasYear && <> · <span className="sr-only">Release year </span>{year}</>}{dimensions && ` · ${dimensions} px`}</p>
@@ -144,6 +149,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
   const [showSelectionModal, setShowSelectionModal] = useState(false);
   const [selectedArtwork, setSelectedArtwork] = useState<SearchCoverArtResult>();
   const [currentArtwork, setCurrentArtwork] = useState<SearchCoverArtResult>();
+  const [expandedArtwork, setExpandedArtwork] = useState<ArtworkSide>();
   const [candidates, setCandidates] = useState<SearchCoverArtResult[]>([]);
   const [imageDimensions, setImageDimensions] = useState<Record<string, string>>({});
   const [savingArtwork, setSavingArtwork] = useState(false);
@@ -163,6 +169,9 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
   const editArtworkButton = useRef<HTMLButtonElement>(null);
   const artworkChooserHeading = useRef<HTMLHeadingElement>(null);
   const previewHeading = useRef<HTMLHeadingElement>(null);
+  const enlargeCurrentButton = useRef<HTMLButtonElement>(null);
+  const enlargeSelectedButton = useRef<HTMLButtonElement>(null);
+  const restoreEnlargeButton = useRef<ArtworkSide | undefined>(undefined);
   const candidateButtons = useRef(new Map<string, HTMLButtonElement>());
   const restoreCandidate = useRef<string | undefined>(undefined);
   const artworkOperation = useRef<ArtworkOperation | undefined>(undefined);
@@ -178,6 +187,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
       setShowSelectionModal(false);
       setSelectedArtwork(undefined);
       setCurrentArtwork(undefined);
+      setExpandedArtwork(undefined);
       setRefetching(false);
       setSavingArtwork(false);
       setArtworkNotice(undefined);
@@ -191,6 +201,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
   useLayoutEffect(() => () => {
     artworkOperation.current = undefined;
     restoreCandidate.current = undefined;
+    restoreEnlargeButton.current = undefined;
   }, [album.id]);
 
   const editingArtworkQuery = artworkQueryDraft !== undefined;
@@ -211,6 +222,16 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
       restoreCandidate.current = undefined;
     }
   }, [selectedArtwork]);
+
+  useLayoutEffect(() => {
+    if (expandedArtwork) previewHeading.current?.focus();
+    else if (restoreEnlargeButton.current) {
+      const enlarge = restoreEnlargeButton.current === 'current' ? enlargeCurrentButton.current : enlargeSelectedButton.current;
+      if (enlarge?.getClientRects().length) enlarge.focus();
+      else previewHeading.current?.focus();
+      restoreEnlargeButton.current = undefined;
+    }
+  }, [expandedArtwork]);
 
   const handleSearchArtwork = async (query?: SearchCoverArtQuery) => {
     if (artworkOperation.current) return;
@@ -261,6 +282,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
     setArtworkNotice(undefined);
     setArtworkQueryDraft(undefined);
     setSelectedArtwork(undefined);
+    setExpandedArtwork(undefined);
     setShowSelectionModal(false);
   };
 
@@ -269,6 +291,11 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
     restoreCandidate.current = selectedArtwork.url;
     setArtworkSaveFailed(false);
     setSelectedArtwork(undefined);
+  };
+
+  const backToArtworkComparison = () => {
+    restoreEnlargeButton.current = expandedArtwork;
+    setExpandedArtwork(undefined);
   };
 
   const selectedDimensions = selectedArtwork && imageDimensions[selectedArtwork.url];
@@ -281,7 +308,13 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
     setSavingArtwork(true);
     setArtworkSaveFailed(false);
     try {
-      const data = await api.updateCoverArt(operation.albumId, selectedArtwork.url, selectedArtwork.source);
+      const title = selectedArtwork.title.trim();
+      const { year } = selectedArtwork;
+      const data = await api.updateCoverArt(operation.albumId, selectedArtwork.url, selectedArtwork.source, {
+        releaseId: artworkRelease(selectedArtwork.source, selectedArtwork.id) ? selectedArtwork.id : undefined,
+        title: title && title.length <= 1000 && !/\p{Cc}/u.test(title) ? title : undefined,
+        year: typeof year === 'number' && Number.isInteger(year) && year >= 1 && year <= 9999 ? year : undefined,
+      });
       if (artworkOperation.current !== operation) return;
       const updatedAlbum = { ...currentAlbum, ...data.album };
 
@@ -311,8 +344,14 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
   };
 
   const currentImage = artworkFromUrl(currentAlbum.cover_image_url, !!currentAlbum.local_cover_path);
-  const knownArtwork = currentArtwork?.url === currentAlbum.cover_image_url ? currentArtwork : undefined;
-  const artworkSource = knownArtwork?.source ?? currentImage.source;
+  const persistedArtwork = currentAlbum.cover_art_provenance;
+  const knownArtwork = persistedArtwork?.url === currentAlbum.cover_image_url ? persistedArtwork : undefined;
+  const matchedArtwork = !knownArtwork && currentArtwork?.url === currentAlbum.cover_image_url ? currentArtwork : undefined;
+  const artworkSource = knownArtwork?.source ?? matchedArtwork?.source ?? currentImage.source;
+  const artworkTitle = knownArtwork?.title ?? matchedArtwork?.title;
+  const artworkYear = knownArtwork?.year ?? matchedArtwork?.year;
+  const currentRelease = artworkRelease(knownArtwork?.source, knownArtwork?.releaseId)
+    ?? artworkRelease(matchedArtwork?.source, matchedArtwork?.id) ?? currentImage.release;
 
   const source = savedCatalogSource(currentAlbum);
   const pressingId = source?.kind === 'pressing' ? currentAlbum.discogs_id : undefined;
@@ -434,6 +473,9 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
               <dt className="text-sm font-medium text-gray-700">Cover image source</dt>
               <dd className="text-sm text-gray-600">
                 <p>{artworkSource}</p>
+                {knownArtwork && (artworkTitle || artworkYear) && <p>{[artworkTitle, artworkYear].filter(Boolean).join(' · ')}</p>}
+                {knownArtwork && currentRelease && <a className="rh-comparison-source" href={currentRelease.url} target="_blank" rel="noreferrer"
+                  aria-label={`${currentRelease.full} for saved artwork (opens in a new tab)`}>{currentRelease.visible}</a>}
                 {!currentAlbum.cover_art_fetched && (
                   <p className="mt-1"><span className="font-medium text-amber-600">Unverified artwork.</span> A fallback image may be shown until Side A finds a cover or you choose one.</p>
                 )}
@@ -471,44 +513,50 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
 
       {showSelectionModal && (
         <ModalDialog labelledBy={artworkChooserId} onClose={closeArtworkPicker}
-          onEscape={editingArtworkQuery ? closeArtworkQuery : selectedArtwork ? backToArtworkChoices : closeArtworkPicker} returnFocusTo={artworkButtonRef}>
+          onEscape={editingArtworkQuery ? closeArtworkQuery : expandedArtwork ? backToArtworkComparison
+            : selectedArtwork ? backToArtworkChoices : closeArtworkPicker} returnFocusTo={artworkButtonRef}>
           <div className="rh-dialog-panel max-w-4xl flex flex-col">
             <div className="rh-dialog-header flex flex-none flex-wrap items-center justify-between gap-x-2 border-b border-gray-200 px-4 py-2 sm:px-6">
               <h2 id={artworkChooserId} ref={selectedArtwork ? previewHeading : artworkChooserHeading} tabIndex={-1}
-                className="text-xl font-bold text-gray-900">{selectedArtwork ? 'Compare artwork' : 'Choose cover art'}</h2>
+                className="text-xl font-bold text-gray-900">{expandedArtwork === 'current' ? 'Enlarged current artwork'
+                  : expandedArtwork === 'selected' ? 'Enlarged selected artwork' : selectedArtwork ? 'Compare artwork' : 'Choose cover art'}</h2>
               <button type="button" onClick={closeArtworkPicker} aria-disabled={savingArtwork}
                 className="rh-lookup-link aria-disabled:opacity-60">Keep current artwork</button>
             </div>
 
             {selectedArtwork ? <>
               <div className="min-h-0 space-y-3 overflow-y-auto p-4 sm:p-6">
-                <div className="grid max-w-lg grid-cols-2 gap-3 sm:gap-5">
-                  <ArtworkFigure label="Current artwork" title={knownArtwork?.title} source={artworkSource} year={knownArtwork?.year}
-                    sourceIdentified={!!knownArtwork || currentImage.identified}
-                    release={artworkRelease(knownArtwork?.source, knownArtwork?.id) ?? currentImage.release}
-                    dimensions={imageDimensions[coverUrl] === 'Unavailable' ? undefined : imageDimensions[coverUrl]} unavailable={failedCoverUrl === coverUrl}>
+                <div className={expandedArtwork ? 'mx-auto max-w-[min(100%,65dvh)]' : 'grid max-w-lg grid-cols-2 gap-3 sm:gap-5'}>
+                  {expandedArtwork !== 'selected' && <ArtworkFigure label="Current artwork" title={artworkTitle} source={artworkSource} year={artworkYear}
+                    sourceIdentified={!!(knownArtwork || matchedArtwork) || currentImage.identified}
+                    release={currentRelease}
+                    dimensions={imageDimensions[coverUrl] === 'Unavailable' ? undefined : imageDimensions[coverUrl]} unavailable={failedCoverUrl === coverUrl}
+                    enlargeButtonRef={enlargeCurrentButton} onEnlarge={!expandedArtwork && !savingArtwork ? () => setExpandedArtwork('current') : undefined}>
                     <img src={coverUrl} alt="Cover currently saved for this album" className="size-full object-contain"
                       onLoad={event => recordDimensions(coverUrl, event.currentTarget)} onError={() => setFailedCoverUrl(coverUrl)} />
-                  </ArtworkFigure>
-                  <ArtworkFigure label="Selected artwork" title={selectedArtwork.title} source={selectedArtwork.source} year={selectedArtwork.year}
+                  </ArtworkFigure>}
+                  {expandedArtwork !== 'current' && <ArtworkFigure label="Selected artwork" title={selectedArtwork.title} source={selectedArtwork.source} year={selectedArtwork.year}
                     release={artworkRelease(selectedArtwork.source, selectedArtwork.id)}
-                    dimensions={selectedDimensions === 'Unavailable' ? undefined : selectedDimensions} unavailable={selectedDimensions === 'Unavailable'}>
+                    dimensions={selectedDimensions === 'Unavailable' ? undefined : selectedDimensions} unavailable={selectedDimensions === 'Unavailable'}
+                    enlargeButtonRef={enlargeSelectedButton} onEnlarge={!expandedArtwork && !savingArtwork ? () => setExpandedArtwork('selected') : undefined}>
                     <img src={selectedArtwork.url} alt="Proposed replacement cover for this album" className="size-full object-contain"
                       onLoad={event => recordDimensions(selectedArtwork.url, event.currentTarget)} onError={() => markArtworkUnavailable(selectedArtwork.url)} />
-                  </ArtworkFigure>
+                  </ArtworkFigure>}
                 </div>
-                {!selectedDimensions && <p role="status" className="text-sm text-gray-600">Loading selected artwork…</p>}
-                {selectedDimensions === 'Unavailable' && <p role="alert" className="text-sm text-red-600">Couldn’t load this cover. Choose another or keep your current artwork.</p>}
+                {expandedArtwork !== 'current' && !selectedDimensions && <p role="status" className="text-sm text-gray-600">Loading selected artwork…</p>}
+                {expandedArtwork !== 'current' && selectedDimensions === 'Unavailable' && <p role="alert" className="text-sm text-red-600">Couldn’t load this cover. Choose another or keep your current artwork.</p>}
               </div>
               <div className="flex flex-none flex-wrap items-center justify-end gap-x-2 border-t border-gray-200 px-4 py-2 sm:px-6">
                 {savingArtwork && <p role="status" className="basis-full text-sm text-gray-600">Updating artwork…</p>}
                 {artworkSaveFailed && <p role="alert" className="basis-full text-sm text-red-600">Couldn’t update the artwork. Try applying it again or keep your current artwork.</p>}
-                <button type="button" onClick={backToArtworkChoices} aria-disabled={savingArtwork}
-                  className="rh-lookup-link aria-disabled:opacity-60">Back to choices</button>
-                <button type="button" onClick={() => void applyArtwork()} aria-disabled={!canApplyArtwork} aria-busy={savingArtwork}
-                  className="rh-primary-action px-3 text-sm font-semibold aria-disabled:opacity-60">
-                  {savingArtwork ? 'Applying artwork…' : 'Apply artwork'}
-                </button>
+                {expandedArtwork ? <button type="button" onClick={backToArtworkComparison} className="rh-lookup-link">Back to comparison</button> : <>
+                  <button type="button" onClick={backToArtworkChoices} aria-disabled={savingArtwork}
+                    className="rh-lookup-link aria-disabled:opacity-60">Back to choices</button>
+                  <button type="button" onClick={() => void applyArtwork()} aria-disabled={!canApplyArtwork} aria-busy={savingArtwork}
+                    className="rh-primary-action px-3 text-sm font-semibold aria-disabled:opacity-60">
+                    {savingArtwork ? 'Applying artwork…' : 'Apply artwork'}
+                  </button>
+                </>}
               </div>
             </> : <div className="min-h-0 space-y-3 overflow-y-auto p-4 sm:p-6">
               <div className="grid min-w-0 gap-2 border-b border-gray-200 pb-3 [overflow-wrap:anywhere]">

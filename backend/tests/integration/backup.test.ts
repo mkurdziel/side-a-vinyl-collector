@@ -1,12 +1,14 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { getTestPool } from '../setup/testContainers';
 import request from 'supertest';
 import express from 'express';
 import AdmZip from 'adm-zip';
 import backupRoutes from '../../src/routes/backup';
 import * as albumController from '../../src/controllers/albumController';
+import { fetchOfficialCoverArt, updateCoverArt } from '../../src/controllers/coverArtController';
 import { errorHandler } from '../../src/middleware/errorHandler';
 import storage from '../../src/services/storage';
+import musicbrainz from '../../src/services/musicbrainz';
 import fs from 'fs';
 import path from 'path';
 
@@ -27,13 +29,17 @@ describe('Backup and Restore', () => {
     app.use(express.json());
     app.post('/api/albums', albumController.addAlbum);
     app.get('/api/albums', albumController.getAllAlbums);
+    app.get('/api/albums/:id', albumController.getAlbumById);
     app.delete('/api/albums/:id', albumController.deleteAlbum);
     app.post('/api/albums/:id/removal/undo', albumController.undoAlbumRemoval);
     app.patch('/api/albums/:id/status', albumController.updateAlbumStatus);
     app.post('/api/albums/:id/status/undo', albumController.undoAlbumMove);
+    app.post('/api/cover-art/:id/update', updateCoverArt);
+    app.post('/api/cover-art/:id/fetch', fetchOfficialCoverArt);
     app.use('/api/backup', backupRoutes);
     app.use(errorHandler);
   });
+  afterEach(() => vi.restoreAllMocks());
 
   it('should export albums with cover art', async () => {
     // Add test albums
@@ -184,7 +190,7 @@ describe('Backup and Restore', () => {
     fs.unlinkSync(tempPath);
   });
 
-  it('previews without modifying data and round-trips IDs, mappings, notes and artwork', async () => {
+  it('previews without modifying data and round-trips IDs, mappings, notes and selected artwork provenance', async () => {
     const { rows: [artist] } = await testPool.query("INSERT INTO artists (name, discogs_id) VALUES ('Test band', 654) RETURNING id");
     const mbid = '59a5cdbc-55c5-48bc-a687-937638f96ad9';
     const { rows: [album] } = await testPool.query(
@@ -192,10 +198,17 @@ describe('Backup and Restore', () => {
       [artist.id, mbid],
     );
     const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x01]);
-    const artwork = await storage.saveCoverArt(bytes, album.id);
-    await testPool.query('UPDATE albums SET local_cover_path = $1 WHERE id = $2', [artwork, album.id]);
+    vi.spyOn(musicbrainz, 'downloadCoverArt').mockResolvedValueOnce(bytes);
+    const source = 'Discogs';
+    const url = 'https://i.discogs.com/test-cover.png';
+    const provenance = { releaseId: 1203, title: 'Test record artwork edition', year: 1987 };
+    const savedProvenance = { ...provenance, url, source };
     await testPool.query("INSERT INTO collections (album_id, status, notes) VALUES ($1, 'wishlist', 'test notes')", [album.id]);
     await testPool.query("INSERT INTO barcodes (album_id, barcode) VALUES ($1, '0123456789012')", [album.id]);
+    const applied = await request(app).post(`/api/cover-art/${album.id}/update`).send({ url, source, provenance }).expect(200);
+    expect(applied.body.album).toMatchObject({ discogs_id: 987, musicbrainz_id: mbid, cover_art_provenance: savedProvenance });
+    const reopened = await request(app).get(`/api/albums/${album.id}`).expect(200);
+    expect(reopened.body.album).toMatchObject({ discogs_id: 987, cover_art_provenance: savedProvenance });
     const exported = await request(app)
       .get('/api/backup/export')
       .buffer(true)
@@ -217,10 +230,35 @@ describe('Backup and Restore', () => {
     const { rows: [saved] } = await testPool.query(
       'SELECT albums.*, collections.notes, collections.status, artists.discogs_id AS artist_discogs, barcodes.barcode FROM albums JOIN artists ON artists.id = albums.artist_id JOIN collections ON collections.album_id = albums.id JOIN barcodes ON barcodes.album_id = albums.id',
     );
-    expect(saved).toMatchObject({ id: album.id, artist_discogs: 654, discogs_id: 987, musicbrainz_id: mbid, barcode: '0123456789012', status: 'wishlist', notes: 'test notes' });
+    expect(saved).toMatchObject({ id: album.id, artist_discogs: 654, discogs_id: 987, musicbrainz_id: mbid, barcode: '0123456789012', status: 'wishlist', notes: 'test notes', cover_art_provenance: savedProvenance });
     expect(await storage.readCoverArt(saved.local_cover_path)).toEqual(bytes);
     const inserted = await testPool.query("INSERT INTO artists (name) VALUES ('Next artist') RETURNING id");
     expect(inserted.rows[0].id).toBeGreaterThan(artist.id);
+  });
+
+  it('clears selected artwork provenance when another artwork path replaces the image', async () => {
+    const mbid = '59a5cdbc-55c5-48bc-a687-937638f96ad9';
+    const { rows: [artist] } = await testPool.query("INSERT INTO artists (name) VALUES ('Test artist') RETURNING id");
+    const { rows: [album] } = await testPool.query(
+      "INSERT INTO albums (artist_id, title, discogs_id, musicbrainz_id) VALUES ($1, 'Test album', 987, $2) RETURNING id",
+      [artist.id, mbid],
+    );
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x01]);
+    vi.spyOn(musicbrainz, 'downloadCoverArt').mockResolvedValue(bytes);
+    const selected = { url: 'https://i.discogs.com/selected.png', source: 'Discogs', provenance: { releaseId: 1203 } };
+    const updatePath = `/api/cover-art/${album.id}/update`;
+    await request(app).post(updatePath).send(selected).expect(200);
+    const same = await request(app).post(updatePath).send({ url: selected.url, source: selected.source }).expect(200);
+    expect(same.body.album.cover_art_provenance).toMatchObject({ releaseId: 1203 });
+
+    const different = await request(app).post(updatePath).send({ url: 'https://i.discogs.com/a-different-image.png' }).expect(200);
+    expect(different.body.album).toMatchObject({ discogs_id: 987, cover_art_provenance: null });
+
+    await request(app).post(updatePath).send(selected).expect(200);
+    const official = `https://coverartarchive.org/release/${mbid}/front`;
+    vi.spyOn(musicbrainz, 'getCoverArt').mockResolvedValueOnce(official);
+    const refreshed = await request(app).post(`/api/cover-art/${album.id}/fetch`).expect(200);
+    expect(refreshed.body.album).toMatchObject({ discogs_id: 987, cover_art_provenance: null, cover_image_url: official });
   });
 
   it('reports legacy and missing artwork, and preserves the library when restore data is invalid', async () => {
@@ -244,7 +282,19 @@ describe('Backup and Restore', () => {
       albums: [{ ...data.albums[0], musicbrainz_id: 'not a UUID' }],
     })));
     await request(app).post('/api/backup/import').attach('backup', zip.toBuffer(), 'invalid.zip').expect(400);
-    expect((await testPool.query('SELECT title, local_cover_path FROM albums')).rows).toEqual([{ title: 'Saved album', local_cover_path: null }]);
+    expect((await testPool.query('SELECT title, local_cover_path, cover_art_provenance FROM albums')).rows).toEqual([
+      { title: 'Saved album', local_cover_path: null, cover_art_provenance: null },
+    ]);
+    zip.updateFile('data.json', Buffer.from(JSON.stringify({
+      ...data,
+      albums: [{ ...data.albums[0], cover_image_url: 'https://example.com/new.png', cover_art_provenance: {
+        url: 'https://example.com/old.png', source: 'Discogs', releaseId: 1203,
+      } }],
+    })));
+    await request(app).post('/api/backup/import').attach('backup', zip.toBuffer(), 'stale-artwork.zip').expect(200);
+    expect((await testPool.query('SELECT cover_image_url, cover_art_provenance FROM albums')).rows).toEqual([
+      { cover_image_url: 'https://example.com/new.png', cover_art_provenance: null },
+    ]);
   });
 
   it('omits pending undo receipts from export and invalidates them when the same library IDs are restored', async () => {

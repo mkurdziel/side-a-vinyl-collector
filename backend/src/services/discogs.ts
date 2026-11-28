@@ -4,6 +4,15 @@ import { RateLimiter } from '../utils/rateLimit';
 import type { DiscogsAlbum, DiscogsSearchResponse, PressingDetails } from '../types';
 import { AppError } from '../middleware/errorHandler';
 
+interface DiscogsReleaseSample {
+  albums: DiscogsAlbum[];
+  hasMore: boolean;
+}
+
+function hasMoreReleases(pagination: DiscogsSearchResponse['pagination'] | undefined, count: number, limit: number) {
+  return pagination ? pagination.pages > pagination.page : count >= limit;
+}
+
 const joinPressingValues = (values: unknown[]): string | undefined => [...new Set(values.filter(
   (value): value is string => typeof value === 'string' && Boolean(value.trim()),
 ).map(value => value.trim()))].join(' · ') || undefined;
@@ -159,17 +168,12 @@ class DiscogsService {
   }
 
   async searchByQuery(query: string, limit: number = 20): Promise<DiscogsAlbum[]> {
-    return this.searchDatabaseReleases({ q: query }, `search:v2:${query}:${limit}`, limit);
+    return (await this.searchReleaseSample({ q: query }, limit)).albums;
   }
 
-  async searchByCatalogNumber(catalogNumber: string, limit: number = 20): Promise<DiscogsAlbum[]> {
-    return this.searchDatabaseReleases({ catno: catalogNumber }, `catno:v1:${catalogNumber}:${limit}`, limit);
-  }
-
-  private async searchDatabaseReleases(
-    search: { q: string } | { catno: string }, cacheKey: string, limit: number,
-  ): Promise<DiscogsAlbum[]> {
-    const cached = await this.getCached<DiscogsAlbum[]>(cacheKey);
+  async searchReleaseSample(search: { q: string } | { catno: string }, limit: number): Promise<DiscogsReleaseSample> {
+    const cacheKey = 'q' in search ? `search:v3:${search.q}:${limit}` : `catno:v2:${search.catno}:${limit}`;
+    const cached = await this.getCached<DiscogsReleaseSample>(cacheKey);
     if (cached) return cached;
 
     try {
@@ -184,8 +188,9 @@ class DiscogsService {
         ...this.parseDiscogsRelease(release),
         pressing: this.parseSearchPressing(release),
       }));
-      await this.setCache(cacheKey, albums);
-      return albums;
+      const sample = { albums, hasMore: hasMoreReleases(result.pagination, albums.length, limit) };
+      await this.setCache(cacheKey, sample);
+      return sample;
     } catch (error) {
       this.logError('Discogs release search error:', error);
       this.throwSearchError(error, 'Failed to search Discogs');
@@ -270,9 +275,9 @@ class DiscogsService {
     }
   }
 
-  async getArtistReleases(artistId: number, limit: number = 20): Promise<DiscogsAlbum[]> {
-    const cacheKey = `artist_releases:v4:${artistId}:${limit}`;
-    const cached = await this.getCached<DiscogsAlbum[]>(cacheKey);
+  async getArtistReleases(artistId: number, limit: number = 20): Promise<DiscogsReleaseSample> {
+    const cacheKey = `artist_releases:v5:${artistId}:${limit}`;
+    const cached = await this.getCached<DiscogsReleaseSample>(cacheKey);
     if (cached) return cached;
 
     try {
@@ -284,47 +289,23 @@ class DiscogsService {
         return response.data;
       });
 
-      // Filter main releases (masters or main releases)
-      const albums: DiscogsAlbum[] = [];
-      const seen = new Set<string>();
-
-      for (const release of result.releases) {
-        // Simple deduplication by title
-        const titleKey = release.title.toLowerCase().trim();
-        if (seen.has(titleKey)) continue;
-        
-        // Skip singles/EPs if possible, though Discogs structure varies. 
-        // We'll trust Discogs 'Main' releases or similar if available, otherwise take all.
-        // For 'releases' endpoint, it lists everything.
-        // Let's filter slightly by type if available, but Discogs API is loose here without deeper calls.
-        // We will just map them.
-        
-        seen.add(titleKey);
-
-        const year = release.year || undefined;
-        // Use thumb as cover image - it's usually available in list view
-        const coverImageUrl = release.thumb || undefined;
-
-        albums.push({
-          id: release.id,
-          artist: release.artist, // 'artist' field might not be present in list, logic below
-          album: release.title,
-          year,
-          coverImageUrl,
-          discogsId: release.type === 'release' ? release.id : 0,
-          discogsListing: release.type === 'master' || release.type === 'release' ? release.type : undefined,
-          masterId: masterId(release.type === 'master' ? release.id : release.master_id),
-          pressing: release.type === 'release' ? this.parseSearchPressing(release) : undefined,
-        });
-        
-        if (albums.length >= limit) break;
-      }
-
-      await this.setCache(cacheKey, albums);
-      return albums;
+      const albums: DiscogsAlbum[] = result.releases.map((release: any) => ({
+        id: release.id,
+        artist: release.artist,
+        album: release.title,
+        year: release.year || undefined,
+        coverImageUrl: release.thumb || undefined,
+        discogsId: release.type === 'release' ? release.id : 0,
+        discogsListing: release.type === 'master' || release.type === 'release' ? release.type : undefined,
+        masterId: masterId(release.type === 'master' ? release.id : release.master_id),
+        pressing: release.type === 'release' ? this.parseSearchPressing(release) : undefined,
+      }));
+      const sample = { albums, hasMore: hasMoreReleases(result.pagination, albums.length, limit * 2) };
+      await this.setCache(cacheKey, sample);
+      return sample;
     } catch (error) {
       this.logError(`Discogs artist releases error for ${artistId}:`, error);
-      return [];
+      this.throwSearchError(error, 'Failed to load Discogs artist releases');
     }
   }
 

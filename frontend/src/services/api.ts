@@ -38,6 +38,7 @@ export interface Album {
   artist_name: string;
   year?: number;
   cover_image_url?: string;
+  cover_art_provenance?: CoverArtProvenance | null;
   musicbrainz_id?: string;
   discogs_id?: number | null;
   catalog_listing?: CatalogListing | null;
@@ -86,6 +87,7 @@ export interface DiscogsAlbum {
   masterId?: number;
   pressing?: PressingDetails;
   pressingChoices?: DiscogsAlbum[];
+  pressingSampled?: boolean;
   catalogNumberMatch?: 'exact' | 'unverified';
   discogsListing?: 'release' | 'master';
   source?: 'musicbrainz' | 'discogs';
@@ -121,6 +123,14 @@ export interface SearchCoverArtResult {
   title: string;
   year?: number;
   id: string | number;
+}
+
+export interface CoverArtProvenance {
+  source: SearchCoverArtResult['source'];
+  url: string;
+  releaseId?: string | number;
+  title?: string;
+  year?: number;
 }
 
 export interface SearchCoverArtQuery {
@@ -329,10 +339,10 @@ class ApiService {
     return this.request(`/api/cover-art/${id}/search${search}`);
   }
 
-  async updateCoverArt(id: number, url: string, source: string): Promise<{ message: string; album: Album }> {
+  async updateCoverArt(id: number, url: string, source: string, provenance?: Omit<CoverArtProvenance, 'source' | 'url'>): Promise<{ message: string; album: Album }> {
     return this.request(`/api/cover-art/${id}/update`, {
       method: 'POST',
-      body: JSON.stringify({ url, source }),
+      body: JSON.stringify({ url, source, provenance }),
     });
   }
 }

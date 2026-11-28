@@ -71,6 +71,11 @@ export function discogsReleaseSource(id?: number | null): CatalogSource | undefi
   }
 }
 
+export function discogsPressingSearch(artist: string | undefined, title: string, catalogNumber?: string) {
+  const params = new URLSearchParams({ q: [artist, title, catalogNumber].filter(Boolean).join(' '), type: 'release' });
+  return `https://www.discogs.com/search/?${params}`;
+}
+
 export function catalogSaveReference(album: DiscogsAlbum): { discogsId?: number; catalogListing?: CatalogListing } {
   if (album.source === 'musicbrainz') {
     return album.mbid && validReleaseGroup(album.mbid)

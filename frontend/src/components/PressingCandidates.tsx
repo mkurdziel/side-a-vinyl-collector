@@ -51,6 +51,7 @@ interface Props {
   loadDetails?: LoadPressingDetails;
   onReadEvidence?: (releaseId: number, details: PressingDetails) => void;
   uncertainAction?: string;
+  morePressingsUrl?: string;
   savedComparison?: ReactNode;
 }
 
@@ -126,7 +127,7 @@ function firstAlternative(first: PressingCandidate, choices: readonly PressingCa
 }
 
 function exampleCue(example: PressingCandidate, reference?: PressingCandidate, searchedNumber?: string) {
-  if (!reference) return 'Check the number and label on your copy.';
+  if (!reference) return { text: 'Check the number and label on your copy.' };
   const facts = comparisonRows(reference, example, searchedNumber);
   const visibleDifferences = [
     [pressingFieldLabels.catalogNumber, 'Check the sleeve or label.'],
@@ -139,12 +140,12 @@ function exampleCue(example: PressingCandidate, reference?: PressingCandidate, s
   ];
   for (const [label, check] of visibleDifferences) {
     const fact = facts.find(fact => fact.label === label && fact.differs);
-    if (fact) return `${fact.values.map(value => concisePressingValue(value, 20)).join(' / ')}. ${check}`;
+    if (fact) return { text: `${fact.values.map(value => concisePressingValue(value, 20)).join(' / ')}. ${check}` };
   }
   if (facts.some(fact => fact.label === pressingFieldLabels.catalogNumber && fact.values.every(Boolean))) {
-    return 'Same number. Check the marks just inside the last track.';
+    return { text: 'Same number. Look for etched or stamped marks just inside the last track.', runouts: true };
   }
-  return 'Check the number and label on your copy.';
+  return { text: 'Check the number and label on your copy.' };
 }
 
 interface PreviewColumn {
@@ -385,7 +386,7 @@ function MissingRunouts({ choices, uncertainAction }: { choices: readonly Pressi
 export function PressingCandidates({
   choices, selectedId, onSelect, searchedNumber, savedReleaseId, savedEvidence, savedEvidenceState, selectedEvidence, selectedEvidenceState,
   disabled, loadDetails, onReadEvidence,
-  preparation, onChangeMedium, savedComparison,
+  preparation, onChangeMedium, morePressingsUrl, savedComparison,
   uncertainAction = 'If you’re unsure, go back without choosing a pressing.',
 }: Props) {
   const name = useId();
@@ -400,10 +401,12 @@ export function PressingCandidates({
   const shortlistHeading = useRef<HTMLHeadingElement>(null);
   const shortlistJump = useRef<HTMLButtonElement>(null);
   const compareToggle = useRef<HTMLButtonElement>(null);
+  const runoutHeading = useRef<HTMLHeadingElement>(null);
   const candidateList = useRef<HTMLUListElement>(null);
   const { checkingRunouts, comparing: showComparison, page: requestedPage, medium, pins: pinnedIds, update } = preparation;
   const [focusRequest, setFocusRequest] = useState<{ releaseId: number }>();
   const focusShortlist = useRef(false);
+  const focusRunouts = useRef(false);
   const [loadLocally] = useState(createPressingDetailsLoader);
   const [evidence, setEvidence] = useState<Partial<Record<number, EvidenceResult>>>({});
   const reportEvidence = useRef(onReadEvidence);
@@ -420,7 +423,7 @@ export function PressingCandidates({
   const formats = withDetails.map(choice => choiceField(choice, 'format'));
   const media = [...new Set(formats.flatMap(pressingMedia))];
   const allowPinning = withDetails.length > pageSize;
-  const offerMediaFilter = !!medium || (allowPinning && media.length > 1);
+  const offerMediaFilter = !!medium || (showComparison && allowPinning && media.length > 1);
   const available = withDetails.filter(choice => matchesPressingMedium(choice, medium));
   const lastPage = Math.max(0, Math.ceil(available.length / pageSize) - 1);
   const page = Math.min(requestedPage, lastPage);
@@ -454,6 +457,7 @@ export function PressingCandidates({
   const targetLabel = selectedOutsideMedia ? 'Selected pressing outside filter'
     : selection ? (target?.releaseId === savedReleaseId ? 'Saved pressing selected' : 'Selected pressing')
       : example ? 'Catalog example' : 'Saved pressing';
+  const cue = example && exampleCue(example, reference, searchedNumber);
 
   useLayoutEffect(() => {
     if (!focusRequest) return;
@@ -465,6 +469,20 @@ export function PressingCandidates({
     focusShortlist.current = false;
     shortlistHeading.current?.focus();
   }, [showComparison]);
+
+  useLayoutEffect(() => {
+    if (!showRunouts || !focusRunouts.current) return;
+    focusRunouts.current = false;
+    runoutHeading.current?.focus();
+  }, [showRunouts]);
+
+  const checkRunouts = () => {
+    if (showRunouts) runoutHeading.current?.focus();
+    else {
+      focusRunouts.current = true;
+      update({ comparing: true, checkingRunouts: true });
+    }
+  };
 
   const jumpToShortlist = () => {
     if (showComparison) shortlistHeading.current?.focus();
@@ -529,14 +547,16 @@ export function PressingCandidates({
               onClick={jumpToShortlist}>{pinned.length} pinned <span aria-hidden="true">↓</span></button>}
           </div>
         </div>
-        {example && unique.length > 1 && <div className="rh-pressing-example">
+        {example && cue && unique.length > 1 && <div className="rh-pressing-example">
           <p className="text-xs text-gray-600">
             <span className="block font-semibold text-gray-900">Example only · Discogs {example.releaseId}</span>
-            {exampleCue(example, reference, searchedNumber)}
+            {cue.text}
           </p>
-          <button type="button" className="rh-lookup-link rh-pressing-example__find" onClick={() => findChoice(example.releaseId)}>
-            Find in list<span className="sr-only"> · Catalog example {example.releaseId}</span>
-          </button>
+          {cue.runouts ? <button type="button" className="rh-lookup-link rh-pressing-example__action"
+            aria-expanded={showRunouts} aria-controls={candidatesId} onClick={checkRunouts}>Check runout marks</button>
+            : <button type="button" className="rh-lookup-link rh-pressing-example__action" onClick={() => findChoice(example.releaseId)}>
+              Find in list<span className="sr-only"> · Catalog example {example.releaseId}</span>
+            </button>}
         </div>}
       </div>
       <div id={runoutToolsId} hidden={!showComparison}>
@@ -547,11 +567,26 @@ export function PressingCandidates({
               {showRunouts ? 'Hide runout markings' : 'Check runout markings'}
             </button>
             <RecordEvidenceHelp />
+            {example && cue?.runouts && <button type="button" className="rh-lookup-link -ml-2 text-left" onClick={() => findChoice(example.releaseId)}>
+              Find example in list<span className="sr-only"> · Discogs {example.releaseId}</span>
+            </button>}
           </div>
           {allowPinning && !pinned.length && <p id={pinHintId} className="text-xs text-gray-600">Pin up to two pressings in the list to compare across pages.</p>}
         </div>}
       </div>
+      {offerMediaFilter && <div className="rh-pressing-tools">
+        <div className="flex flex-wrap items-center gap-x-2 text-sm text-gray-600">
+          <label htmlFor={mediumId}>Media</label>
+          <select id={mediumId} value={medium} aria-controls={candidatesId}
+            className="min-h-11 max-w-full rounded-lg border border-gray-300 px-2"
+            onChange={event => changeMedium(event.target.value)}>
+            <option value="">All media</option>
+            {media.map(name => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </div>
+      </div>}
       {selectedOutsideMedia && <button type="button" className="rh-lookup-link -ml-2 text-left" onClick={showSelection}>Show selected pressing in All media</button>}
+      {showRunouts && <h3 ref={runoutHeading} tabIndex={-1} className="text-sm font-semibold">Runout marks on these pressings</h3>}
       <ul id={candidatesId} ref={candidateList} className={`min-w-0 divide-y divide-gray-200 border-y border-gray-200 ${compareGrid
         ? '@min-[30rem]:grid @min-[30rem]:grid-cols-2 @min-[30rem]:gap-2 @min-[30rem]:divide-y-0 @min-[30rem]:border-y-0' : ''}
         ${compareGrid && visible.length > 2 ? '@min-[40rem]:grid-cols-3' : ''}`}>
@@ -601,16 +636,11 @@ export function PressingCandidates({
       {shared && <p id={sharedNumberId} className="text-xs text-gray-600">
         {shared.number} is shared by {shared.count} pressings in these results.
       </p>}
-      {offerMediaFilter && <div className="rh-pressing-tools">
-        <div className="flex flex-wrap items-center gap-x-2 text-sm text-gray-600">
-          <label htmlFor={mediumId}>Media</label>
-          <select id={mediumId} value={medium} aria-controls={candidatesId}
-            className="min-h-11 max-w-full rounded-lg border border-gray-300 px-2"
-            onChange={event => changeMedium(event.target.value)}>
-            <option value="">All media</option>
-            {media.map(name => <option key={name} value={name}>{name}</option>)}
-          </select>
-        </div>
+      {morePressingsUrl && <div className="rh-pressing-evidence-tools flex flex-wrap items-center gap-x-3">
+        <p className="text-xs text-gray-600">Discogs returned a partial list.</p>
+        <a href={morePressingsUrl} className="rh-comparison-source" target="_blank" rel="noreferrer">
+          Search for more on Discogs<span className="sr-only"> (opens in a new tab)</span>
+        </a>
       </div>}
       <div id={comparisonId} hidden={!showComparison}>
         {showComparison && <div className="rh-pressing-evidence-tools grid gap-2">

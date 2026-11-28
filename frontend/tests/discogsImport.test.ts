@@ -34,9 +34,9 @@ function findButton(label: string) {
 
 const content = () => renderer.root.findAllByType('p').map(node => node.children.join('')).join('\n');
 
-async function loadCollection() {
+async function loadCollection(options?: Parameters<typeof create>[1]) {
   await act(async () => {
-    renderer = create(createElement(DiscogsImporter, importerProps));
+    renderer = create(createElement(DiscogsImporter, importerProps), options);
   });
   await act(async () => findButton('Load Discogs collection').props.onClick());
 }
@@ -277,11 +277,15 @@ describe('Discogs import', () => {
     await act(async () => findButton('Resume review').props.onClick());
 
     expect(content()).toContain('2 selections need your attention.');
-    const notes = renderer.root.findAllByType('li').map(node => node.children.join('')).join('\n');
+    const notes = renderer.root.findAllByType('li').map(node => node.findByType('p').children
+      .map(child => typeof child === 'string' ? child : child.children.join('')).join('')).join('\n');
     expect(notes).toContain('Dummy by Portishead · Discogs 1. Already in Wishlist.');
     expect(notes).toContain('Third by Portishead · Discogs 2. Unavailable on the refreshed pages.');
     expect(findButton('Import 1 record to Collection').props.disabled).toBe(false);
     await act(async () => findButton('Discard review').props.onClick());
+    expect(sessionStorage.getItem('side-a:discogs-import-review:v1')).not.toBeNull();
+    expect(findButton('Import 1 record to Collection').props.disabled).toBe(true);
+    await act(async () => findButton('Discard selection').props.onClick());
     expect(findButton('Load Discogs collection')).toBeTruthy();
     expect(sessionStorage.getItem('side-a:discogs-import-review:v1')).toBeNull();
     expect(addAlbum).not.toHaveBeenCalled();
@@ -307,6 +311,76 @@ describe('Discogs import', () => {
     expect(checkbox('Third', 5).props.checked).toBe(false);
     expect(content()).toContain('1 selection needs your attention.');
     expect(renderer.root.findByProps({ 'aria-label': 'Pressings of Dummy by Portishead' }).findAllByType('article')).toHaveLength(2);
+    expect(addAlbum).not.toHaveBeenCalled();
+  });
+
+  it('jumps from a changed selection to the exact comparison, then returns to the import controls', async () => {
+    const alternateDummy = { ...albums[0], id: 4, discogsId: 4, pressing: { catalogNumber: 'ALT 04' } };
+    importDiscogsCollection.mockResolvedValueOnce({ albums, page: 1, totalPages: 2, nextPage: 2 })
+      .mockResolvedValueOnce({ albums: [alternateDummy], page: 2, totalPages: 2 });
+    const pressingHeading = { focus: vi.fn(), getBoundingClientRect: () => ({ top: 483 }) };
+    const importChoices = { focus: vi.fn(), getBoundingClientRect: () => ({ top: 92 }) };
+    const panel = {
+      scrollTop: 0,
+      querySelector: vi.fn(selector => selector === '#discogs-import-pressings-1' ? pressingHeading : importChoices),
+    };
+    await loadCollection({ createNodeMock: element => {
+      if (element.props.className?.startsWith('rh-dialog-panel')) return panel;
+      if (element.props.className?.startsWith('rh-dialog-header')) return { getBoundingClientRect: () => ({ bottom: 71 }) };
+      return null;
+    } });
+    await act(async () => findButton('Select all loaded (3)').props.onClick());
+    await act(async () => findButton('Load more Discogs records').props.onClick());
+
+    const reviewLink = renderer.root.findByProps({ 'aria-label': 'Review pressings for Dummy by Portishead' });
+    expect(reviewLink.props.href).toBe('#discogs-import-pressings-1');
+    expect(renderer.root.findByProps({ id: 'discogs-import-pressings-1' }).props.tabIndex).toBe(-1);
+    await act(async () => reviewLink.props.onClick({ preventDefault: vi.fn() }));
+    expect(pressingHeading.focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    expect(panel.scrollTop).toBe(400);
+
+    await act(async () => renderer.root.findByProps({ 'aria-label': 'Select Dummy by Portishead · Discogs release 4' })
+      .props.onChange({ currentTarget: { checked: true } }));
+    const returnLink = renderer.root.findByProps({ href: '#discogs-import-choices' });
+    await act(async () => returnLink.props.onClick({ preventDefault: vi.fn() }));
+    expect(importChoices.focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    expect(findButton('Import 3 records to Collection').props.disabled).toBe(false);
+    expect(addAlbum).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unconfirmed discard safe when canceled, closed or reloaded', async () => {
+    const keepFocus = vi.fn();
+    const discardFocus = vi.fn();
+    const inPanel = (focus: () => void) => ({ focus, getBoundingClientRect: () => ({ top: 130 }) });
+    await loadCollection({ createNodeMock: element => {
+      if (element.props.className?.startsWith('rh-dialog-panel')) return { scrollTop: 0 };
+      if (element.props.className?.startsWith('rh-dialog-header')) return { getBoundingClientRect: () => ({ bottom: 71 }) };
+      if (element.props['aria-labelledby'] === 'discogs-discard-heading') return { getBoundingClientRect: () => ({ top: 100 }) };
+      if (element.props.children === 'Keep review') return inPanel(keepFocus);
+      if (element.props.children === 'Discard review') return inPanel(discardFocus);
+      return null;
+    } });
+    await act(async () => {
+      renderer.root.findByType('select').props.onChange({ target: { value: 'wishlist' } });
+      findButton('Select all (3)').props.onClick();
+    });
+    const savedReview = sessionStorage.getItem('side-a:discogs-import-review:v1');
+    await act(async () => findButton('Discard review').props.onClick());
+    expect(keepFocus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(renderer.root.findByProps({ id: 'discogs-discard-heading' }).children.join('')).toBe('Discard 3 selections for Wishlist?');
+    await act(async () => renderer.root.findByType('dialog').props.onCancel({ preventDefault: vi.fn(), stopPropagation: vi.fn() }));
+    expect(discardFocus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(findButton('Import 3 records to Wishlist').props.disabled).toBe(false);
+
+    await act(async () => findButton('Discard review').props.onClick());
+    await act(async () => findButton('Close Discogs import').props.onClick());
+    expect(importerProps.onClose).toHaveBeenCalledOnce();
+    expect(sessionStorage.getItem('side-a:discogs-import-review:v1')).toBe(savedReview);
+    await act(async () => renderer.update(createElement(DiscogsImporter, { ...importerProps, open: false })));
+    await act(async () => renderer.unmount());
+    await act(async () => { renderer = create(createElement(DiscogsImporter, importerProps)); });
+    expect(content()).toContain('Saved review · 3 selected for Wishlist');
+    expect(renderer.root.findAllByProps({ id: 'discogs-discard-heading' })).toHaveLength(0);
     expect(addAlbum).not.toHaveBeenCalled();
   });
 

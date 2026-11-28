@@ -80,6 +80,7 @@ function catalogKey(album: DiscogsAlbum) {
 function lookupPressing(album: DiscogsAlbum): LookupPressing {
   const source = catalogSource(album);
   return { artist: album.artist, year: album.year, source, pressing: album.pressing, catalogNumberMatch: album.catalogNumberMatch,
+    pressingSampled: album.pressingSampled,
     releaseId: source?.kind === 'pressing' ? album.discogsId : undefined };
 }
 
@@ -1141,6 +1142,8 @@ function App() {
   const queryLength = searchQuery.trim().length;
   const numberSearch = searchScope === 'catalog-number';
   const shortName = isSingleCharacterName(searchQuery, searchScope);
+  const singleNameShelf = searchShelf(searchScope);
+  const singleNameScope = singleNameShelf ? `in ${shelfLabel[singleNameShelf]}` : 'on both shelves';
   const searchActive = shortName ? exactNameActive : queryLength >= 2;
   const catalogActive = !shortName && searchesCatalog(searchScope);
   const numberShelfMatches = numberSearch && catalogResults ? savedCatalogNumberMatches(catalogResults.discogs) : [];
@@ -1317,8 +1320,8 @@ function App() {
                   type="text"
                   enterKeyHint="search"
                   aria-keyshortcuts="Alt+Shift+F"
-                  aria-describedby={numberSearch ? 'number-lookup-source' : undefined}
-                  aria-description={addOrigin && searchScope === 'catalog' ? 'Add search includes your shelves and online catalogs.' : undefined}
+                  aria-describedby={numberSearch ? 'number-lookup-source' : shortName ? 'short-search-scope' : undefined}
+                  aria-description={addOrigin && searchScope === 'catalog' && !shortName ? 'Add search includes your shelves and online catalogs.' : undefined}
                   className={`w-full border px-2 py-2 sm:px-3 ${searchQuery ? 'pr-11 sm:pr-12' : ''}`}
                   placeholder={numberSearch ? 'Number on the sleeve or label' : 'Album title or artist name'}
                   value={searchQuery}
@@ -1342,10 +1345,10 @@ function App() {
                 )}
               </div>
               <button type="submit" className={`${secondaryButton} min-w-11 disabled:opacity-60`} aria-label={numberSearch ? 'Look up in Discogs' : 'Search'} disabled={!shortName && !searchActive}>
-                <svg aria-hidden="true" className="mx-auto size-4.5 sm:hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                {!shortName && <svg aria-hidden="true" className="mx-auto size-4.5 sm:hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeWidth={2} d="m21 21-4.35-4.35M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" />
-                </svg>
-                <span className="hidden sm:inline">{numberSearch ? 'Look up in Discogs' : 'Search'}</span>
+                </svg>}
+                <span className={shortName ? undefined : 'hidden sm:inline'}>{numberSearch ? 'Look up in Discogs' : 'Search'}</span>
               </button>
             </div>
             <button
@@ -1360,6 +1363,10 @@ function App() {
               </svg>
               Add<span className="hidden sm:inline"> Album</span>
             </button>
+            {shortName && <p id="short-search-scope" role="status" className="rh-short-search-scope text-xs text-gray-600">
+              {searchScope === 'catalog' ? 'Exact names in Collection and Wishlist. Online catalogs need two characters.'
+                : `One character checks for an exact title or artist ${singleNameScope}.`}
+            </p>}
             <div className="rh-search-options">
               {!numberSearch && <div className="rh-search-scope">
                 <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">{addOrigin ? 'Add search in' : 'Search in'}</label>
@@ -1379,7 +1386,7 @@ function App() {
               <details className="rh-search-tips">
                 <summary aria-label="Search tips"><span className="hidden sm:inline">Search </span>Tips</summary>
                 <div>
-                  <p><strong>Know the name?</strong> Enter the album title or artist. Search in chooses where to look. Choose Collection or Wishlist when you save.</p>
+                  <p><strong>Know the name?</strong> Enter the album title or artist. The shelf tabs change what you browse. Search in chooses where to look. Choose Collection or Wishlist when you save.</p>
                   <p><strong>Have the record?</strong> Look for a catalog number on the sleeve or center label. For digits under a barcode, choose Add, then Look up a barcode.</p>
                   <p><strong>See several pressings?</strong> Compare the center label and sleeve with the listings. Save the album without a pressing if you’re unsure. Each artist and title has one shelf entry.</p>
                   <p className="rh-keyboard-tip">Focus search with <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd>.</p>
@@ -1411,7 +1418,6 @@ function App() {
           onExternalChange={() => refreshLibrary()} />
 
         <div role="status" className="text-sm text-gray-600" aria-atomic="true">
-          {shortName && <p className="mb-3">{searchActive ? 'Exact title and artist matches on your shelves.' : 'Select Search to check for an exact title or artist on your shelves.'}</p>}
           {numberSearch && queryLength === 1 && <p className="mb-4">Enter at least two characters for a catalog number.</p>}
           {!searchActive && !currentShelf && <p className="py-8">Loading {shelfLabel[viewMode]}…</p>}
         </div>
@@ -1457,7 +1463,10 @@ function App() {
                 {renderContinuation('saved', results)}
               </>}
               {results && savedCount === 0 && <>
-                <p role="status" className="text-sm text-gray-600 [overflow-wrap:anywhere]">No saved albums match “{searchQuery.trim()}”.</p>
+                <p role="status" className="text-sm text-gray-600 [overflow-wrap:anywhere]">
+                  {shortName ? `No exact title or artist matches “${searchQuery.trim()}” ${singleNameScope}.`
+                    : `No saved albums match “${searchQuery.trim()}”.`}
+                </p>
                 {!catalogActive && !shortName && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search online catalogs</button>}
                 {searchScope !== 'catalog' && <button type="button" className="rh-lookup-link" onClick={() => changeLookupMethod('catalog-number')}>Search by catalog number</button>}
               </>}
@@ -1495,7 +1504,9 @@ function App() {
                 {!!catalogCount && catalogResults && <p role="status" className="text-xs text-gray-600">
                   {catalogResults.nextOffset !== undefined ? `Showing the first ${catalogCount} ${catalogCount === 1 ? 'match' : 'matches'}. More available.`
                     : `${catalogCount} ${catalogCount === 1 ? 'match' : 'matches'}.`}
-                  {catalogResults.catalogSampled && catalogResults.nextOffset === undefined && ' Refine the search for more matches.'}
+                  {catalogResults.catalogSampled && catalogResults.nextOffset === undefined && (
+                    numberSearch ? ' Discogs returned a partial list.' : ' Online catalogs returned a partial list. Try a more specific name.'
+                  )}
                 </p>}
               </div>
               {hasNewCatalogAlbums && <SaveShelfSelect label="Save new matches to" value={saveShelf} onChange={setSaveShelf} />}
@@ -1517,8 +1528,9 @@ function App() {
               <div className="rounded-xl border border-gray-300 px-4 py-5">
                 {catalogResults && !catalogResults.errors?.length && (
                   <p role="status" className="mb-2 text-sm text-gray-600 [overflow-wrap:anywhere]">
-                    {numberSearch ? `Discogs found no catalog number matching “${searchQuery.trim()}”. Check the number on the sleeve or try an album title.`
-                      : `No catalog albums match “${searchQuery.trim()}”. Try the album title, artist name, or number on the sleeve.`}
+                    {catalogResults.catalogSampled ? `No match for “${searchQuery.trim()}” in the results returned. Check the sleeve or try a more specific name.`
+                      : numberSearch ? `Discogs found no catalog number matching “${searchQuery.trim()}”. Check the number on the sleeve or try an album title.`
+                        : `No catalog albums match “${searchQuery.trim()}”. Try the album title, artist name, or number on the sleeve.`}
                   </p>
                 )}
                 <div className="flex flex-wrap gap-2">

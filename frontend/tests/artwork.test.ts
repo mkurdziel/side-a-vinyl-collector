@@ -149,13 +149,17 @@ it('edits a successful search, keeps its results through a failed revision, and 
   expect(updateCoverArt).not.toHaveBeenCalled();
 });
 
-it('keeps verified metadata with the matching image across queries and only saves after apply', async () => {
+it('keeps verified metadata across queries and restores the applied release on reopening', async () => {
   const mbid = '12345678-abcd-1234-abcd-123456789abc';
   const current = { ...album, cover_image_url: `https://coverartarchive.org/release/${mbid}/front` };
   const currentMatch = { id: mbid, title: 'Dummy Japan', source: 'MusicBrainz', year: 1995, url: current.cover_image_url };
   const onRefresh = vi.fn();
+  const provenance = { releaseId: alternative.id, title: alternative.title, year: alternative.year };
+  const saved: Album = { ...current, cover_image_url: alternative.url, cover_art_provenance: {
+    ...provenance, source: 'Discogs', url: alternative.url,
+  } };
   searchCoverArt.mockResolvedValueOnce({ results: [currentMatch, alternative] }).mockResolvedValueOnce({ results: [alternative] });
-  updateCoverArt.mockResolvedValueOnce({ album: { ...current, cover_image_url: alternative.url } });
+  updateCoverArt.mockResolvedValueOnce({ album: saved });
   await act(async () => { renderer = create(createElement(AlbumDetailModal, { album: current, onClose: vi.fn(), onRefresh })); });
   await act(async () => button('Find different artwork').props.onClick());
   await act(async () => button('Edit artwork search').props.onClick());
@@ -171,9 +175,58 @@ it('keeps verified metadata with the matching image across queries and only save
   expect(updateCoverArt).not.toHaveBeenCalled();
   await act(async () => selectedArt.findByType('img').props.onLoad({ currentTarget: { naturalWidth: 700, naturalHeight: 700 } }));
   await act(async () => button('Apply artwork').props.onClick());
-  expect(updateCoverArt).toHaveBeenCalledExactlyOnceWith(current.id, alternative.url, 'Discogs');
-  expect(onRefresh).toHaveBeenCalledWith({ ...current, cover_image_url: alternative.url });
+  expect(updateCoverArt).toHaveBeenCalledExactlyOnceWith(current.id, alternative.url, 'Discogs', provenance);
+  expect(onRefresh).toHaveBeenCalledWith(saved);
   expect(textOf(renderer!.root.findByProps({ role: 'status' }))).toBe('Artwork updated.');
+
+  const other = { ...alternative, id: 12, title: 'Dummy Deluxe', year: 1997, url: '/art/other.jpg' };
+  searchCoverArt.mockResolvedValueOnce({ results: [other] });
+  await act(async () => renderer!.unmount());
+  await act(async () => { renderer = create(createElement(AlbumDetailModal, { album: saved, onClose: vi.fn(), onRefresh })); });
+  expect(renderer!.root.findByProps({ 'aria-label': 'Release 11 for saved artwork (opens in a new tab)' }).props.href)
+    .toBe('https://www.discogs.com/release/11');
+  await act(async () => button('Find different artwork').props.onClick());
+  await act(async () => renderer!.root.findByProps({ 'aria-label': 'Preview Dummy Deluxe cover from Discogs, 1997' }).props.onClick());
+  const [persistedArt] = renderer!.root.findAllByType('figure');
+  expect(textOf(persistedArt.findByType('figcaption'))).toBe('Current artwork');
+  expect(textOf(persistedArt)).toContain('DummyDiscogs · Release year 1994');
+  expect(persistedArt.findByType('a').props.href).toBe('https://www.discogs.com/release/11');
+  expect(updateCoverArt).toHaveBeenCalledOnce();
+});
+
+it('enlarges either image and restores the paired comparison, focus, and deliberate apply', async () => {
+  const headingFocus = vi.fn();
+  const currentFocus = vi.fn();
+  const selectedFocus = vi.fn();
+  searchCoverArt.mockResolvedValue({ results: [alternative] });
+  await act(async () => {
+    renderer = create(createElement(AlbumDetailModal, { album, onClose: vi.fn(), onRefresh: vi.fn() }), {
+      createNodeMock: node => node.props.children === 'Compare artwork' ? { focus: headingFocus }
+        : node.props['aria-label'] === 'Enlarge current artwork' ? { focus: currentFocus, getClientRects: () => [{}] }
+          : node.props['aria-label'] === 'Enlarge selected artwork' ? { focus: selectedFocus, getClientRects: () => [{}] } : null,
+    });
+  });
+  await act(async () => button('Find different artwork').props.onClick());
+  await act(async () => renderer!.root.findByProps({ 'aria-label': 'Preview Dummy cover from Discogs, 1994' }).props.onClick());
+  await act(async () => renderer!.root.findByProps({ src: alternative.url }).props.onLoad({ currentTarget: { naturalWidth: 700, naturalHeight: 700 } }));
+  const figures = () => renderer!.root.findAllByType('figure');
+  await act(async () => renderer!.root.findByProps({ 'aria-label': 'Enlarge current artwork' }).props.onClick());
+  expect(figures()).toHaveLength(1);
+  expect(figures()[0].findByType('img').props.alt).toBe('Cover currently saved for this album');
+  expect(headingFocus).toHaveBeenCalledTimes(2);
+  expect(button('Apply artwork')).toBeUndefined();
+  await act(async () => button('Back to comparison').props.onClick());
+  expect(currentFocus).toHaveBeenCalledOnce();
+  expect(figures()).toHaveLength(2);
+  await act(async () => renderer!.root.findByProps({ 'aria-label': 'Enlarge selected artwork' }).props.onClick());
+  expect(figures()).toHaveLength(1);
+  expect(figures()[0].findByType('img').props.alt).toBe('Proposed replacement cover for this album');
+  expect(figures()[0].findByType('a').props.href).toBe('https://www.discogs.com/release/11');
+  await act(async () => renderer!.root.findAllByType('dialog')[1].props.onCancel({ preventDefault: vi.fn(), stopPropagation: vi.fn() }));
+  expect(selectedFocus).toHaveBeenCalledOnce();
+  expect(figures()).toHaveLength(2);
+  expect(button('Apply artwork').props['aria-disabled']).toBe(false);
+  expect(updateCoverArt).not.toHaveBeenCalled();
 });
 
 it('does not reopen a closed chooser when a revised search returns', async () => {
@@ -200,7 +253,9 @@ it('keeps the chooser open with persistent feedback if a cover cannot be saved',
   expect(updateCoverArt).not.toHaveBeenCalled();
   await act(async () => renderer!.root.findByProps({ src: alternative.url }).props.onLoad({ currentTarget: { naturalWidth: 700, naturalHeight: 700 } }));
   await act(async () => button('Apply artwork').props.onClick());
-  expect(updateCoverArt).toHaveBeenCalledExactlyOnceWith(album.id, alternative.url, 'Discogs');
+  expect(updateCoverArt).toHaveBeenCalledExactlyOnceWith(album.id, alternative.url, 'Discogs', {
+    releaseId: alternative.id, title: alternative.title, year: alternative.year,
+  });
   expect(textOf(renderer!.root.findByProps({ role: 'alert' }))).toContain('Couldn’t update the artwork.');
   expect(button('Keep current artwork')).toBeDefined();
   expect(renderer!.root.findAllByType('dialog')).toHaveLength(2);
