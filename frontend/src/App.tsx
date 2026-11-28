@@ -17,6 +17,7 @@ import { formatUndoDeadline } from './services/undoDeadline';
 import { CatalogPressingPicker } from './components/CatalogPressingPicker';
 import { RemovalHistory, type RemovalHistoryHandle } from './components/RemovalHistory';
 import { isSingleCharacterName, lookupMode, readSearchSession, writeSearchSession, type AddSearchOrigin, type LookupAnchor, type LookupMode, type LookupNavigation, type NameSearchScope, type ResultKind, type SearchScope } from './services/searchSession';
+import { barcodeFromSearch } from './services/barcodeInput';
 
 type Shelf = Album['status'];
 type SortBy = 'title' | 'artist' | 'date';
@@ -303,7 +304,8 @@ function App() {
   const [pressingReview, setPressingReview] = useState<{ album: DiscogsAlbum; destination: Shelf; searchedNumber?: string }>();
   const [albumReview, setAlbumReview] = useState<AlbumReview>();
   const [recentCatalogSaves, setRecentCatalogSaves] = useState<Set<number>>(() => new Set());
-  const [showBarcodeScanner, setShowBarcodeScanner] = useState(false);
+  const [barcodeLookup, setBarcodeLookup] = useState<{ origin: 'add' | 'search'; destination: Shelf; initialBarcode?: string }>();
+  const showBarcodeScanner = !!barcodeLookup;
   const [showImageUploader, setShowImageUploader] = useState(false);
   const [showDiscogsImporter, setShowDiscogsImporter] = useState(false);
   const [discogsImporting, setDiscogsImporting] = useState(false);
@@ -594,6 +596,17 @@ function App() {
     window.requestAnimationFrame(() => searchInput.current?.focus());
   };
 
+  const openBarcodeLookup = (origin: 'add' | 'search') => {
+    setLookupShelfEdits({});
+    setLookupPressingEdits({});
+    const destination = origin === 'search' && searchesCatalog(latestScope.current) ? saveShelf : viewMode;
+    setBarcodeLookup({
+      origin,
+      destination,
+      initialBarcode: origin === 'search' ? barcodeFromSearch(latestQuery.current) ?? '' : undefined,
+    });
+  };
+
   const parkLookupDraft = (mode: LookupMode) => {
     lookupDrafts.current[mode] = {
       scope: latestScope.current, query: latestQuery.current, destination: saveShelf,
@@ -604,7 +617,7 @@ function App() {
     };
   };
 
-  const changeLookupMethod = (method: LookupMode, nameScope?: NameSearchScope) => {
+  const changeLookupMethod = (method: LookupMode, nameScope?: NameSearchScope, destination?: Shelf) => {
     setShowLookupOptions(false);
     const previous = lookupMode(latestScope.current);
     if (method === previous) {
@@ -612,6 +625,7 @@ function App() {
       focusSearch();
       return;
     }
+    const defaultDestination = destination ?? (searchesCatalog(latestScope.current) ? saveShelf : viewMode);
     parkLookupDraft(previous);
     lookupAnchor.current = undefined;
     runSearch(''); // Cancel requests for the method being parked, including pagination.
@@ -624,7 +638,7 @@ function App() {
     setExactName(draft?.exactName === true);
     setSearchScope(scope);
     setSearchQuery(query);
-    setSaveShelf(draft?.scope === scope ? draft.destination : viewMode);
+    setSaveShelf(draft?.scope === scope ? draft.destination : defaultDestination);
     setDetectedDraft(cache?.detected);
     setSaveErrors({});
     if (cache && cache.libraryVersion === libraryVersion.current && draft.scope === scope && cache.sort === searchSort.current) {
@@ -659,7 +673,7 @@ function App() {
     setAddOrigin(undefined);
   };
 
-  const startAddSearch = (method: LookupMode) => {
+  const startAddSearch = (method: LookupMode, destination?: Shelf) => {
     if (!addOrigin) {
       const scope = latestScope.current;
       const parked = lookupDrafts.current.name;
@@ -667,7 +681,7 @@ function App() {
       setAddOrigin({ shelf: viewMode, scope: nameScope === 'catalog-number' ? 'saved' : nameScope,
         destination: scope === 'catalog-number' ? parked?.destination ?? viewMode : saveShelf });
     }
-    changeLookupMethod(method, method === 'name' ? 'catalog' : undefined);
+    changeLookupMethod(method, method === 'name' ? 'catalog' : undefined, destination);
   };
 
   const anchorAt = (element?: HTMLElement | null): LookupAnchor | undefined => {
@@ -755,12 +769,21 @@ function App() {
   };
 
   const refreshLibrary = (updatedArtwork?: Album) => {
-    if (updatedArtwork?.local_cover_path) {
-      const revision = updatedArtwork.local_cover_path;
+    if (updatedArtwork) {
+      const revision = updatedArtwork.local_cover_path ?? updatedArtwork.cover_image_url ?? 'no-artwork';
       setArtworkRevisions(prev => ({ ...prev, [updatedArtwork.id]: revision }));
     }
     refreshShelf();
     if (latestQuery.current.trim()) runSearch(latestQuery.current, { keepResults: true });
+  };
+
+  const reflectArtwork = (updatedArtwork?: Album) => {
+    if (updatedArtwork) {
+      const { id, cover_image_url, local_cover_path, cover_art_fetched, cover_art_provenance } = updatedArtwork;
+      setSelectedAlbum(current => current?.id === id
+        ? { ...current, cover_image_url, local_cover_path, cover_art_fetched, cover_art_provenance } : current);
+    }
+    refreshLibrary(updatedArtwork);
   };
 
   const updateSearchMembership = (albumId: number, status: Shelf, addition?: { key: string; album: Album }) => {
@@ -1164,8 +1187,9 @@ function App() {
   const singleNameShelf = searchShelf(searchScope);
   const singleNameScope = singleNameShelf ? `in ${shelfLabel[singleNameShelf]}` : 'on both shelves';
   const searchActive = shortName ? exactNameActive : queryLength >= 2;
-  const lookupSource = numberSearch ? 'Discogs · Catalog number'
-    : shortName && exactNameActive && searchScope === 'catalog' ? 'Both shelves · Exact name' : nameScopeLabel[searchScope];
+  const lookupMethodLabel = numberSearch ? 'Catalog number' : 'Name search';
+  const lookupSource = numberSearch ? 'Discogs'
+    : shortName ? `${nameScopeLabel[searchScope === 'catalog' ? 'saved' : searchScope]} · Exact name` : nameScopeLabel[searchScope];
   const catalogActive = !shortName && searchesCatalog(searchScope);
   const numberShelfMatches = numberSearch && catalogResults ? savedCatalogNumberMatches(catalogResults.discogs) : [];
   const catalogUnavailable = catalogState.status === 'error' || !!catalogResults?.errors?.length;
@@ -1272,8 +1296,7 @@ function App() {
         <div className="rh-shell rh-header-layout mx-auto px-6">
           <h1>Vinyl Collector</h1>
 
-          {searchActive ? <p className="rh-library-tools text-sm text-gray-600">Browsing <strong className="font-semibold text-gray-900">{shelfLabel[addOrigin?.shelf ?? viewMode]}</strong></p>
-            : <div className="rh-library-tools rh-shelf-toolbar">
+          {!searchActive && <div className="rh-library-tools rh-shelf-toolbar">
             <div className="rh-shelf-controls">
               <div className="rh-view-switcher flex" role="group" aria-label="Browse shelf">
                 {shelves.map(shelf => (
@@ -1339,10 +1362,9 @@ function App() {
                   type="text"
                   enterKeyHint="search"
                   aria-keyshortcuts="Alt+Shift+F"
-                  aria-describedby={numberSearch ? 'number-lookup-source' : shortName ? 'short-search-scope' : undefined}
-                  aria-description={addOrigin && searchScope === 'catalog' && !shortName ? 'Add search includes your shelves and online catalogs.' : undefined}
+                  aria-describedby={numberSearch ? 'number-lookup-source' : shortName ? 'short-search-scope' : 'lookup-source'}
                   className={`w-full border px-2 py-2 sm:px-3 ${searchQuery ? 'pr-11 sm:pr-12' : ''}`}
-                  placeholder={numberSearch ? 'Catalog no.' : 'Title or artist'}
+                  placeholder={numberSearch ? 'Catalog number' : 'Title or artist'}
                   value={searchQuery}
                   onChange={event => changeSearch(event.target.value)}
                 />
@@ -1385,15 +1407,16 @@ function App() {
             </p>}
             <div className="rh-search-options">
               <button type="button" className="rh-lookup-options-toggle" aria-expanded={showLookupOptions} aria-controls="lookup-options"
+                aria-label={`Search options, ${lookupMethodLabel}, ${lookupSource}`}
                 onClick={() => setShowLookupOptions(open => !open)}>
-                <span>Search options</span><span className="rh-lookup-source">{lookupSource}</span>
+                <span className="rh-lookup-method">{lookupMethodLabel}</span><span id="lookup-source" className="rh-lookup-source">{lookupSource}</span>
                 <svg aria-hidden="true" className="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path strokeLinecap="round" strokeWidth="2" d="m6 9 6 6 6-6" />
                 </svg>
               </button>
               <div id="lookup-options" className="rh-lookup-settings" data-expanded={showLookupOptions}>
                 {!numberSearch && <div className="rh-search-scope">
-                  <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">{addOrigin ? 'Add search in' : 'Search in'}</label>
+                  <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">Search in</label>
                   <select id="search-scope" value={searchScope}
                     onChange={event => changeScope(event.target.value as SearchScope)}
                     className="max-w-full rounded-lg border border-gray-300 px-2 text-sm">
@@ -1402,18 +1425,24 @@ function App() {
                 </div>}
                 <div className="rh-search-modes" role="group" aria-label="Search by">
                   <button type="button" aria-pressed={!numberSearch} onClick={() => changeLookupMethod('name')}>Album or artist</button>
-                  <button type="button" aria-pressed={numberSearch} onClick={() => changeLookupMethod('catalog-number')}>Catalog number</button>
+                  <button type="button" aria-pressed={numberSearch} aria-describedby="catalog-number-clue" title="Number on the sleeve or label"
+                    onClick={() => changeLookupMethod('catalog-number')}>Catalog number</button>
+                  <button type="button" aria-haspopup="dialog" aria-describedby="barcode-clue" title="Digits below the barcode"
+                    onClick={() => openBarcodeLookup('search')}>Barcode</button>
                 </div>
+                <p className="rh-lookup-clues text-xs text-gray-600 sm:sr-only">
+                  <span id="catalog-number-clue">Catalog number on the sleeve or label.</span>{' '}
+                  <span id="barcode-clue">Digits printed below the barcode.</span>
+                </p>
                 <details className="rh-search-tips">
                   <summary aria-label="Search tips"><span className="hidden sm:inline">Search </span>Tips</summary>
                   <div>
-                    <p><strong>Know the name?</strong> Enter the album title or artist. The shelf tabs change what you browse. Search in chooses where to look. Choose Collection or Wishlist when you save.</p>
-                    <p><strong>Have the record?</strong> Look for a catalog number on the sleeve or center label. For digits under a barcode, choose Add, then Look up a barcode.</p>
+                    <p>Search in controls where to look. Choose Collection or Wishlist separately when you save.</p>
                     <p><strong>See several pressings?</strong> Compare the center label and sleeve with the listings. Save the album without a pressing if you’re unsure. Each artist and title has one shelf entry.</p>
                     <p className="rh-keyboard-tip">Focus search with <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd>.</p>
                   </div>
                 </details>
-                {numberSearch && <p className="rh-number-scope text-xs text-gray-600" id="number-lookup-source">Looks up numbers in Discogs</p>}
+                {numberSearch && <p className="rh-number-scope text-xs text-gray-600" id="number-lookup-source">Discogs · Number on the sleeve or label</p>}
                 {!searchActive && <SortControl placement="lookup-options" sort={sortBy} onChange={changeSort} />}
               </div>
             </div>
@@ -1438,7 +1467,11 @@ function App() {
             refreshLibrary();
           }}
           onPressingUndone={reflectSavedPressing}
-          onExternalChange={() => refreshLibrary()} />
+          onArtworkUndone={reflectArtwork}
+          onExternalChange={() => {
+            setArtworkRevisions({});
+            refreshLibrary();
+          }} />
 
         <div role="status" className="text-sm text-gray-600" aria-atomic="true">
           {numberSearch && queryLength === 1 && <p className="mb-4">Enter at least two characters for a catalog number.</p>}
@@ -1491,7 +1524,12 @@ function App() {
                     : `No saved albums match “${searchQuery.trim()}”.`}
                 </p>
                 {!catalogActive && !shortName && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search online catalogs</button>}
-                {searchScope !== 'catalog' && <button type="button" className="rh-lookup-link" onClick={() => changeLookupMethod('catalog-number')}>Search by catalog number</button>}
+                {searchScope !== 'catalog' && <div className="flex flex-wrap items-center gap-x-2">
+                  <button type="button" className="rh-lookup-link" aria-describedby="catalog-number-clue"
+                    onClick={() => changeLookupMethod('catalog-number')}>Search by catalog number</button>
+                  <button type="button" className="rh-lookup-link" aria-haspopup="dialog" aria-describedby="barcode-clue"
+                    onClick={() => openBarcodeLookup('search')}>Look up a barcode</button>
+                </div>}
               </>}
             </section>
         )}
@@ -1552,15 +1590,18 @@ function App() {
                 {catalogResults && !catalogResults.errors?.length && (
                   <p role="status" className="mb-2 text-sm text-gray-600 [overflow-wrap:anywhere]">
                     {catalogResults.catalogSampled ? `No match for “${searchQuery.trim()}” in the results returned. Check the sleeve or try a more specific name.`
-                      : numberSearch ? `Discogs found no catalog number matching “${searchQuery.trim()}”. Check the number on the sleeve or try an album title.`
-                        : `No catalog albums match “${searchQuery.trim()}”. Try the album title, artist name, or number on the sleeve.`}
+                      : numberSearch ? `Discogs found no catalog number matching “${searchQuery.trim()}”. Check the sleeve or label. For digits below the bars, use barcode lookup.`
+                        : `No catalog albums match “${searchQuery.trim()}”.`}
                   </p>
                 )}
                 <div className="flex flex-wrap gap-2">
                   <button type="button" className="rh-lookup-link" onClick={() => searchInput.current?.focus()}>{numberSearch ? 'Edit catalog number' : 'Refine search'}</button>
-                  <button type="button" className="rh-lookup-link" onClick={() => numberSearch ? changeLookupMethod('name', 'catalog') : changeLookupMethod('catalog-number')}>
+                  <button type="button" className="rh-lookup-link" aria-describedby={numberSearch ? undefined : 'catalog-number-clue'}
+                    onClick={() => numberSearch ? changeLookupMethod('name', 'catalog') : changeLookupMethod('catalog-number')}>
                     {numberSearch ? 'Search by album or artist' : 'Search by catalog number'}
                   </button>
+                  <button type="button" className="rh-lookup-link" aria-haspopup="dialog" aria-describedby="barcode-clue"
+                    onClick={() => openBarcodeLookup('search')}>Look up a barcode</button>
                   <button type="button" className={secondaryButton} onClick={openManualEntry}>Add album manually</button>
                 </div>
               </div>
@@ -1668,9 +1709,7 @@ function App() {
         <AddMenu
           onBarcodeClick={() => {
             setShowAddMenu(false);
-            setLookupShelfEdits({});
-            setLookupPressingEdits({});
-            setShowBarcodeScanner(true);
+            openBarcodeLookup('add');
           }}
           onImageClick={() => {
             setShowAddMenu(false);
@@ -1734,20 +1773,33 @@ function App() {
         refreshLibrary();
       }} />}
 
-      {showBarcodeScanner && (
+      {barcodeLookup && (
         <BarcodeScanner
-          onClose={() => setShowBarcodeScanner(false)}
+          initialBarcode={barcodeLookup.initialBarcode}
+          backLabel={barcodeLookup.origin === 'search' ? 'Back to search' : undefined}
+          onClose={() => setBarcodeLookup(undefined)}
           onBack={() => {
-            setShowBarcodeScanner(false);
-            setShowAddMenu(true);
+            setBarcodeLookup(undefined);
+            if (barcodeLookup.origin === 'search') focusSearch();
+            else setShowAddMenu(true);
+          }}
+          onSearchByCatalogNumber={() => {
+            setBarcodeLookup(undefined);
+            if (barcodeLookup.origin === 'search' && numberSearch) focusSearch();
+            else if (barcodeLookup.origin === 'search') changeLookupMethod('catalog-number', undefined, barcodeLookup.destination);
+            else startAddSearch('catalog-number', barcodeLookup.destination);
           }}
           onSearchByName={(query, draft) => {
-            setShowBarcodeScanner(false);
-            openNameSearch(query, draft, viewMode);
+            setBarcodeLookup(undefined);
+            if (barcodeLookup.origin === 'search' && !query && !draft) {
+              const nameScope = numberSearch && !lookupDrafts.current.name ? 'catalog' : undefined;
+              changeLookupMethod('name', nameScope, barcodeLookup.destination);
+            }
+            else openNameSearch(query, draft, barcodeLookup.destination);
           }}
           onManual={draft => {
-            setShowBarcodeScanner(false);
-            setManualEntry({ draft: draft ?? {}, shelf: viewMode });
+            setBarcodeLookup(undefined);
+            setManualEntry({ draft: draft ?? {}, shelf: barcodeLookup.destination });
           }}
           onMoveSaved={moveLookupAlbum}
           onUndoMove={undoShelfMove}
@@ -1758,7 +1810,7 @@ function App() {
           lookupShelfEdits={lookupShelfEdits}
           lookupPressingEdits={lookupPressingEdits}
           onSuccess={refreshLibrary}
-          viewMode={viewMode}
+          viewMode={barcodeLookup.destination}
         />
       )}
 
@@ -1798,7 +1850,9 @@ function App() {
           onClose={() => {
             if (!inFlightSaves.current.has(savedAlbumKey(selectedAlbum.id))) setSelectedAlbum(null);
           }}
-          onRefresh={refreshLibrary}
+          onRefresh={reflectArtwork}
+          onArtworkChanged={(album, receipt) => removalHistory.current?.recordArtwork(album, receipt)}
+          onArtworkUndoClosed={(albumId, token) => removalHistory.current?.forgetArtwork(albumId, token)}
           shelfActions={<div className="grid gap-3">
             {detailBackToMatches && detailMove?.albumId === selectedAlbum.id && (
               <div className="rh-detail-move-feedback">

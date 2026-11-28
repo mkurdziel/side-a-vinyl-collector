@@ -1,10 +1,12 @@
 import type { Request, Response } from 'express';
+import { createHash, randomBytes } from 'node:crypto';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import pool from '../config/database';
 import storageService from '../services/storage';
 import musicbrainzService from '../services/musicbrainz';
 import discogsService from '../services/discogs';
 import { readCoverArtProvenance } from '../services/coverArtProvenance';
+import type { CoverArtProvenance } from '../types';
 
 /**
  * Serve cover art image for an album
@@ -215,12 +217,52 @@ export const searchCoverArt = asyncHandler(async (req: Request, res: Response) =
   });
 });
 
-/**
- * Update album cover art with selected image
- */
+type ArtworkSnapshot = {
+  cover_image_url: string | null;
+  local_cover_path: string | null;
+  cover_art_fetched: boolean | null;
+  cover_art_provenance: CoverArtProvenance | null;
+};
+
+const artworkSnapshot = `jsonb_build_object(
+  'cover_image_url', a.cover_image_url,
+  'local_cover_path', a.local_cover_path,
+  'cover_art_fetched', a.cover_art_fetched,
+  'cover_art_provenance', a.cover_art_provenance
+)`;
+
+const lockArtworkAlbum = `
+  SELECT c.id AS collection_id, ${artworkSnapshot} AS artwork
+  FROM albums a LEFT JOIN collections c ON c.album_id = a.id
+  WHERE a.id = $1 FOR NO KEY UPDATE OF a
+`;
+
+const albumWithArtwork = `
+  SELECT a.*, ar.name AS artist_name, c.status, c.notes, c.added_at
+  FROM albums a JOIN artists ar ON ar.id = a.artist_id
+  LEFT JOIN collections c ON c.album_id = a.id
+  WHERE a.id = $1
+`;
+
+const artworkUndoLock = 'LOCK TABLE album_removal_undo IN ROW EXCLUSIVE MODE';
+const expiredArtworkUndo = 'This artwork change can no longer be undone. Check the current cover.';
+
+function artworkAlbumId(value: unknown) {
+  const rawId = String(value);
+  const id = Number(rawId);
+  if (!/^\d+$/.test(rawId) || !Number.isInteger(id) || id <= 0 || id > 2_147_483_647) {
+    throw new AppError('Choose a valid album.', 400);
+  }
+  return id;
+}
+
+function artworkUndoDigest(token: string) {
+  return createHash('sha256').update(token).digest('hex');
+}
+
 export const updateCoverArt = asyncHandler(async (req: Request, res: Response) => {
-  const { id } = req.params;
-  const { url, source, provenance } = req.body;
+  const id = artworkAlbumId(req.params.id);
+  const { url, source, provenance } = req.body ?? {};
 
   if (typeof url !== 'string' || !url.trim()) {
     throw new AppError('Image URL is required', 400);
@@ -230,39 +272,90 @@ export const updateCoverArt = asyncHandler(async (req: Request, res: Response) =
     ? readCoverArtProvenance({ ...provenance, source, url }, url) : undefined;
   if (provenance != null && !artwork) throw new AppError('Choose valid artwork release details.', 400);
 
-  // If from Discogs or other external, we should cache it locally
-  // If from MusicBrainz (Archive), we can link directly or cache. Caching is safer.
-  
   let localPath;
   try {
     const imageBuffer = await musicbrainzService.downloadCoverArt(url);
-    localPath = await storageService.saveCoverArt(imageBuffer, parseInt(String(id)), url);
+    localPath = await storageService.saveCoverArt(imageBuffer, id, url);
   } catch (error) {
     console.error('Failed to download/cache image:', error);
-    // Be lenient? No, if we can't download it, we probably shouldn't set it if we rely on local serving.
-    // However, we can fall back to setting the URL if download fails (but our frontend prefers local).
     throw new AppError('Failed to download and save image', 502);
   }
 
-  await pool.query(
-    `UPDATE albums
-     SET cover_image_url = $1, local_cover_path = $2, cover_art_fetched = TRUE,
-         cover_art_provenance = COALESCE($4::jsonb, CASE WHEN cover_image_url = $1 THEN cover_art_provenance END)
-     WHERE id = $3`,
-    [url, localPath, id, artwork ?? null]
-  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Match the lock order used by backup restore before touching any album or undo row.
+    await client.query(artworkUndoLock);
+    const { rows: [saved] } = await client.query<{ collection_id: number | null; artwork: ArtworkSnapshot }>(lockArtworkAlbum, [id]);
+    if (!saved) throw new AppError('Album not found.', 404);
+    const { rows: [applied] } = await client.query<{ artwork: ArtworkSnapshot }>(`
+      UPDATE albums a
+      SET cover_image_url = $1, local_cover_path = $2, cover_art_fetched = TRUE,
+          cover_art_provenance = COALESCE($4::jsonb, CASE WHEN cover_image_url = $1 THEN cover_art_provenance END)
+      WHERE id = $3
+      RETURNING ${artworkSnapshot} AS artwork
+    `, [url, localPath, id, artwork ?? null]);
+    if (!applied) throw new Error('Could not update the saved artwork.');
+    const undoToken = randomBytes(32).toString('base64url');
+    const { rows: [receipt] } = await client.query<{ expires_at: Date }>(`
+      INSERT INTO album_artwork_undo (collection_id, token_digest, previous_artwork, applied_artwork, expires_at)
+      SELECT $1::integer, $2, $3::jsonb, $4::jsonb, clock_timestamp() + INTERVAL '10 minutes'
+      WHERE $1::integer IS NOT NULL AND $3::jsonb IS DISTINCT FROM $4::jsonb
+      ON CONFLICT (collection_id) DO UPDATE SET
+        token_digest = EXCLUDED.token_digest,
+        previous_artwork = EXCLUDED.previous_artwork,
+        applied_artwork = EXCLUDED.applied_artwork,
+        expires_at = EXCLUDED.expires_at
+      RETURNING expires_at
+    `, [saved.collection_id, artworkUndoDigest(undoToken), saved.artwork, applied.artwork]);
+    const { rows: [album] } = await client.query(albumWithArtwork, [id]);
+    await client.query('COMMIT');
+    res.set('Cache-Control', 'no-store').json({
+      message: 'Cover art updated successfully',
+      album,
+      ...(receipt && { undoToken, expiresAt: receipt.expires_at.toISOString() }),
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+});
 
-  // Return updated album
-  const updatedResult = await pool.query(
-    `SELECT a.*, ar.name as artist_name 
-     FROM albums a
-     JOIN artists ar ON a.artist_id = ar.id
-     WHERE a.id = $1`,
-    [id]
-  );
-  
-  res.json({
-    message: 'Cover art updated successfully',
-    album: updatedResult.rows[0]
-  });
+export const undoCoverArt = asyncHandler(async (req: Request, res: Response) => {
+  const id = artworkAlbumId(req.params.id);
+  const { undoToken } = req.body ?? {};
+  if (typeof undoToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(undoToken)) {
+    throw new AppError('Choose a valid artwork change to undo.', 400);
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(artworkUndoLock);
+    const { rows: [saved] } = await client.query<{ collection_id: number | null; artwork: ArtworkSnapshot }>(lockArtworkAlbum, [id]);
+    if (!saved?.collection_id) throw new AppError('This album is no longer saved.', 404);
+    const { rows: [receipt] } = await client.query<{ previous_artwork: ArtworkSnapshot }>(`
+      DELETE FROM album_artwork_undo
+      WHERE collection_id = $1 AND token_digest = $2 AND applied_artwork = $3::jsonb
+        AND expires_at > clock_timestamp()
+      RETURNING previous_artwork
+    `, [saved.collection_id, artworkUndoDigest(undoToken), saved.artwork]);
+    if (!receipt) throw new AppError(expiredArtworkUndo, 409);
+    const { cover_image_url, local_cover_path, cover_art_fetched, cover_art_provenance } = receipt.previous_artwork;
+    await client.query(`
+      UPDATE albums SET cover_image_url = $2, local_cover_path = $3,
+        cover_art_fetched = $4, cover_art_provenance = $5
+      WHERE id = $1
+    `, [id, cover_image_url, local_cover_path, cover_art_fetched, cover_art_provenance]);
+    const { rows: [album] } = await client.query(albumWithArtwork, [id]);
+    await client.query('COMMIT');
+    res.set('Cache-Control', 'no-store').json({ album });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 });

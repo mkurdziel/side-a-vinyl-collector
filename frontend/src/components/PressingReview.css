@@ -1,3 +1,7 @@
+.rh-dialog:has(> .rh-pressing-review) {
+  overflow: clip;
+}
+
 .rh-pressing-review.rh-dialog-panel {
   display: flex;
   flex-direction: column;
@@ -217,10 +221,6 @@
 
   .rh-pressing-review__evidence {
     overflow: visible;
-  }
-
-  .rh-pressing-listing-heading {
-    scroll-margin-block-start: 4.5rem;
   }
 
   .rh-pressing-review__footer {

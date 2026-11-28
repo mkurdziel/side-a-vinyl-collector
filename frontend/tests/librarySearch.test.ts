@@ -31,6 +31,7 @@ vi.mock('../src/components/SettingsModal', () => ({ SettingsModal: () => null })
 
 import App from '../src/App';
 import { AddMenu } from '../src/components/AddMenu';
+import { BarcodeScanner } from '../src/components/BarcodeScanner';
 import { AlbumDetailModal } from '../src/components/AlbumDetailModal';
 import { ImageUploader } from '../src/components/ImageUploader';
 import { CatalogPressingPicker } from '../src/components/CatalogPressingPicker';
@@ -149,6 +150,75 @@ describe('library and catalog search', () => {
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('AB-012345678');
     await act(async () => button('Clear search').props.onClick());
     expect(renderer.root.findByType('form').props['data-long-query']).toBe(false);
+  });
+
+  it('shows search method and source and resumes the lookup and destination after checking a barcode', async () => {
+    search.mockImplementation(async (_query, _signal, kind) => kind === 'saved'
+      ? { local: [], discogs: [] } : { local: [], discogs: [catalog] });
+    searchCatalogNumber.mockResolvedValue({ local: [], discogs: [catalog] });
+    await renderLibrary();
+
+    const options = button('Search options, Name search, Both shelves');
+    expect(options.props['aria-expanded']).toBe(false);
+    await act(async () => options.props.onClick());
+    expect(options.props['aria-expanded']).toBe(true);
+    expect(button('Catalog number').props['aria-describedby']).toBe('catalog-number-clue');
+    expect(button('Barcode').props['aria-describedby']).toBe('barcode-clue');
+
+    await chooseScope('catalog');
+    await editSearch('Coltrane');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    const saveDestination = () => renderer.root.findByProps({ 'aria-label': 'Save new matches to' });
+    await act(async () => saveDestination().props.onChange({ target: { value: 'wishlist' } }));
+    await act(async () => button('Catalog number').props.onClick());
+    await editSearch('4006381333931');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(saveDestination().props.value).toBe('wishlist');
+
+    const catalogOptions = button('Search options, Catalog number, Discogs');
+    expect(catalogOptions.props['aria-expanded']).toBe(false);
+    await act(async () => catalogOptions.props.onClick());
+    await act(async () => button('Barcode').props.onClick());
+    expect(renderer.root.findByType(BarcodeScanner).props.viewMode).toBe('wishlist');
+    expect(renderer.root.findByProps({ id: 'manual-barcode' }).props.value).toBe('4006381333931');
+    await act(async () => button('Back to search').props.onClick());
+
+    expect(renderer.root.findAllByType(BarcodeScanner)).toHaveLength(0);
+    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('4006381333931');
+    expect(saveDestination().props.value).toBe('wishlist');
+    expect(searchCatalogNumber).toHaveBeenCalledTimes(1);
+    await act(async () => button('Album or artist').props.onClick());
+    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Coltrane');
+    expect(saveDestination().props.value).toBe('wishlist');
+  });
+
+  it('offers barcode lookup on a catalog-number miss without copying an invalid check digit', async () => {
+    searchCatalogNumber.mockResolvedValue({ local: [], discogs: [] });
+    await renderLibrary();
+    await act(async () => button('Catalog number').props.onClick());
+    await editSearch('4006381333932');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+
+    expect(JSON.stringify(renderer.toJSON())).toContain('For digits below the bars, use barcode lookup.');
+    await act(async () => button('Look up a barcode').props.onClick());
+    expect(renderer.root.findByProps({ id: 'manual-barcode' }).props.value).toBe('');
+    await act(async () => button('Back to search').props.onClick());
+    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('4006381333932');
+    expect(searchCatalogNumber).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands off a non-barcode label clue to the catalog number field without starting a lookup', async () => {
+    await renderLibrary();
+    await act(async () => button('Barcode').props.onClick());
+    const dialog = renderer.root.findByType(BarcodeScanner);
+    await act(async () => dialog.findByProps({ id: 'manual-barcode' }).props.onChange({ target: { value: 'ABC-123' } }));
+    await act(async () => dialog.findByType('form').props.onSubmit({ preventDefault: () => {} }));
+    await act(async () => button('Look up the catalog number on the sleeve or label').props.onClick());
+
+    expect(renderer.root.findAllByType(BarcodeScanner)).toHaveLength(0);
+    expect(button('Search options, Catalog number, Discogs')).toBeDefined();
+    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('');
+    expect(searchCatalogNumber).not.toHaveBeenCalled();
   });
 
   it('cancels a queued search when cleared and ignores an older response', async () => {
@@ -433,7 +503,7 @@ describe('library and catalog search', () => {
     await act(async () => button('Clear search').props.onClick());
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('');
     expect(renderer.root.findByProps({ id: 'search-scope' }).props.value).toBe('catalog');
-    expect(renderer.root.findByProps({ htmlFor: 'search-scope' }).children.join('')).toBe('Add search in');
+    expect(renderer.root.findByProps({ htmlFor: 'search-scope' }).children.join('')).toBe('Search in');
     expect(renderer.root.findAllByProps({ href: '#catalog-results-title' })).toHaveLength(0);
 
     await act(async () => button('Return to Collection').props.onClick());

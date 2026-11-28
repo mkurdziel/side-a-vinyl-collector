@@ -32,6 +32,10 @@ function findButton(label: string) {
   return button;
 }
 
+async function openImportReview() {
+  await act(async () => findButton('Review selection').props.onClick());
+}
+
 const releaseChoice = (id: number) => renderer.root.findByProps({ id: `discogs-import-release-${id}` });
 
 const content = () => renderer.root.findAllByType('p').map(node => node.children.join('')).join('\n');
@@ -68,8 +72,9 @@ describe('Discogs import', () => {
       .mockRejectedValueOnce(new ApiError('Album already in collection/wishlist', 409))
       .mockRejectedValueOnce(new ApiError('Service unavailable', 503));
     await loadCollection();
-    await act(async () => findButton('Select all (3)').props.onClick());
-    await act(async () => findButton('Import 3 records to Collection').props.onClick());
+    await act(async () => findButton('Select all eligible titles (3 to add)').props.onClick());
+    await openImportReview();
+    await act(async () => findButton('Import 3 titles to Collection').props.onClick());
 
     expect(content()).toContain('1 imported to Collection · 1 already in your library · 1 failed to import to Collection');
     expect(content()).toContain('Imported to Collection');
@@ -94,8 +99,9 @@ describe('Discogs import', () => {
     const firstAlbum = Promise.withResolvers<object>();
     addAlbum.mockReturnValueOnce(firstAlbum.promise);
     await loadCollection();
-    await act(async () => findButton('Select all (3)').props.onClick());
-    const run = findButton('Import 3 records to Collection').props.onClick;
+    await act(async () => findButton('Select all eligible titles (3 to add)').props.onClick());
+    await openImportReview();
+    const run = findButton('Import 3 titles to Collection').props.onClick;
     await act(async () => {
       void run();
       void run();
@@ -124,8 +130,9 @@ describe('Discogs import', () => {
     const first = Promise.withResolvers<object>();
     addAlbum.mockReturnValueOnce(first.promise);
     await loadCollection();
-    await act(async () => findButton('Select all (3)').props.onClick());
-    await act(async () => { void findButton('Import 3 records to Collection').props.onClick(); });
+    await act(async () => findButton('Select all eligible titles (3 to add)').props.onClick());
+    await openImportReview();
+    await act(async () => { void findButton('Import 3 titles to Collection').props.onClick(); });
     await act(async () => findButton('Stop after current record').props.onClick());
     await act(async () => first.resolve({}));
 
@@ -141,9 +148,10 @@ describe('Discogs import', () => {
 
   it('imports only the checked subset', async () => {
     await loadCollection();
-    expect(findButton('Import selected records').props.disabled).toBe(true);
+    expect(findButton('Review selection').props.disabled).toBe(true);
     await act(async () => renderer.root.findByProps({ 'aria-label': 'Select Third by Portishead' }).props.onChange({ currentTarget: { checked: true } }));
-    await act(async () => findButton('Import 1 record to Collection').props.onClick());
+    await openImportReview();
+    await act(async () => findButton('Import 1 title to Collection').props.onClick());
     expect(addAlbum).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ discogsId: 2, status: 'collection', applyCatalogReference: true }),
       expect.any(AbortSignal),
@@ -163,7 +171,8 @@ describe('Discogs import', () => {
 
     expect(controls().props.value).toBe('collection');
     await act(async () => { choose('wishlist'); select('Dummy'); });
-    await act(async () => { void findButton('Import 1 record to Wishlist').props.onClick(); });
+    await openImportReview();
+    await act(async () => { void findButton('Import 1 title to Wishlist').props.onClick(); });
     expect(controls().props.disabled).toBe(true);
     await act(async () => choose('collection'));
     expect(controls().props.value).toBe('wishlist');
@@ -173,7 +182,8 @@ describe('Discogs import', () => {
     expect(content()).toContain('1 imported to Wishlist');
 
     await act(async () => { choose('collection'); select('Third'); });
-    await act(async () => findButton('Import 1 record to Collection').props.onClick());
+    await openImportReview();
+    await act(async () => findButton('Import 1 title to Collection').props.onClick());
     expect(content()).toContain('1 imported to Collection · 1 imported to Wishlist');
     expect(addAlbum.mock.calls.map(([album]) => [album.discogsId, album.status])).toEqual([[1, 'wishlist'], [2, 'collection']]);
   });
@@ -183,7 +193,7 @@ describe('Discogs import', () => {
     await loadCollection();
     expect(content()).toContain('Ask your server administrator to check the connection.');
     await act(async () => findButton('Reload Discogs collection').props.onClick());
-    expect(content()).toContain('3 records available');
+    expect(content()).toContain('3 Discogs listings across 3 titles');
     expect(addAlbum).not.toHaveBeenCalled();
   });
 
@@ -192,7 +202,7 @@ describe('Discogs import', () => {
       .mockRejectedValueOnce(new ApiError('Unavailable', 503))
       .mockResolvedValueOnce({ albums, count: 3, page: 2, totalPages: 2 });
     await loadCollection();
-    expect(content()).toContain('No new records on the pages loaded so far.');
+    expect(content()).toContain('No new listings on the pages loaded so far.');
     expect(content()).toContain('1 of 2 Discogs pages loaded');
     expect(importDiscogsCollection.mock.calls.map(([page]) => page)).toEqual([1]);
     await act(async () => findButton('Load next Discogs page').props.onClick());
@@ -200,11 +210,11 @@ describe('Discogs import', () => {
     await act(async () => findButton('Retry Discogs page').props.onClick());
     expect(importDiscogsCollection.mock.calls.map(([page]) => page)).toEqual([1, 2, 2]);
     expect(content()).toContain('2 of 2 Discogs pages loaded');
-    expect(content()).toContain('3 records available');
+    expect(content()).toContain('3 Discogs listings across 3 titles');
     expect(addAlbum).not.toHaveBeenCalled();
   });
 
-  it('puts the incomplete page coverage beside import and keeps the selection if the next page is canceled', async () => {
+  it('keeps partial coverage upfront and at signoff after the next page is canceled', async () => {
     let nextPageSignal: AbortSignal | undefined;
     importDiscogsCollection.mockResolvedValueOnce({ albums: albums.slice(0, 2), page: 1, totalPages: 3, nextPage: 2 })
       .mockImplementationOnce((_page: number, signal: AbortSignal) => new Promise((_, reject) => {
@@ -220,8 +230,8 @@ describe('Discogs import', () => {
     expect(coverage.children.join('')).toBe('1 of 3 Discogs pages loaded');
     const actions = coverage.parent?.parent?.findAllByType('button');
     expect(actions?.some(node => node.children.join('') === 'Load next Discogs page')).toBe(true);
-    expect(actions?.some(node => node.children.join('') === 'Import 1 record to Wishlist')).toBe(true);
-    expect(findButton('Import 1 record to Wishlist').props['aria-describedby']).toBe('discogs-page-coverage discogs-partial-import');
+    expect(actions?.some(node => node.children.join('').startsWith('Import'))).toBe(false);
+    expect(findButton('Review selection').props['aria-describedby']).toBe('discogs-selection-count discogs-page-coverage discogs-partial-import');
     expect(content()).toContain('Later pages may contain alternate pressings.');
 
     await act(async () => findButton('Load next Discogs page').props.onClick());
@@ -233,7 +243,12 @@ describe('Discogs import', () => {
     expect(renderer.root.findByType('select').props.value).toBe('wishlist');
     expect(addAlbum).not.toHaveBeenCalled();
 
-    await act(async () => findButton('Import 1 record to Wishlist').props.onClick());
+    await openImportReview();
+    expect(content()).toContain('1 of 3 Discogs pages loaded');
+    expect(content()).toContain('This import uses titles selected from the loaded pages.');
+    expect(findButton('Import 1 title to Wishlist').props['aria-describedby']).toBe('discogs-signoff-count discogs-signoff-scope');
+    expect(addAlbum).not.toHaveBeenCalled();
+    await act(async () => findButton('Import 1 title to Wishlist').props.onClick());
     expect(addAlbum.mock.calls.map(([album]) => [album.discogsId, album.status])).toEqual([[1, 'wishlist']]);
     expect(findButton('Load next Discogs page')).toBeTruthy();
     expect(JSON.parse(sessionStorage.getItem('side-a:discogs-import-review:v1')!)).toMatchObject({
@@ -266,7 +281,8 @@ describe('Discogs import', () => {
     expect(releaseChoice(2).props.checked).toBe(true);
     await act(async () => releaseChoice(2).props.onChange({ currentTarget: { checked: false } }));
     await act(async () => releaseChoice(4).props.onChange({ currentTarget: { checked: true } }));
-    await act(async () => findButton('Import 1 record to Collection').props.onClick());
+    await openImportReview();
+    await act(async () => findButton('Import 1 title to Collection').props.onClick());
     expect(addAlbum).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ discogsId: 4, status: 'collection', applyCatalogReference: true }),
       expect.any(AbortSignal),
@@ -289,16 +305,16 @@ describe('Discogs import', () => {
     });
     await act(async () => findButton('Load next Discogs page').props.onClick());
     await act(async () => select('Roseland NYC Live'));
-    expect(content()).toContain('2 selected for Wishlist');
+    expect(content()).toContain('2 titles selected for Wishlist');
 
     await act(async () => renderer.unmount());
     await act(async () => { renderer = create(createElement(DiscogsImporter, { ...importerProps, open: false })); });
-    expect(content()).toContain('Discogs review · 2 selected for Wishlist');
+    expect(content()).toContain('Discogs review · 2 titles selected for Wishlist');
     expect(findButton('Open Discogs review')).toBeTruthy();
     await act(async () => renderer.update(createElement(DiscogsImporter, importerProps)));
     await act(async () => findButton('Resume review').props.onClick());
     expect(content()).toContain('Could not refresh your review. Your draft is kept. Try again.');
-    expect(content()).toContain('Saved review · 2 selected for Wishlist');
+    expect(content()).toContain('Saved review · 2 titles selected for Wishlist');
     expect(addAlbum).not.toHaveBeenCalled();
     await act(async () => findButton('Retry review').props.onClick());
 
@@ -310,7 +326,8 @@ describe('Discogs import', () => {
     expect(renderer.root.findByType('select').props.value).toBe('wishlist');
     expect(renderer.root.findByProps({ 'aria-label': 'Select Third by Portishead' }).props.checked).toBe(false);
     expect(addAlbum).not.toHaveBeenCalled();
-    await act(async () => findButton('Import 2 records to Wishlist').props.onClick());
+    await openImportReview();
+    await act(async () => findButton('Import 2 titles to Wishlist').props.onClick());
     expect(addAlbum.mock.calls.map(([album]) => [album.discogsId, album.status])).toEqual([[1, 'wishlist'], [3, 'wishlist']]);
     expect(sessionStorage.getItem('side-a:discogs-import-review:v1')).toBeNull();
   });
@@ -327,11 +344,11 @@ describe('Discogs import', () => {
     await loadCollection();
     await act(async () => {
       renderer.root.findByType('select').props.onChange({ target: { value: 'wishlist' } });
-      findButton('Select all loaded (3)').props.onClick();
+      findButton('Select all eligible titles (3 to add)').props.onClick();
     });
     await act(async () => findButton('Load next Discogs page').props.onClick());
     await act(async () => releaseChoice(5).props.onChange({ currentTarget: { checked: true } }));
-    expect(findButton('Import 3 records to Wishlist').props.disabled).toBe(false);
+    expect(findButton('Review selection').props.disabled).toBe(false);
     const coverage = renderer.root.findByProps({ id: 'discogs-page-coverage' });
     expect(coverage.parent?.parent?.findAllByType('button').map(node => node.children.join(''))).not.toContain('Refresh reviewed pages');
     await act(async () => findButton('Refresh reviewed pages').props.onClick());
@@ -350,7 +367,8 @@ describe('Discogs import', () => {
       .toEqual([[3, 'competing'], [2, 'saved'], [5, 'unavailable']]);
     expect(saved.destination).toBe('wishlist');
     expect(addAlbum).not.toHaveBeenCalled();
-    await act(async () => findButton('Import 1 record to Wishlist').props.onClick());
+    await openImportReview();
+    await act(async () => findButton('Import 1 title to Wishlist').props.onClick());
     expect(addAlbum.mock.calls.map(([album]) => [album.discogsId, album.status])).toEqual([[1, 'wishlist']]);
   });
 
@@ -368,41 +386,63 @@ describe('Discogs import', () => {
 
     expect(content()).toContain('Could not verify the selected records. Your choices are kept. Retry the review before importing.');
     expect(releaseChoice(1).props.checked).toBe(true);
-    const commit = findButton('Import 1 record to Collection');
+    const commit = findButton('Review selection');
     expect(commit.props.disabled).toBe(true);
     await act(async () => commit.props.onClick());
     expect(addAlbum).not.toHaveBeenCalled();
 
     await act(async () => findButton('Retry review').props.onClick());
     expect(releaseChoice(1).props.checked).toBe(true);
-    expect(findButton('Import 1 record to Collection').props.disabled).toBe(false);
+    expect(findButton('Review selection').props.disabled).toBe(false);
     expect(addAlbum).not.toHaveBeenCalled();
   });
 
-  it('leaves direct selection in place and reveals the entire import button when its coverage will not fit', async () => {
+  it('opens selected-only review from a deep choice and restores the card focus and scroll on Back', async () => {
     const longReview = Array.from({ length: 30 }, (_, index) => ({ id: index + 1, discogsId: index + 1, artist: 'Fixture artist', album: `Album ${index + 1}` }));
     importDiscogsCollection.mockResolvedValueOnce({ albums: longReview, page: 1, totalPages: 1 });
-    const button = { disabled: false, focus: vi.fn(), getBoundingClientRect: () => ({ top: -1490, bottom: -1446 }) };
+    const reviewHeading = { focus: vi.fn() };
+    const origin = { focus: vi.fn() };
     const panel = {
       scrollTop: 2000, clientTop: 1, clientHeight: 392, getBoundingClientRect: () => ({ top: 29 }),
-      querySelector: vi.fn(selector => selector === '#discogs-import-commit' ? button : null),
+      querySelector: vi.fn(selector => selector === '#discogs-import-review-link-30' ? origin : null),
     };
     await loadCollection({ createNodeMock: element => {
       if (element.props.className?.startsWith('rh-dialog-panel')) return panel;
       if (element.props.className?.startsWith('rh-dialog-header')) return { getBoundingClientRect: () => ({ height: 71 }) };
-      if (element.props.id === 'discogs-page-coverage') return { getBoundingClientRect: () => ({ top: -1800 }) };
+      if (element.props.id === 'discogs-selected-heading') return reviewHeading;
       return null;
     } });
     await act(async () => releaseChoice(30).props.onChange({ currentTarget: { checked: true } }));
-    expect(button.focus).not.toHaveBeenCalled();
+    expect(reviewHeading.focus).not.toHaveBeenCalled();
     expect(panel.scrollTop).toBe(2000);
     const article = renderer.root.findAllByType('article').at(-1);
     const link = article?.findByProps({ href: '#discogs-import-choices' });
     expect(link?.children.join('')).toBe('Review import choices');
     await act(async () => link?.props.onClick({ preventDefault: vi.fn() }));
-    expect(button.focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
-    expect(panel.scrollTop).toBe(144);
-    expect(findButton('Import 1 record to Collection').props.disabled).toBe(false);
+    expect(reviewHeading.focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    expect(panel.scrollTop).toBe(0);
+    expect(renderer.root.findByProps({ 'aria-label': 'Titles in this import' }).findAllByType('h4').map(node => node.children.join(''))).toEqual(['Album 30']);
+    expect(findButton('Import 1 title to Collection').props.disabled).toBe(false);
+    expect(addAlbum).not.toHaveBeenCalled();
+    await act(async () => findButton('Back to selections').props.onClick());
+    expect(panel.scrollTop).toBe(2000);
+    expect(origin.focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    expect(releaseChoice(30).props.checked).toBe(true);
+    expect(addAlbum).not.toHaveBeenCalled();
+  });
+
+  it('removes a specific release from signoff and leaves the other choices ready for review', async () => {
+    await loadCollection();
+    await act(async () => findButton('Select all eligible titles (3 to add)').props.onClick());
+    await act(async () => findButton('Review selection').props.onClick());
+    const remove = renderer.root.findByProps({ 'aria-label': 'Remove Dummy by Portishead from this import' });
+    await act(async () => remove.props.onClick());
+    expect(findButton('Import 2 titles to Collection').props.disabled).toBe(false);
+    const selected = renderer.root.findByProps({ 'aria-label': 'Titles in this import' });
+    expect(selected.findAllByType('h4')).toHaveLength(2);
+    expect(selected.findAllByType('h4').some(heading => heading.children.join('') === 'Dummy')).toBe(false);
+    await act(async () => findButton('Back to selections').props.onClick());
+    expect(releaseChoice(1).props.checked).toBe(false);
     expect(addAlbum).not.toHaveBeenCalled();
   });
 
@@ -412,20 +452,20 @@ describe('Discogs import', () => {
     getAlbums.mockImplementation(async shelf => ({ albums: shelf === 'wishlist'
       ? [{ discogs_id: 7, title: 'Dummy', artist_name: 'Portishead', status: 'wishlist' }] : [] }));
     await loadCollection();
-    await act(async () => findButton('Select all (3)').props.onClick());
+    await act(async () => findButton('Select all eligible titles (3 to add)').props.onClick());
     await act(async () => renderer.unmount());
     await act(async () => { renderer = create(createElement(DiscogsImporter, importerProps)); });
     await act(async () => findButton('Resume review').props.onClick());
 
-    expect(content()).toContain('1 selection needs your attention.');
+    expect(content()).toContain('1 title needs your attention');
     const notes = renderer.root.findAllByType('li').map(node => node.findByType('p').children
       .map(child => typeof child === 'string' ? child : child.children.join('')).join('')).join('\n');
     expect(notes).toContain('Dummy by Portishead · Discogs 1. Already in Wishlist.');
     expect(notes).toContain('Third by Portishead · Discogs 2. Unavailable on the refreshed pages.');
-    expect(findButton('Import 1 record to Collection').props.disabled).toBe(false);
+    expect(findButton('Review selection').props.disabled).toBe(false);
     await act(async () => findButton('Discard review').props.onClick());
     expect(sessionStorage.getItem('side-a:discogs-import-review:v1')).not.toBeNull();
-    expect(findButton('Import 1 record to Collection').props.disabled).toBe(true);
+    expect(findButton('Review selection').props.disabled).toBe(true);
     await act(async () => findButton('Discard selection').props.onClick());
     expect(findButton('Load Discogs collection')).toBeTruthy();
     expect(sessionStorage.getItem('side-a:discogs-import-review:v1')).toBeNull();
@@ -440,7 +480,7 @@ describe('Discogs import', () => {
     await loadCollection();
     const checkbox = (title: string) => renderer.root.findByProps({ 'aria-label': `Select ${title} by Portishead` });
     await act(async () => checkbox('Third').props.onChange({ currentTarget: { checked: true } }));
-    await act(async () => findButton('Select all loaded (2)').props.onClick());
+    await act(async () => findButton('Select all eligible titles (1 to add)').props.onClick());
     expect(checkbox('Dummy').props.checked).toBe(true);
     await act(async () => findButton('Load next Discogs page').props.onClick());
 
@@ -448,27 +488,31 @@ describe('Discogs import', () => {
     expect(releaseChoice(4).props.checked).toBe(false);
     expect(releaseChoice(2).props.checked).toBe(true);
     expect(releaseChoice(5).props.checked).toBe(false);
-    expect(content()).toContain('1 selection needs your attention.');
+    expect(content()).toContain('1 title needs your attention');
+    expect(content()).toContain('4 Discogs listings across 2 titles');
+    expect(content()).toContain('2 titles require an individual choice. Select all skips them.');
+    expect(renderer.root.findAllByType('button').some(node => node.children.join('').startsWith('Select all eligible titles'))).toBe(false);
     expect(renderer.root.findByProps({ 'aria-label': 'Pressings of Dummy by Portishead' }).findAllByType('article')).toHaveLength(2);
     expect(addAlbum).not.toHaveBeenCalled();
   });
 
-  it('jumps from a changed selection to the exact comparison, then returns to the import controls', async () => {
+  it('jumps from a changed selection to comparison evidence and opens non-writing signoff for the chosen release', async () => {
     const alternateDummy = { ...albums[0], id: 4, discogsId: 4, pressing: { catalogNumber: 'ALT 04' } };
     importDiscogsCollection.mockResolvedValueOnce({ albums, page: 1, totalPages: 2, nextPage: 2 })
       .mockResolvedValueOnce({ albums: [alternateDummy], page: 2, totalPages: 2 });
     const pressingHeading = { focus: vi.fn(), getBoundingClientRect: () => ({ top: 483, bottom: 503 }) };
-    const importChoices = { focus: vi.fn(), getBoundingClientRect: () => ({ top: 92, bottom: 112 }) };
+    const selectionHeading = { focus: vi.fn() };
     const panel = {
       scrollTop: 0, clientTop: 1, clientHeight: 393, getBoundingClientRect: () => ({ top: 0 }),
-      querySelector: vi.fn(selector => selector === '#discogs-import-pressings-1' ? pressingHeading : importChoices),
+      querySelector: vi.fn(selector => selector === '#discogs-import-pressings-1' ? pressingHeading : null),
     };
     await loadCollection({ createNodeMock: element => {
       if (element.props.className?.startsWith('rh-dialog-panel')) return panel;
       if (element.props.className?.startsWith('rh-dialog-header')) return { getBoundingClientRect: () => ({ height: 70 }) };
+      if (element.props.id === 'discogs-selected-heading') return selectionHeading;
       return null;
     } });
-    await act(async () => findButton('Select all loaded (3)').props.onClick());
+    await act(async () => findButton('Select all eligible titles (3 to add)').props.onClick());
     await act(async () => findButton('Load next Discogs page').props.onClick());
 
     const reviewLink = renderer.root.findByProps({ 'aria-label': 'Review pressings for Dummy by Portishead' });
@@ -477,13 +521,21 @@ describe('Discogs import', () => {
     await act(async () => reviewLink.props.onClick({ preventDefault: vi.fn() }));
     expect(pressingHeading.focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
     expect(panel.scrollTop).toBe(400);
+    const scope = renderer.root.findByProps({ 'aria-label': 'Pressings of Dummy by Portishead' });
+    expect(scope.findByType('summary').children.join('')).toBe('Compare listings');
+    expect(scope.findByType('table').findAllByType('th').map(node => node.children.map(child =>
+      typeof child === 'string' ? child : child.children.join('')).join(''))).toEqual(expect.arrayContaining(['Catalog number', 'Discogs 1', 'Discogs 4']));
+    expect(releaseChoice(1).props.checked).toBe(false);
+    expect(releaseChoice(4).props.checked).toBe(false);
 
     await act(async () => releaseChoice(4)
       .props.onChange({ currentTarget: { checked: true } }));
     const returnLink = renderer.root.findByProps({ href: '#discogs-import-choices' });
     await act(async () => returnLink.props.onClick({ preventDefault: vi.fn() }));
-    expect(importChoices.focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
-    expect(findButton('Import 3 records to Collection').props.disabled).toBe(false);
+    expect(selectionHeading.focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    const selectedTitles = renderer.root.findByProps({ 'aria-label': 'Titles in this import' });
+    expect(selectedTitles.findAllByType('h4').map(node => node.children.join(''))).toEqual(['Third', 'Roseland NYC Live', 'Dummy']);
+    expect(selectedTitles.findAllByType('a').map(node => node.props.href)).toContain('https://www.discogs.com/release/4');
     expect(addAlbum).not.toHaveBeenCalled();
   });
 
@@ -503,7 +555,7 @@ describe('Discogs import', () => {
     } });
     await act(async () => {
       renderer.root.findByType('select').props.onChange({ target: { value: 'wishlist' } });
-      findButton('Select all (3)').props.onClick();
+      findButton('Select all eligible titles (3 to add)').props.onClick();
     });
     const savedReview = sessionStorage.getItem('side-a:discogs-import-review:v1');
     await act(async () => findButton('Discard review').props.onClick());
@@ -511,7 +563,7 @@ describe('Discogs import', () => {
     expect(renderer.root.findByProps({ id: 'discogs-discard-heading' }).children.join('')).toBe('Discard 3 selections for Wishlist?');
     await act(async () => renderer.root.findByType('dialog').props.onCancel({ preventDefault: vi.fn(), stopPropagation: vi.fn() }));
     expect(discardFocus).toHaveBeenCalledWith({ preventScroll: true });
-    expect(findButton('Import 3 records to Wishlist').props.disabled).toBe(false);
+    expect(findButton('Review selection').props.disabled).toBe(false);
 
     await act(async () => findButton('Discard review').props.onClick());
     await act(async () => findButton('Close Discogs import').props.onClick());
@@ -520,7 +572,7 @@ describe('Discogs import', () => {
     await act(async () => renderer.update(createElement(DiscogsImporter, { ...importerProps, open: false })));
     await act(async () => renderer.unmount());
     await act(async () => { renderer = create(createElement(DiscogsImporter, importerProps)); });
-    expect(content()).toContain('Saved review · 3 selected for Wishlist');
+    expect(content()).toContain('Saved review · 3 titles selected for Wishlist');
     expect(renderer.root.findAllByProps({ id: 'discogs-discard-heading' })).toHaveLength(0);
     expect(addAlbum).not.toHaveBeenCalled();
   });
@@ -536,7 +588,7 @@ describe('Discogs import', () => {
     await loadCollection();
     await act(async () => renderer.root.findByProps({ 'aria-label': 'Select Third by Portishead' })
       .props.onChange({ currentTarget: { checked: true } }));
-    await act(async () => findButton('Select all loaded (2)').props.onClick());
+    await act(async () => findButton('Select all eligible titles (1 to add)').props.onClick());
     await act(async () => findButton('Load next Discogs page').props.onClick());
     await act(async () => renderer.unmount());
     await act(async () => { renderer = create(createElement(DiscogsImporter, importerProps)); });
@@ -544,8 +596,8 @@ describe('Discogs import', () => {
 
     expect(releaseChoice(1).props.checked).toBe(false);
     expect(releaseChoice(2).props.checked).toBe(true);
-    expect(content()).toContain('1 selection needs your attention.');
-    expect(findButton('Import 1 record to Collection').props.disabled).toBe(false);
+    expect(content()).toContain('1 title needs your attention');
+    expect(findButton('Review selection').props.disabled).toBe(false);
     expect(addAlbum).not.toHaveBeenCalled();
   });
 
@@ -557,7 +609,7 @@ describe('Discogs import', () => {
     await loadCollection();
     await act(async () => {
       renderer.root.findByType('select').props.onChange({ target: { value: 'wishlist' } });
-      findButton('Select all loaded (2)').props.onClick();
+      findButton('Select all eligible titles (2 to add)').props.onClick();
     });
     await act(async () => findButton('Load next Discogs page').props.onClick());
     const originalDraft = JSON.parse(sessionStorage.getItem('side-a:discogs-import-review:v1')!);
@@ -567,7 +619,7 @@ describe('Discogs import', () => {
     for (let reload = 0; reload < 2; reload++) {
       await act(async () => renderer.unmount());
       await act(async () => { renderer = create(createElement(DiscogsImporter, importerProps)); });
-      expect(content()).toContain('Saved review · 1 selected for Wishlist · 1 to review');
+      expect(content()).toContain('Saved review · 1 title selected for Wishlist · 1 needs attention');
       expect(renderer.root.findAllByProps({ 'aria-label': 'Review pressings for Dummy by Portishead' })).toHaveLength(0);
       await act(async () => findButton('Resume review').props.onClick());
       const reviewLink = renderer.root.findByProps({ 'aria-label': 'Review pressings for Dummy by Portishead' });
@@ -576,7 +628,7 @@ describe('Discogs import', () => {
       expect(content()).toContain('Another pressing appeared.');
       expect(releaseChoice(1).props.checked).toBe(false);
       expect(renderer.root.findByProps({ 'aria-label': 'Select Third by Portishead' }).props.checked).toBe(true);
-      expect(findButton('Import 1 record to Wishlist').props.disabled).toBe(false);
+      expect(findButton('Review selection').props.disabled).toBe(false);
       expect(addAlbum).not.toHaveBeenCalled();
     }
 
@@ -585,7 +637,7 @@ describe('Discogs import', () => {
     await act(async () => releaseChoice(4)
       .props.onChange({ currentTarget: { checked: true } }));
     expect(JSON.parse(sessionStorage.getItem('side-a:discogs-import-review:v1')!).notices).toEqual([]);
-    expect(findButton('Import 2 records to Wishlist').props.disabled).toBe(false);
+    expect(findButton('Review selection').props.disabled).toBe(false);
     expect(addAlbum).not.toHaveBeenCalled();
   });
 
@@ -605,7 +657,7 @@ describe('Discogs import', () => {
     await reload();
     expect(content()).toContain('Unavailable on the refreshed pages.');
     expect(renderer.root.findByProps({ 'aria-label': 'Review pressing for Dummy by Portishead' }).props.href).toBe('#discogs-import-pressings-4');
-    expect(findButton('Select all (1)')).toBeTruthy();
+    expect(findButton('Select all eligible titles (1 to add)')).toBeTruthy();
 
     getAlbums.mockImplementation(async shelf => ({ albums: shelf === 'collection'
       ? [{ discogs_id: 4, title: 'Dummy', artist_name: 'Portishead', status: 'collection' }] : [] }));
@@ -613,6 +665,11 @@ describe('Discogs import', () => {
     expect(content()).toContain('Already in Collection.');
     expect(renderer.root.findAllByProps({ 'aria-label': 'Review pressing for Dummy by Portishead' })).toHaveLength(0);
     expect(renderer.root.findAllByProps({ 'aria-label': 'Select Dummy by Portishead' })).toHaveLength(0);
+    await act(async () => renderer.unmount());
+    await act(async () => { renderer = create(createElement(DiscogsImporter, importerProps)); });
+    expect(content()).toContain('Saved review · 0 titles selected for Wishlist · 1 already saved');
+    expect(content()).not.toContain('needs attention');
+    await act(async () => findButton('Resume review').props.onClick());
     await act(async () => findButton('Dismiss review notice for Dummy by Portishead').props.onClick());
     await reload();
     expect(content()).not.toContain('Already in Collection.');
@@ -629,7 +686,7 @@ describe('Discogs import', () => {
     await act(async () => { renderer = create(createElement(DiscogsImporter, importerProps)); });
     await act(async () => findButton('Resume review').props.onClick());
     expect(renderer.root.findByProps({ 'aria-label': 'Select Third by Portishead' }).props.checked).toBe(true);
-    expect(findButton('Import 1 record to Wishlist').props.disabled).toBe(false);
+    expect(findButton('Review selection').props.disabled).toBe(false);
     expect(addAlbum).not.toHaveBeenCalled();
   });
 
@@ -639,14 +696,15 @@ describe('Discogs import', () => {
       ? { albums: albums.slice(0, 2), page: 1, totalPages: 2, nextPage: 2 }
       : { albums: [alternate], page: 2, totalPages: 2 });
     await loadCollection();
-    await act(async () => findButton('Select all loaded (2)').props.onClick());
+    await act(async () => findButton('Select all eligible titles (2 to add)').props.onClick());
     await act(async () => findButton('Load next Discogs page').props.onClick());
-    await act(async () => findButton('Import 1 record to Collection').props.onClick());
+    await openImportReview();
+    await act(async () => findButton('Import 1 title to Collection').props.onClick());
     expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ discogsId: 2 }), expect.any(AbortSignal));
 
     await act(async () => renderer.unmount());
     await act(async () => { renderer = create(createElement(DiscogsImporter, importerProps)); });
-    expect(content()).toContain('Saved review · 0 selected for Collection · 1 to review');
+    expect(content()).toContain('Saved review · 0 titles selected for Collection · 1 needs attention');
     await act(async () => findButton('Resume review').props.onClick());
     expect(renderer.root.findByProps({ 'aria-label': 'Review pressings for Dummy by Portishead' })).toBeTruthy();
     expect(addAlbum).toHaveBeenCalledTimes(1);
@@ -664,10 +722,11 @@ describe('Discogs import', () => {
     await loadCollection();
     await act(async () => {
       renderer.root.findByType('select').props.onChange({ target: { value: 'wishlist' } });
-      findButton('Select all (3)').props.onClick();
+      findButton('Select all eligible titles (3 to add)').props.onClick();
     });
+    await openImportReview();
     await act(async () => {
-      void findButton('Import 3 records to Wishlist').props.onClick();
+      void findButton('Import 3 titles to Wishlist').props.onClick();
     });
     expect(addAlbum).toHaveBeenCalledTimes(2);
 

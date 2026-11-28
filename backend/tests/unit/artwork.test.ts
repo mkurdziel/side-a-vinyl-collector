@@ -34,6 +34,7 @@ function invoke(handler: RequestHandler, body = {}, search = {}, id = '42') {
   return new Promise<any>((resolve, reject) => {
     const response = {
       status: vi.fn().mockReturnThis(),
+      set: vi.fn().mockReturnThis(),
       json: resolve,
     } as unknown as Response;
     handler({ params: { id }, query: search, body } as unknown as Request, response, reject);
@@ -204,18 +205,26 @@ describe('artwork candidates and manual selection', () => {
   });
 
   it('still marks successfully saved manual selections fetched', async () => {
+    client.query.mockImplementation(async (sql: string) => ({
+      rows: sql.includes('collection_id,') && sql.includes('RETURNING expires_at') ? [] :
+        [{ collection_id: null, artwork: {} }],
+    }));
     await invoke(updateCoverArt, { url: fallbackUrl, source: 'Discogs' });
-    expect(query).toHaveBeenCalledWith(
-      expect.stringContaining('cover_art_fetched = TRUE'), [fallbackUrl, '42_fallback.jpg', '42', null],
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringContaining('cover_art_fetched = TRUE'), [fallbackUrl, '42_fallback.jpg', 42, null],
     );
   });
 
   it('stores optional selected artwork metadata separately from the album release', async () => {
+    client.query.mockImplementation(async (sql: string) => ({
+      rows: sql.includes('RETURNING expires_at') ? [] : [{ collection_id: null, artwork: {} }],
+    }));
     await invoke(updateCoverArt, { url: fallbackUrl, source: 'Discogs', provenance: { releaseId: 401, title: ' Dummy UK ', year: 1994 } });
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('cover_art_provenance ='), [
-      fallbackUrl, '42_fallback.jpg', '42', { source: 'Discogs', url: fallbackUrl, releaseId: 401, title: 'Dummy UK', year: 1994 },
+    expect(client.query).toHaveBeenCalledWith(expect.stringContaining('cover_art_provenance ='), [
+      fallbackUrl, '42_fallback.jpg', 42, { source: 'Discogs', url: fallbackUrl, releaseId: 401, title: 'Dummy UK', year: 1994 },
     ]);
-    expect(query.mock.calls[0]?.[0]).not.toContain('discogs_id');
+    const update = client.query.mock.calls.find(([sql]) => sql.includes('UPDATE albums a'));
+    expect(update?.[0]).not.toContain('discogs_id');
   });
 
   it.each([

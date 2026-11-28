@@ -4,12 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemovalHistory, type RemovalHistoryHandle } from '../src/components/RemovalHistory';
 import { ApiError, type Album } from '../src/services/api';
 
-const { undoAlbumRemoval, undoAlbumMove, undoPressing } = vi.hoisted(() => ({
-  undoAlbumRemoval: vi.fn(), undoAlbumMove: vi.fn(), undoPressing: vi.fn(),
+const { undoAlbumRemoval, undoAlbumMove, undoPressing, undoCoverArt } = vi.hoisted(() => ({
+  undoAlbumRemoval: vi.fn(), undoAlbumMove: vi.fn(), undoPressing: vi.fn(), undoCoverArt: vi.fn(),
 }));
 vi.mock('../src/services/api', async importOriginal => ({
   ...await importOriginal<typeof import('../src/services/api')>(),
-  default: { undoAlbumRemoval, undoAlbumMove, undoPressing },
+  default: { undoAlbumRemoval, undoAlbumMove, undoPressing, undoCoverArt },
 }));
 
 const shelfRecord: Album = {
@@ -26,13 +26,14 @@ const history = createRef<RemovalHistoryHandle>();
 const onRestored = vi.fn();
 const onMovedBack = vi.fn();
 const onPressingUndone = vi.fn();
+const onArtworkUndone = vi.fn();
 const onExternalChange = vi.fn();
 let renderer: ReturnType<typeof create>;
 
 async function mount(options: Parameters<typeof create>[1] = {}, fallbackFocus = createRef<HTMLElement>()) {
   await act(async () => {
     renderer = create(createElement(RemovalHistory, {
-      ref: history, onRestored, onMovedBack, onPressingUndone, onExternalChange, fallbackFocus,
+      ref: history, onRestored, onMovedBack, onPressingUndone, onArtworkUndone, onExternalChange, fallbackFocus,
     }), options);
   });
 }
@@ -98,6 +99,21 @@ afterEach(async () => {
 });
 
 describe('removal history', () => {
+  it('restores a saved artwork receipt after reopening and preserves the returned artwork', async () => {
+    const receipt = { undoToken: 'artwork-token', expiresAt: new Date(Date.now() + 600_000).toISOString() };
+    const restored = { ...shelfRecord, local_cover_path: 'previous.jpg' };
+    await mount();
+    await act(async () => history.current!.recordArtwork(shelfRecord, receipt));
+    await act(async () => renderer.unmount());
+    await mount();
+    expect(activeReceipts()).toMatchObject([{ kind: 'artwork' }]);
+    undoCoverArt.mockResolvedValue({ album: restored });
+    await act(async () => button('Undo artwork change')!.props.onClick());
+    expect(undoCoverArt).toHaveBeenCalledExactlyOnceWith(restored.id, receipt.undoToken);
+    expect(onArtworkUndone).toHaveBeenCalledExactlyOnceWith(restored);
+    expect(activeReceipts()).toEqual([]);
+  });
+
   it.each([
     [shelfRecord, wishlistRecord],
     [wishlistRecord, shelfRecord],

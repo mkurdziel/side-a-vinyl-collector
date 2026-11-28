@@ -1,5 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
-import api, { type Album, type PressingDetails, type SearchCoverArtQuery, type SearchCoverArtResult, getCoverArtUrl } from '../services/api';
+import api, { ApiError, type Album, type ArtworkUndoReceipt, type PressingDetails, type SearchCoverArtQuery, type SearchCoverArtResult, getCoverArtUrl } from '../services/api';
+import { formatUndoDeadline } from '../services/undoDeadline';
 import { discogsReleaseSource, savedCatalogSource, savedCopyLabel } from '../albumDisplay';
 import { ModalDialog } from './ModalDialog';
 
@@ -8,14 +9,16 @@ interface AlbumDetailModalProps {
   onClose: () => void;
   shelfActions?: ReactNode;
   onRefresh: (updatedAlbum?: Album) => void;
+  onArtworkChanged?: (album: Album, receipt: ArtworkUndoReceipt) => void;
+  onArtworkUndoClosed?: (albumId: number, undoToken: string) => void;
   onFindPressing?: (album: Album, opener: HTMLButtonElement) => void;
   backToMatches?: boolean;
   returnFocusTo?: RefObject<HTMLElement | null>;
 }
 
 type PressingResult = { status: 'loading' | 'failed' } | { status: 'ready'; pressing: PressingDetails | null };
-type ArtworkOperation = { kind: 'search' | 'save'; albumId: number };
-type ArtworkNotice = 'empty' | 'failed' | 'updated';
+type ArtworkOperation = { kind: 'search' | 'save' | 'undo'; albumId: number };
+type ArtworkNotice = 'empty' | 'failed' | 'updated' | 'restored';
 type ArtworkSide = 'current' | 'selected';
 type ArtworkSize = { width: number; height: number };
 
@@ -149,7 +152,9 @@ function SavedPressingEvidence({ releaseId, heading }: { releaseId: number; head
   );
 }
 
-export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, shelfActions, backToMatches, returnFocusTo }: AlbumDetailModalProps) => {
+export const AlbumDetailModal = ({
+  album, onClose, onRefresh, onArtworkChanged, onArtworkUndoClosed, onFindPressing, shelfActions, backToMatches, returnFocusTo,
+}: AlbumDetailModalProps) => {
   const [refetching, setRefetching] = useState(false);
   const [currentAlbum, setCurrentAlbum] = useState<Album>(album);
   const [receivedAlbum, setReceivedAlbum] = useState(album);
@@ -162,6 +167,9 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
   const [imageDimensions, setImageDimensions] = useState<Record<string, ArtworkSize | 'Unavailable'>>({});
   const [savingArtwork, setSavingArtwork] = useState(false);
   const [artworkNotice, setArtworkNotice] = useState<ArtworkNotice>();
+  const [artworkReceipt, setArtworkReceipt] = useState<ArtworkUndoReceipt>();
+  const [undoingArtwork, setUndoingArtwork] = useState(false);
+  const [artworkUndoIssue, setArtworkUndoIssue] = useState<string>();
   const [lastArtworkQuery, setLastArtworkQuery] = useState<SearchCoverArtQuery>();
   const [artworkResultsQuery, setArtworkResultsQuery] = useState<SearchCoverArtQuery>();
   const [artworkQueryDraft, setArtworkQueryDraft] = useState<SearchCoverArtQuery>();
@@ -169,10 +177,12 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
   const [failedCoverUrl, setFailedCoverUrl] = useState('');
   const savedPressingHeadingId = useId();
   const artworkNoticeId = useId();
+  const artworkDeadlineId = useId();
   const artworkChooserId = useId();
   const artworkQueryId = useId();
   const savedPressingHeading = useRef<HTMLHeadingElement>(null);
   const artworkButtonRef = useRef<HTMLButtonElement>(null);
+  const undoArtworkButton = useRef<HTMLButtonElement>(null);
   const artworkArtistField = useRef<HTMLInputElement>(null);
   const editArtworkButton = useRef<HTMLButtonElement>(null);
   const artworkChooserHeading = useRef<HTMLHeadingElement>(null);
@@ -184,7 +194,8 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
   const candidateButtons = useRef(new Map<string, HTMLButtonElement>());
   const restoreCandidate = useRef<string | undefined>(undefined);
   const artworkOperation = useRef<ArtworkOperation | undefined>(undefined);
-  const coverVersion = currentAlbum.local_cover_path ? `?v=${encodeURIComponent(currentAlbum.local_cover_path)}` : '';
+  const coverRevision = currentAlbum.local_cover_path ?? (artworkNotice === 'restored' ? currentAlbum.cover_image_url ?? 'no-artwork' : undefined);
+  const coverVersion = coverRevision ? `?v=${encodeURIComponent(coverRevision)}` : '';
   const coverUrl = getCoverArtUrl(currentAlbum.id) + coverVersion;
 
   // Reset local artwork edits when the parent supplies a different album value.
@@ -200,6 +211,9 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
       setRefetching(false);
       setSavingArtwork(false);
       setArtworkNotice(undefined);
+      setArtworkReceipt(undefined);
+      setUndoingArtwork(false);
+      setArtworkUndoIssue(undefined);
       setLastArtworkQuery(undefined);
       setArtworkResultsQuery(undefined);
       setArtworkQueryDraft(undefined);
@@ -212,6 +226,17 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
     restoreCandidate.current = undefined;
     restoreEnlargeButton.current = undefined;
   }, [album.id]);
+
+  useEffect(() => {
+    if (!artworkReceipt || undoingArtwork) return;
+    const expiry = Date.parse(artworkReceipt.expiresAt);
+    const timeout = setTimeout(() => {
+      if (document.activeElement === undoArtworkButton.current) artworkButtonRef.current?.focus();
+      setArtworkReceipt(undefined);
+      setArtworkUndoIssue(undefined);
+    }, Math.max(0, expiry - Date.now()));
+    return () => clearTimeout(timeout);
+  }, [artworkReceipt, undoingArtwork]);
 
   const editingArtworkQuery = artworkQueryDraft !== undefined;
   useLayoutEffect(() => {
@@ -335,6 +360,12 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
       setCurrentAlbum(updatedAlbum);
       setCurrentArtwork(selectedArtwork);
       setArtworkNotice('updated');
+      setArtworkUndoIssue(undefined);
+      if (data.undoToken && data.expiresAt) {
+        const receipt = { undoToken: data.undoToken, expiresAt: data.expiresAt };
+        setArtworkReceipt(receipt);
+        onArtworkChanged?.(updatedAlbum, receipt);
+      }
       setSelectedArtwork(undefined);
       setShowSelectionModal(false);
       onRefresh(updatedAlbum);
@@ -344,6 +375,49 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
       if (artworkOperation.current === operation) {
         artworkOperation.current = undefined;
         setSavingArtwork(false);
+      }
+    }
+  };
+
+  const undoArtwork = async () => {
+    if (!artworkReceipt || artworkOperation.current || Date.parse(artworkReceipt.expiresAt) <= Date.now()) return;
+    const operation: ArtworkOperation = { kind: 'undo', albumId: currentAlbum.id };
+    artworkOperation.current = operation;
+    setUndoingArtwork(true);
+    setArtworkUndoIssue(undefined);
+    const closeReceipt = () => {
+      artworkButtonRef.current?.focus();
+      setArtworkReceipt(undefined);
+      onArtworkUndoClosed?.(operation.albumId, artworkReceipt.undoToken);
+    };
+    try {
+      const { album: restored } = await api.undoCoverArt(operation.albumId, artworkReceipt.undoToken);
+      if (artworkOperation.current !== operation) return;
+      setCurrentAlbum(restored);
+      setCurrentArtwork(undefined);
+      setArtworkNotice('restored');
+      closeReceipt();
+      onRefresh(restored);
+    } catch (failure) {
+      if (artworkOperation.current !== operation) return;
+      if (failure instanceof ApiError && [400, 404, 409].includes(failure.status)) {
+        const fresh = await api.getAlbum(operation.albumId).catch(() => undefined);
+        if (artworkOperation.current !== operation) return;
+        if (fresh) {
+          setCurrentAlbum(fresh.album);
+          setCurrentArtwork(undefined);
+        }
+        setArtworkNotice(undefined);
+        setArtworkUndoIssue(failure.message);
+        closeReceipt();
+        onRefresh(fresh?.album);
+      } else {
+        setArtworkUndoIssue('Couldn’t verify the artwork undo. Try again.');
+      }
+    } finally {
+      if (artworkOperation.current === operation) {
+        artworkOperation.current = undefined;
+        setUndoingArtwork(false);
       }
     }
   };
@@ -422,17 +496,21 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
 
   const emptyArtworkMessage = lastArtworkQuery && `No different cover art found for “${lastArtworkQuery.title}” by ${lastArtworkQuery.artist}.`;
   const detailArtworkNotice = showSelectionModal ? undefined : artworkNotice;
+  const closeDetails = () => {
+    if (artworkOperation.current?.kind !== 'undo') onClose();
+  };
   return (
-    <ModalDialog labelledBy="album-details-title" onClose={onClose}
-      onEscape={editingArtworkQuery ? closeArtworkQuery : onClose} returnFocusTo={returnFocusTo}>
+    <ModalDialog labelledBy="album-details-title" onClose={closeDetails}
+      onEscape={editingArtworkQuery ? closeArtworkQuery : closeDetails} returnFocusTo={returnFocusTo}>
       <div className="rh-dialog-panel max-w-2xl">
         {/* Header */}
         <div className="rh-dialog-header flex flex-wrap items-center justify-between gap-x-2 border-b border-gray-200 p-4 sm:p-6">
           <h2 id="album-details-title" className="text-xl font-bold text-gray-900">Album details</h2>
           {backToMatches ? (
-            <button type="button" onClick={onClose} className="rh-lookup-link">Back to matches</button>
+            <button type="button" onClick={closeDetails} aria-disabled={undoingArtwork} className="rh-lookup-link">Back to matches</button>
           ) : <button
-            onClick={onClose}
+            onClick={closeDetails}
+            aria-disabled={undoingArtwork}
             className="rh-dialog-close"
             aria-label="Close album details"
           >
@@ -508,7 +586,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
           </dl>
 
           <div className="grid justify-items-start gap-2">
-            <button ref={artworkButtonRef} type="button" onClick={startArtworkSearch} aria-disabled={refetching}
+            <button ref={artworkButtonRef} type="button" onClick={startArtworkSearch} aria-disabled={refetching || undoingArtwork}
               aria-busy={refetching} aria-describedby={detailArtworkNotice ? artworkNoticeId : undefined}
               className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-gray-300 px-3 text-sm font-semibold text-gray-900 hover:bg-gray-100 aria-disabled:opacity-60">
               {refetching ? <><span className="rh-action-spinner" aria-hidden="true" />Searching for artwork…</>
@@ -518,8 +596,22 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
             {detailArtworkNotice && <p id={artworkNoticeId} role={detailArtworkNotice === 'failed' ? 'alert' : 'status'}
               className={`text-sm [overflow-wrap:anywhere] ${detailArtworkNotice === 'failed' ? 'text-red-600' : 'text-gray-600'}`}>
               {detailArtworkNotice === 'failed' ? 'Couldn’t search for artwork. Try again.'
-                : detailArtworkNotice === 'empty' ? emptyArtworkMessage : 'Artwork updated.'}
+                : detailArtworkNotice === 'empty' ? emptyArtworkMessage
+                  : detailArtworkNotice === 'restored' ? 'Previous artwork restored.' : 'Artwork updated.'}
             </p>}
+            {!showSelectionModal && artworkReceipt && (
+              <div className="flex flex-wrap items-center gap-x-2">
+                <button ref={undoArtworkButton} type="button" className="rh-lookup-link -ml-2 text-left"
+                  aria-describedby={artworkDeadlineId} aria-disabled={undoingArtwork || refetching}
+                  aria-busy={undoingArtwork} onClick={() => void undoArtwork()}>
+                  {undoingArtwork ? 'Restoring artwork…' : 'Undo artwork change'}
+                </button>
+                <p id={artworkDeadlineId} className="min-w-0 text-xs text-gray-600">
+                  Undo until <time dateTime={artworkReceipt.expiresAt}>{formatUndoDeadline(artworkReceipt.expiresAt)}</time>.
+                </p>
+              </div>
+            )}
+            {!showSelectionModal && artworkUndoIssue && <p role="alert" className="text-sm text-red-600">{artworkUndoIssue}</p>}
             {!showSelectionModal && artworkQueryEditor}
           </div>
         </div>

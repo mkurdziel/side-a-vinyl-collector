@@ -77,6 +77,11 @@ export interface BackupOutcome {
   skippedArtwork: { album: string; reason: string }[];
 }
 
+export interface ArtworkUndoReceipt {
+  undoToken: string;
+  expiresAt: string;
+}
+
 export interface DiscogsAlbum {
   id: number;
   artist: string;
@@ -339,10 +344,19 @@ class ApiService {
     return this.request(`/api/cover-art/${id}/search${search}`);
   }
 
-  async updateCoverArt(id: number, url: string, source: string, provenance?: Omit<CoverArtProvenance, 'source' | 'url'>): Promise<{ message: string; album: Album }> {
+  async updateCoverArt(id: number, url: string, source: string, provenance?: Omit<CoverArtProvenance, 'source' | 'url'>): Promise<
+    { message: string; album: Album } & Partial<ArtworkUndoReceipt>
+  > {
     return this.request(`/api/cover-art/${id}/update`, {
       method: 'POST',
       body: JSON.stringify({ url, source, provenance }),
+    });
+  }
+
+  undoCoverArt(id: number, undoToken: string): Promise<{ album: Album }> {
+    return this.request(`/api/cover-art/${id}/undo`, {
+      method: 'POST',
+      body: JSON.stringify({ undoToken }),
     });
   }
 }

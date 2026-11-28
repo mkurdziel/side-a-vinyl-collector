@@ -379,7 +379,7 @@ describe('pressing candidate evidence', () => {
     expect(radios()).toEqual([4, 5, 6]);
     expect(renderer!.root.findByType('select').props.value).toBe('Vinyl');
     expect(button('Compare listings').props['aria-expanded']).toBe(true);
-    expect(textOf(button('Go to 2 pinned pressings'))).toContain('2 pinned');
+    expect(textOf(button('Compare 2 pinned pressings'))).toBe('Compare 2 pins');
     expect(button('Hide runout marks')).toBeDefined();
     expect(getPressingDetails.mock.calls.map(([releaseId]) => releaseId)).toEqual([1, 4, 5, 6]);
     expect(renderer!.root.findAllByProps({ type: 'radio' }).every(radio => !radio.props.checked)).toBe(true);
@@ -514,7 +514,8 @@ describe('pressing candidate evidence', () => {
       .mockResolvedValueOnce({ pressing: { country: 'US', matrixRunouts: [{ value: 'RUNOUT-4' }] } });
     const onSelect = vi.fn();
     const focusShortlist = vi.fn();
-    const focusJump = vi.fn();
+    const focusChoice = vi.fn();
+    const querySelector = vi.fn(() => ({ focus: focusChoice, closest: () => null }));
     const pin = (number: string) => renderer!.root.findAllByType('button').find(control => (
       control.props['aria-label']?.startsWith(`Pin for comparison · ${number}`)
     ))!;
@@ -528,9 +529,8 @@ describe('pressing candidate evidence', () => {
 
     await act(async () => {
       renderer = create(createElement(Chooser), { createNodeMock: node => {
-        if (node.type === 'h3' && node.props.children === 'Pinned pressings') return { focus: focusShortlist };
-        if (node.type === 'button' && /^Go to \d pinned pressing/.test(node.props['aria-label'] ?? '')) return { focus: focusJump };
-        return null;
+        if (node.type === 'h3') return { focus: focusShortlist, closest: () => null };
+        return node.type === 'ul' ? { querySelector } : null;
       } });
     });
     await toggleComparison();
@@ -540,12 +540,26 @@ describe('pressing candidate evidence', () => {
     await act(async () => pin('ALT-42').props.onClick());
     await act(async () => firstRead.resolve({ pressing: { matrixRunouts: [{ value: 'RUNOUT-2' }] } }));
     const shortlist = renderer!.root.findByType('section');
-    expect(textOf(shortlist)).toContain('LP · Mono');
-    expect(textOf(shortlist)).toContain('Release country US');
+    const pairEvidence = shortlist.findByType('table');
+    expect(textOf(pairEvidence.findByType('thead'))).toBe('EvidenceFirst pin 2Second pin 4');
+    expect(pairEvidence.findByType('tbody').findAllByType('tr').map(textOf)).toEqual([
+      'Catalog numberDiffersS 5233ALT-42', 'Release countryDiffersCanadaUS', 'FormatVinylUnlisted',
+      'MixMonoUnlisted', 'Record typeLPUnlisted', 'LabelAlshireUnlisted',
+    ]);
     expect(textOf(shortlist)).toContain('RUNOUT-2');
     expect(textOf(shortlist)).toContain('RUNOUT-4');
     expect(radios()).toEqual([4, 5]);
     expect(pin('ALT-55').props['aria-disabled']).toBe(true);
+    expect(onSelect).not.toHaveBeenCalled();
+    focusShortlist.mockClear();
+    await act(async () => button('Compare pinned pressings').props.onClick());
+    expect(focusShortlist).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    querySelector.mockClear();
+    focusChoice.mockClear();
+    await act(async () => button('Back to pressing choices').props.onClick());
+    expect(querySelector).toHaveBeenCalledExactlyOnceWith('input[value="4"]');
+    expect(focusChoice).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    expect(radios()).toEqual([4, 5]);
     expect(onSelect).not.toHaveBeenCalled();
 
     const select = shortlist.findAllByType('button').find(control => control.props['aria-label']?.startsWith('Select pressing · S 5233'))!;
@@ -558,10 +572,12 @@ describe('pressing candidate evidence', () => {
 
     await toggleComparison();
     expect(renderer!.root.findAllByType('section')).toHaveLength(0);
-    await act(async () => button('Go to 2 pinned pressings').props.onClick());
-    expect(focusShortlist).toHaveBeenCalledOnce();
+    focusShortlist.mockClear();
+    await act(async () => button('Compare 2 pinned pressings').props.onClick());
+    expect(focusShortlist).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    querySelector.mockClear();
     await act(async () => button('Back to pressing choices').props.onClick());
-    expect(focusJump).toHaveBeenCalledOnce();
+    expect(querySelector).toHaveBeenCalledExactlyOnceWith('input[value="2"]');
     expect(renderer!.root.findByProps({ type: 'radio', value: 2 }).props.checked).toBe(true);
     expect(textOf(renderer!.root.findByType('section'))).toContain('RUNOUT-4');
     expect(getPressingDetails.mock.calls.map(([releaseId]) => releaseId)).toEqual([2, 4]);
