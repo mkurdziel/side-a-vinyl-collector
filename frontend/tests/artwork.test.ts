@@ -1,12 +1,14 @@
 import { createElement } from 'react';
 import { act, create, type ReactTestInstance } from 'react-test-renderer';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { Album } from '../src/services/api';
+import { ApiError, type Album } from '../src/services/api';
 
-const { searchCoverArt, updateCoverArt } = vi.hoisted(() => ({ searchCoverArt: vi.fn(), updateCoverArt: vi.fn() }));
+const { getAlbum, searchCoverArt, undoCoverArt, updateCoverArt } = vi.hoisted(() => ({
+  getAlbum: vi.fn(), searchCoverArt: vi.fn(), undoCoverArt: vi.fn(), updateCoverArt: vi.fn(),
+}));
 vi.mock('../src/services/api', async importOriginal => ({
   ...await importOriginal<typeof import('../src/services/api')>(),
-  default: { searchCoverArt, updateCoverArt },
+  default: { getAlbum, searchCoverArt, undoCoverArt, updateCoverArt },
   getCoverArtUrl: (id: number) => `/api/cover-art/${id}`,
 }));
 
@@ -192,6 +194,51 @@ it('keeps verified metadata across queries and restores the applied release on r
   expect(textOf(persistedArt)).toContain('DummyDiscogs · Release year 1994');
   expect(persistedArt.findByType('a').props.href).toBe('https://www.discogs.com/release/11');
   expect(updateCoverArt).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])('offers undo after Apply and reconciles the saved artwork when the undo is stale (%s)', async stale => {
+  const original: Album = { ...album, local_cover_path: 'previous.png', cover_art_provenance: {
+    source: 'Discogs', url: album.cover_image_url!, releaseId: 10, title: 'Previous artwork',
+  } };
+  const saved: Album = { ...album, cover_image_url: alternative.url, local_cover_path: 'new.png', cover_art_provenance: {
+    source: 'Discogs', url: alternative.url, releaseId: alternative.id,
+  } };
+  const newest: Album = { ...album, local_cover_path: 'newest.png', cover_image_url: '/art/newest.png', cover_art_provenance: {
+    source: 'Discogs', url: '/art/newest.png', releaseId: 99,
+  } };
+  const receipt = { undoToken: 'undo-artwork', expiresAt: new Date(Date.now() + 600_000).toISOString() };
+  const onArtworkChanged = vi.fn();
+  const onArtworkUndoClosed = vi.fn();
+  const onRefresh = vi.fn();
+  searchCoverArt.mockResolvedValue({ results: [alternative] });
+  updateCoverArt.mockResolvedValue({ album: saved, ...receipt });
+  if (stale) {
+    undoCoverArt.mockRejectedValue(new ApiError('This artwork change can no longer be undone. Check the current cover.', 409));
+    getAlbum.mockResolvedValue({ album: newest });
+  } else {
+    undoCoverArt.mockRejectedValueOnce(new Error('Unavailable')).mockResolvedValueOnce({ album: original });
+  }
+  await act(async () => {
+    renderer = create(createElement(AlbumDetailModal, { album: original, onClose: vi.fn(), onRefresh, onArtworkChanged, onArtworkUndoClosed }));
+  });
+  await act(async () => button('Find different artwork').props.onClick());
+  await act(async () => renderer!.root.findByProps({ 'aria-label': 'Preview Dummy cover from Discogs, 1994' }).props.onClick());
+  await act(async () => renderer!.root.findByProps({ src: alternative.url }).props.onLoad({ currentTarget: { naturalWidth: 700, naturalHeight: 700 } }));
+  await act(async () => button('Apply artwork').props.onClick());
+  expect(onArtworkChanged).toHaveBeenCalledWith(saved, receipt);
+  expect(renderer!.root.findByType('time').props.dateTime).toBe(receipt.expiresAt);
+  await act(async () => button('Undo artwork change').props.onClick());
+  if (!stale) {
+    expect(textOf(renderer!.root.findByProps({ role: 'alert' }))).toBe('Couldn’t verify the artwork undo. Try again.');
+    await act(async () => button('Undo artwork change').props.onClick());
+    expect(textOf(renderer!.root.findByProps({ role: 'status' }))).toBe('Previous artwork restored.');
+  }
+  expect(undoCoverArt).toHaveBeenLastCalledWith(original.id, receipt.undoToken);
+  expect(onArtworkUndoClosed).toHaveBeenCalledExactlyOnceWith(original.id, receipt.undoToken);
+  expect(onRefresh).toHaveBeenLastCalledWith(stale ? newest : original);
+  expect(button('Undo artwork change')).toBeUndefined();
+  expect(renderer!.root.findByProps({ src: `/api/cover-art/7?v=${stale ? newest.local_cover_path : original.local_cover_path}` })).toBeTruthy();
+  expect(renderer!.root.findByProps({ 'aria-label': `Release ${stale ? 99 : 10} for saved artwork (opens in a new tab)` })).toBeTruthy();
 });
 
 it('enlarges either image and restores the paired comparison, focus, and deliberate apply', async () => {

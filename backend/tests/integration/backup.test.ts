@@ -5,7 +5,7 @@ import express from 'express';
 import AdmZip from 'adm-zip';
 import backupRoutes from '../../src/routes/backup';
 import * as albumController from '../../src/controllers/albumController';
-import { fetchOfficialCoverArt, updateCoverArt } from '../../src/controllers/coverArtController';
+import { fetchOfficialCoverArt, undoCoverArt, updateCoverArt } from '../../src/controllers/coverArtController';
 import { errorHandler } from '../../src/middleware/errorHandler';
 import storage from '../../src/services/storage';
 import musicbrainz from '../../src/services/musicbrainz';
@@ -35,6 +35,7 @@ describe('Backup and Restore', () => {
     app.patch('/api/albums/:id/status', albumController.updateAlbumStatus);
     app.post('/api/albums/:id/status/undo', albumController.undoAlbumMove);
     app.post('/api/cover-art/:id/update', updateCoverArt);
+    app.post('/api/cover-art/:id/undo', undoCoverArt);
     app.post('/api/cover-art/:id/fetch', fetchOfficialCoverArt);
     app.use('/api/backup', backupRoutes);
     app.use(errorHandler);
@@ -259,6 +260,45 @@ describe('Backup and Restore', () => {
     vi.spyOn(musicbrainz, 'getCoverArt').mockResolvedValueOnce(official);
     const refreshed = await request(app).post(`/api/cover-art/${album.id}/fetch`).expect(200);
     expect(refreshed.body.album).toMatchObject({ discogs_id: 987, cover_art_provenance: null, cover_image_url: official });
+  });
+
+  it('undoes exactly the last artwork change once without changing the pressing or shelf', async () => {
+    const { rows: [artist] } = await testPool.query("INSERT INTO artists (name) VALUES ('Test artist') RETURNING id");
+    const { rows: [album] } = await testPool.query(
+      "INSERT INTO albums (artist_id, title, discogs_id) VALUES ($1, 'Test record', 987) RETURNING id", [artist.id],
+    );
+    await testPool.query("INSERT INTO collections (album_id, status, notes) VALUES ($1, 'wishlist', 'Keep these notes')", [album.id]);
+    const originalBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x01]);
+    const nextBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x02]);
+    const original = { url: 'https://i.discogs.com/old.png', source: 'Discogs', provenance: { releaseId: 1203, year: 1987 } };
+    const next = { url: 'https://i.discogs.com/new.png', source: 'Discogs', provenance: { releaseId: 1500, year: 1996 } };
+    const base = `/api/cover-art/${album.id}`;
+    const download = vi.spyOn(musicbrainz, 'downloadCoverArt').mockResolvedValueOnce(originalBytes).mockResolvedValueOnce(nextBytes);
+    const first = await request(app).post(`${base}/update`).send(original).expect(200);
+    const second = await request(app).post(`${base}/update`).send(next).expect(200);
+    expect(second.body.album.cover_art_provenance.releaseId).toBe(1500);
+    expect(second.headers['cache-control']).toBe('no-store');
+    expect(second.body.undoToken).toMatch(/^[a-zA-Z0-9_-]{43}$/);
+    await request(app).post(`${base}/undo`).send({ undoToken: first.body.undoToken }).expect(409);
+
+    const responses = await Promise.all([1, 2].map(() => request(app).post(`${base}/undo`).send({ undoToken: second.body.undoToken })));
+    expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
+    const restored = responses.find(response => response.status === 200)!.body.album;
+    expect(restored).toMatchObject({
+      discogs_id: 987, status: 'wishlist', notes: 'Keep these notes',
+      cover_image_url: original.url, local_cover_path: first.body.album.local_cover_path,
+      cover_art_fetched: true,
+      cover_art_provenance: { ...original.provenance, source: original.source, url: original.url },
+    });
+    expect(await storage.readCoverArt(restored.local_cover_path)).toEqual(originalBytes);
+    expect((await request(app).get(`/api/albums/${album.id}`).expect(200)).body.album).toEqual(restored);
+    expect(download).toHaveBeenCalledTimes(2);
+
+    download.mockResolvedValueOnce(nextBytes);
+    const pending = await request(app).post(`${base}/update`).send(next).expect(200);
+    await testPool.query('UPDATE albums SET cover_image_url = $1, cover_art_provenance = NULL WHERE id = $2', [original.url, album.id]);
+    await request(app).post(`${base}/undo`).send({ undoToken: pending.body.undoToken }).expect(409);
+    expect((await request(app).get(`/api/albums/${album.id}`).expect(200)).body.album.cover_art_provenance).toBeNull();
   });
 
   it('reports legacy and missing artwork, and preserves the library when restore data is invalid', async () => {

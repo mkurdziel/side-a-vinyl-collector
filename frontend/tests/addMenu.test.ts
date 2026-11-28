@@ -37,6 +37,8 @@ it('focuses name search, keeps manual entry beside it, and groups the record loo
   expect(clueButtons.map(control => control.props['aria-label'])).toEqual([
     'Look up a catalog number', 'Look up a barcode', 'Identify a cover',
   ]);
+  expect(clueButtons.slice(0, 2).map(control => clues.findByProps({ id: control.props['aria-describedby'] }).children.join('')))
+    .toEqual(['Number on the sleeve or label', 'Scan the barcode or type the digits below it']);
   const importButton = root.findAllByType('button').find(control => control.children.join('') === 'Import from Discogs')!;
   expect(clueButtons).not.toContain(importButton);
 

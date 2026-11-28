@@ -137,7 +137,7 @@ export const importBackup = asyncHandler(async (req: Request, res: Response) => 
     try {
       await client.query('BEGIN');
       // Lock removal receipts first, matching the membership transactions that use them.
-      await client.query('TRUNCATE TABLE album_removal_undo, album_pressing_undo, album_move_undo, barcodes, collections, albums, artists RESTART IDENTITY');
+      await client.query('TRUNCATE TABLE album_removal_undo, album_pressing_undo, album_move_undo, album_artwork_undo, barcodes, collections, albums, artists RESTART IDENTITY');
       for (const artist of rows.artists) artist.updated_at ??= artist.created_at;
       for (const row of rows.collections) row.status ??= 'collection';
       for (const album of rows.albums) {

@@ -92,6 +92,7 @@ app.get('/api/cover-art/:id', coverArtController.getCoverArt);
 app.post('/api/cover-art/:id/fetch', coverArtController.fetchOfficialCoverArt);
 app.get('/api/cover-art/:id/search', coverArtController.searchCoverArt);
 app.post('/api/cover-art/:id/update', coverArtController.updateCoverArt);
+app.post('/api/cover-art/:id/undo', coverArtController.undoCoverArt);
 
 // SPA fallback - serve index.html for all non-API routes (single-container mode)
 // This must come AFTER all API routes

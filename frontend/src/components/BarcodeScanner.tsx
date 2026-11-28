@@ -8,6 +8,7 @@ import { CatalogPressingPicker } from './CatalogPressingPicker';
 import type { OpenSavedAlbum, SavePressing, UndoPressing } from './PressingComparison';
 import { LookupRecovery } from './LookupRecovery';
 import type { ManualAlbumDraft } from './ManualAlbumDialog';
+import { barcodePattern } from '../services/barcodeInput';
 
 type BarcodeMatch = BarcodeAlbumMatch & { barcode: string };
 type Shelf = Album['status'];
@@ -24,11 +25,12 @@ const lookupMessages: Record<LookupFailure, string> = {
   missing: 'No release matched this barcode. Check the digits or search by name.',
   unavailable: 'Barcode lookup is unavailable right now. Retry or search by name.',
 };
-const barcodePattern = /^(?:[0-9]{8}|[0-9]{12,14})$/;
-
 interface BarcodeScannerProps {
   onClose: () => void;
   onBack?: () => void;
+  backLabel?: string;
+  initialBarcode?: string;
+  onSearchByCatalogNumber?: () => void;
   onSuccess: () => void;
   onSearchByName: (query?: string, draft?: ManualAlbumDraft) => void;
   onManual: (draft?: ManualAlbumDraft) => void;
@@ -44,7 +46,8 @@ interface BarcodeScannerProps {
 }
 
 export const BarcodeScanner = ({
-  onClose, onBack, onSuccess, onSearchByName, onManual, onMoveSaved, onUndoMove, onOpenSaved, onSavePressing,
+  onClose, onBack, backLabel, initialBarcode, onSearchByCatalogNumber,
+  onSuccess, onSearchByName, onManual, onMoveSaved, onUndoMove, onOpenSaved, onSavePressing,
   onUndoPressing, onSavedCopyRemoved, lookupShelfEdits, lookupPressingEdits, viewMode,
 }: BarcodeScannerProps) => {
   const [lookup, setLookup] = useState<Lookup>({ status: 'scanning' });
@@ -68,7 +71,7 @@ export const BarcodeScanner = ({
   const lastInput = useRef<'camera' | 'manual'>('manual');
   const focusNextScan = useRef(false);
   const completedBarcode = useRef<string | undefined>(undefined);
-  const [manualBarcode, setManualBarcode] = useState('');
+  const [manualBarcode, setManualBarcode] = useState(initialBarcode ?? '');
   const scannedResult = lookup.status === 'found'
     ? applyLookupShelfEdits(applyLookupPressingEdits(lookup.match, lookupPressingEdits), lookupShelfEdits) : null;
   const releaseId = scannedResult?.discogsId;
@@ -84,6 +87,10 @@ export const BarcodeScanner = ({
   const selection = lookup.status === 'found' ? lookup.selection : undefined;
   const checkingCatalog = lookup.status === 'found' && lookup.catalogLookup === 'checking';
   const failure = lookup.status === 'failed' && manualBarcode.trim() === lookup.barcode ? lookup.reason : undefined;
+
+  useLayoutEffect(() => {
+    if (initialBarcode !== undefined) manualInput.current?.focus({ preventScroll: true });
+  }, [initialBarcode]);
 
   useLayoutEffect(() => {
     if (lookup.status === 'found' && !lookup.catalogLookup) resultTitle.current?.focus();
@@ -280,8 +287,8 @@ export const BarcodeScanner = ({
         </header>
 
         <div className="min-h-0 overflow-y-auto p-4 sm:p-6">
-          {onBack && !choosing && <button type="button" className="rh-lookup-link mb-2" disabled={!!saving || undoing}
-            onClick={() => { if (!saveInProgress.current) onBack(); }}>Back to add methods</button>}
+          {onBack && (!choosing || backLabel) && <button type="button" className="rh-lookup-link mb-2" disabled={!!saving || undoing}
+            onClick={() => { if (!saveInProgress.current) onBack(); }}>{backLabel ?? 'Back to add methods'}</button>}
           {!scannedResult && lookup.status !== 'saved' && !choosing && (
             <>
               <form className="mb-2" noValidate onSubmit={event => {
@@ -302,7 +309,7 @@ export const BarcodeScanner = ({
                     onChange={event => setManualBarcode(event.target.value)}
                     disabled={lookingUp}
                     aria-invalid={failure === 'invalid'}
-                    aria-describedby={failure ? 'barcode-lookup-error' : undefined}
+                    aria-describedby={failure ? 'barcode-lookup-error' : 'barcode-entry-hint'}
                     required
                     className="min-h-11 min-w-0 flex-1 rounded-lg border border-gray-300 p-2"
                   />
@@ -315,6 +322,7 @@ export const BarcodeScanner = ({
                     {lookingUp ? 'Looking up…' : failure === 'unavailable' ? 'Retry lookup' : 'Look up'}
                   </button>
                 </div>
+                {!failure && <p id="barcode-entry-hint" className="mt-1 text-xs text-gray-600">Use the digits printed below the barcode.</p>}
               </form>
 
               {lookingUp && <p className="my-2 text-sm text-gray-600" role="status">Looking up barcode…</p>}
@@ -323,6 +331,9 @@ export const BarcodeScanner = ({
                   {lookupMessages[failure]}
                 </p>
               )}
+
+              {failure && !lookingUp && onSearchByCatalogNumber && <button type="button" className="rh-lookup-link text-left"
+                onClick={onSearchByCatalogNumber}>Look up the catalog number on the sleeve or label</button>}
 
               <div className="mb-4 flex flex-wrap gap-x-3">
                 <button
