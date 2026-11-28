@@ -106,6 +106,19 @@ export interface SearchCoverArtResult {
   id: string | number;
 }
 
+export interface SearchCoverArtQuery {
+  artist: string;
+  title: string;
+}
+
+export interface DiscogsCollectionPage {
+  albums: DiscogsAlbum[];
+  count: number;
+  page: number;
+  totalPages: number;
+  nextPage?: number;
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly existingAlbumId?: number;
@@ -138,8 +151,8 @@ class ApiService {
     return response.json();
   }
 
-  async getAlbums(status: 'collection' | 'wishlist' = 'collection', signal?: AbortSignal): Promise<{ albums: Album[] }> {
-    return this.request(`/api/albums?status=${status}`, { signal });
+  async getAlbums(status: 'collection' | 'wishlist' = 'collection', signal?: AbortSignal, cache?: RequestCache): Promise<{ albums: Album[] }> {
+    return this.request(`/api/albums?status=${status}`, { signal, cache });
   }
 
   async getAlbum(id: number): Promise<{ album: Album }> {
@@ -160,10 +173,11 @@ class ApiService {
     applyCatalogReference?: boolean;
     barcode?: string;
     status?: 'collection' | 'wishlist';
-  }): Promise<{ album: Album }> {
+  }, signal?: AbortSignal): Promise<{ album: Album }> {
     return this.request('/api/albums', {
       method: 'POST',
       body: JSON.stringify(data),
+      signal,
     });
   }
 
@@ -304,15 +318,13 @@ class ApiService {
     return this.request('/api/discogs/config');
   }
 
-  async importDiscogsCollection(): Promise<{
-    albums: DiscogsAlbum[];
-    count: number;
-  }> {
-    return this.request('/api/discogs/import');
+  async importDiscogsCollection(page = 1): Promise<DiscogsCollectionPage> {
+    return this.request(`/api/discogs/import?page=${page}`);
   }
 
-  async searchCoverArt(id: number): Promise<{ results: SearchCoverArtResult[] }> {
-    return this.request(`/api/cover-art/${id}/search`);
+  async searchCoverArt(id: number, query?: SearchCoverArtQuery): Promise<{ results: SearchCoverArtResult[] }> {
+    const search = query ? `?${new URLSearchParams({ artist: query.artist, title: query.title })}` : '';
+    return this.request(`/api/cover-art/${id}/search${search}`);
   }
 
   async updateCoverArt(id: number, url: string, source: string): Promise<{ message: string; album: Album }> {

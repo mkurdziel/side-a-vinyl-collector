@@ -309,7 +309,7 @@ class DiscogsService {
     }
   }
 
-  async getUserCollection(username: string, page: number = 1, perPage: number = 100): Promise<DiscogsAlbum[]> {
+  async getUserCollection(username: string, page = 1, perPage = 100) {
     if (!this.isConfigured()) {
       throw new Error('Discogs token not configured');
     }
@@ -322,18 +322,22 @@ class DiscogsService {
         return response.data;
       });
 
-      const albums = result.releases.map((item: any) => this.parseDiscogsRelease(item.basic_information));
-
-      // Deduplicate based on artist + album (case-insensitive)
-      const seen = new Map<string, DiscogsAlbum>();
-      for (const album of albums) {
-        const key = `${album.artist.toLowerCase()}||${album.album.toLowerCase()}`;
-        if (!seen.has(key)) {
-          seen.set(key, album);
-        }
+      const totalPages = result.pagination?.pages;
+      if (!Number.isSafeInteger(totalPages) || totalPages < 0 || !Array.isArray(result.releases)) {
+        throw new Error('Invalid Discogs collection page');
+      }
+      const albums = new Map<number, DiscogsAlbum>();
+      for (const item of result.releases) {
+        const release = item?.basic_information;
+        if (!release || !Number.isSafeInteger(release.id) || release.id < 1 || albums.has(release.id)) continue;
+        albums.set(release.id, {
+          ...this.parseDiscogsRelease(release, true),
+          discogsListing: 'release',
+          pressing: this.parsePressingDetails(release),
+        });
       }
 
-      return Array.from(seen.values());
+      return { albums: [...albums.values()], page, totalPages, nextPage: page < totalPages ? page + 1 : undefined };
     } catch (error) {
       this.logError('Failed to get Discogs collection:', error);
       throw new Error('Failed to fetch Discogs collection');

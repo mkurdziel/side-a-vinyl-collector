@@ -34,6 +34,12 @@ export const checkDiscogsConfig = async (req: Request, res: Response) => {
 };
 
 export const importCollection = async (req: Request, res: Response) => {
+  const pageInput = req.query.page ?? '1';
+  const page = typeof pageInput === 'string' && /^\d+$/.test(pageInput) ? Number(pageInput) : NaN;
+  if (!Number.isSafeInteger(page) || page < 1) {
+    return res.status(400).json({ error: 'Choose a valid Discogs collection page' });
+  }
+
   try {
     if (!discogs.isConfigured()) {
       return res.status(400).json({ error: 'Discogs token not configured' });
@@ -45,30 +51,29 @@ export const importCollection = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Failed to get Discogs user identity' });
     }
 
-    const albums = await discogs.getUserCollection(identity.username);
+    const { albums, totalPages, nextPage } = await discogs.getUserCollection(identity.username, page);
 
-    // Get all albums already in the collection
-    const existingAlbumsResult = await pool.query(`
-      SELECT LOWER(artists.name) as artist, LOWER(albums.title) as album
+    const { rows } = await pool.query<{ artist: string; album: string; discogs_id: number | null }>(`
+      SELECT LOWER(artists.name) as artist, LOWER(albums.title) as album, albums.discogs_id
       FROM collections
       JOIN albums ON collections.album_id = albums.id
       JOIN artists ON albums.artist_id = artists.id
     `);
 
-    // Create a set of existing album keys for fast lookup
-    const existingAlbums = new Set(
-      existingAlbumsResult.rows.map(row => `${row.artist}||${row.album}`)
-    );
+    const savedTitles = new Set(rows.map(row => JSON.stringify([row.artist, row.album])));
+    const savedReleases = new Set(rows.map(row => row.discogs_id));
 
-    // Filter out albums that are already in the collection
-    const newAlbums = albums.filter(album => {
-      const key = `${album.artist.toLowerCase()}||${album.album.toLowerCase()}`;
-      return !existingAlbums.has(key);
+    const newAlbums = albums.filter(({ artist, album, discogsId }) => {
+      const key = JSON.stringify([artist.trim().toLowerCase(), album.trim().toLowerCase()]);
+      return !savedTitles.has(key) && !savedReleases.has(discogsId);
     });
 
     res.json({
       albums: newAlbums,
-      count: newAlbums.length
+      count: newAlbums.length,
+      page,
+      totalPages,
+      nextPage,
     });
   } catch (error: any) {
     console.error('Import Discogs collection error:', error);

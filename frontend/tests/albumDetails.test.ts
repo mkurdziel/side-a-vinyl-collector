@@ -57,8 +57,11 @@ describe('album details state', () => {
     await act(async () => { renderer = create(renderAlbum(album)); });
     const search = renderer!.root.findAllByType('button').find(button => button.children.includes('Find different artwork'));
     await act(async () => search!.props.onClick());
-    const useCover = renderer!.root.findByProps({ 'aria-label': 'Use Candidate cover from Discogs' });
-    await act(async () => useCover.props.onClick());
+    const preview = renderer!.root.findByProps({ 'aria-label': 'Preview Candidate cover from Discogs' });
+    await act(async () => preview.props.onClick());
+    await act(async () => renderer!.root.findByProps({ src: '/new.jpg' }).props.onLoad({ currentTarget: { naturalWidth: 600, naturalHeight: 600 } }));
+    const apply = renderer!.root.findAllByType('button').find(button => button.children.includes('Apply artwork'));
+    await act(async () => apply!.props.onClick());
     await act(async () => renderer!.update(renderAlbum(album)));
     expect(renderer!.root.findByType('img').props.src).toBe('/api/cover-art/1?v=1_new.jpg');
     expect(callbacks.onRefresh).toHaveBeenCalledWith({ ...album, cover_image_url: '/new.jpg', local_cover_path: '1_new.jpg' });

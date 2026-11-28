@@ -3,6 +3,7 @@ import { act, create, type ReactTestInstance } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PressingDetails } from '../src/services/api';
 import { PressingCandidates, PressingSelectionSummary, type PressingCandidate } from '../src/components/PressingCandidates';
+import { usePressingPreparation } from '../src/hooks/usePressingPreparation';
 import { createPressingDetailsLoader, sharedCatalogNumber, summarizePressingFormat } from '../src/services/pressingEvidence';
 
 const { getPressingDetails } = vi.hoisted(() => ({ getPressingDetails: vi.fn() }));
@@ -14,21 +15,23 @@ vi.mock('../src/services/api', async importOriginal => ({
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let renderer: ReturnType<typeof create> | undefined;
 const textOf = (node: ReactTestInstance): string => node.children.map(child => typeof child === 'string' ? child : textOf(child)).join('');
-const button = (label: string) => renderer!.root.findAllByType('button').find(control => textOf(control) === label)!;
+const button = (label: string) => renderer!.root.findAllByType('button').find(control =>
+  control.props['aria-label'] === label || textOf(control) === label)!;
 const toggleComparison = () => act(async () => button('Compare evidence').props.onClick());
 const status = () => renderer!.root.findAllByProps({ role: 'status' }).map(textOf);
 const radios = () => renderer!.root.findAllByProps({ type: 'radio' }).map(control => control.props.value);
 const radioLabels = () => renderer!.root.findAllByType('label').filter(node => node.findAllByProps({ type: 'radio' }).length > 0);
 
-function CandidatePicker(props: Omit<ComponentProps<typeof PressingCandidates>, 'medium' | 'onMediumChange'>) {
-  const [medium, setMedium] = useState('');
-  return createElement(PressingCandidates, { ...props, medium, onMediumChange: setMedium });
+function CandidatePicker({ reviewKey, ...props }: Omit<ComponentProps<typeof PressingCandidates>, 'preparation'> & { reviewKey?: string }) {
+  const preparation = usePressingPreparation(reviewKey, props.choices);
+  return createElement(PressingCandidates, { ...props, preparation });
 }
 
 afterEach(async () => {
   await act(async () => renderer?.unmount());
   renderer = undefined;
   vi.resetAllMocks();
+  vi.unstubAllGlobals();
 });
 
 const choices: PressingCandidate[] = [
@@ -52,9 +55,9 @@ describe('pressing candidate evidence', () => {
       }));
     });
     const chooser = renderer!.root.findByType('fieldset');
-    expect(textOf(chooser.findByType('legend'))).toBe('Choose a pressing');
+    expect(textOf(chooser.findByProps({ id: chooser.props['aria-labelledby'] }))).toBe('Choose a pressing');
     expect(textOf(chooser)).toContain('Example only · Discogs 21');
-    expect(textOf(chooser)).toContain('Same catalog number. Check the etched or stamped runout marks.');
+    expect(textOf(chooser)).toContain('Same number. Check etched or stamped runout marks.');
     expect(textOf(chooser)).not.toContain('Check your copy’s country.');
     expect(chooser.findAllByType('table')).toHaveLength(0);
     await toggleComparison();
@@ -198,6 +201,48 @@ describe('pressing candidate evidence', () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it('resumes comparison preparation for the same lookup and fetches evidence again without selecting a release', async () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal('sessionStorage', { getItem: (key: string) => values.get(key), setItem: (key: string, value: string) => values.set(key, value) });
+    getPressingDetails.mockResolvedValue({ pressing: { matrixRunouts: [{ value: 'TEST-RUNOUT' }] } });
+    const matching = Array.from({ length: 8 }, (_, index) => ({
+      releaseId: index + 1,
+      pressing: { format: index < 7 ? 'Vinyl · LP' : 'CD' },
+    }));
+    const onSelect = vi.fn();
+    const picker = (reviewKey: string, choices = matching, selectedId?: number) =>
+      createElement(CandidatePicker, { choices, reviewKey, onSelect, selectedId });
+    await act(async () => { renderer = create(picker('album-and-number')); });
+    await act(async () => renderer!.root.findByType('select').props.onChange({ target: { value: 'Vinyl' } }));
+    await toggleComparison();
+    await act(async () => button('Pin').props.onClick());
+    await act(async () => button('Check runout markings').props.onClick());
+    await act(async () => button('More pressings').props.onClick());
+    await act(async () => button('Pin').props.onClick());
+    await act(async () => renderer!.update(picker('album-and-number', matching, 5)));
+    expect(renderer!.root.findByProps({ type: 'radio', value: 5 }).props.checked).toBe(true);
+
+    await act(async () => renderer!.unmount());
+    getPressingDetails.mockClear();
+    await act(async () => { renderer = create(picker('album-and-number')); });
+    expect(radios()).toEqual([4, 5, 6]);
+    expect(renderer!.root.findByType('select').props.value).toBe('Vinyl');
+    expect(button('Compare evidence').props['aria-expanded']).toBe(true);
+    expect(textOf(button('Compare evidence'))).toContain('2 pinned');
+    expect(button('Hide runout markings')).toBeDefined();
+    expect(getPressingDetails.mock.calls.map(([releaseId]) => releaseId)).toEqual([1, 4, 5, 6]);
+    expect(renderer!.root.findAllByProps({ type: 'radio' }).every(radio => !radio.props.checked)).toBe(true);
+    expect(onSelect).not.toHaveBeenCalled();
+
+    await act(async () => renderer!.update(picker('album-and-number', matching.slice(1))));
+    expect(textOf(button('Compare evidence'))).toContain('1 pinned');
+    await act(async () => renderer!.update(picker('different-album')));
+    expect(radios()).toEqual([1, 2, 3]);
+    expect(renderer!.root.findByType('select').props.value).toBe('');
+    expect(button('Compare evidence').props['aria-expanded']).toBe(false);
+    expect(textOf(button('Compare evidence'))).toBe('Compare evidence');
+  });
+
   it('links the preview to the correct radio without selecting it and distinguishes saved and selected pressings', async () => {
     const onSelect = vi.fn();
     const focus = vi.fn();
@@ -246,7 +291,7 @@ describe('pressing candidate evidence', () => {
     const listPosition = fieldset.children.indexOf(fieldset.findByType('ul'));
     const note = fieldset.findAllByType('p').find(paragraph => textOf(paragraph).includes('is shared by'))!;
     expect(listPosition).toBeLessThan(fieldset.children.indexOf(note));
-    expect(listPosition).toBeLessThan(fieldset.children.indexOf(button('Compare evidence').parent!));
+    expect(listPosition).toBeGreaterThan(fieldset.children.indexOf(button('Compare evidence').parent!.parent!));
     expect(button('Check runout markings')).toBeUndefined();
     expect(button('Compare evidence').props['aria-expanded']).toBe(false);
     expect(textOf(fieldset)).toContain('LP · Mono');

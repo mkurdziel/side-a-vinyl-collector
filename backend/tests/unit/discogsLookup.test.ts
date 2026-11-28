@@ -1,19 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 
-const { get, getCached, setCached } = vi.hoisted(() => ({
+const { get, getCached, setCached, query } = vi.hoisted(() => ({
   get: vi.fn(),
   getCached: vi.fn(),
   setCached: vi.fn(),
+  query: vi.fn(),
 }));
 vi.mock('axios', async (importOriginal) => {
   const actual = await importOriginal<typeof import('axios')>();
   return { ...actual, default: { ...actual.default, create: () => ({ get }) } };
 });
-vi.mock('../../src/config/database', () => ({ default: {} }));
+vi.mock('../../src/config/database', () => ({ default: { query } }));
 vi.mock('../../src/config/redis', () => ({ default: { get: getCached, setex: setCached } }));
 
-import { getPressingDetails } from '../../src/controllers/discogsController';
+import { getPressingDetails, importCollection } from '../../src/controllers/discogsController';
 import { errorHandler } from '../../src/middleware/errorHandler';
 import discogs from '../../src/services/discogs';
 
@@ -118,5 +119,68 @@ describe('Discogs pressing lookup', () => {
     get.mockRejectedValue({ isAxiosError: true, code: 'ERR_BAD_REQUEST', response: { status: 404 } });
 
     await expect(pressingDetails()).resolves.toEqual({ status: 200, body: { pressing: null } });
+  });
+});
+
+async function importPage(page?: string | string[]) {
+  let status = 200;
+  let body: unknown;
+  const req = { query: { page } } as unknown as Request;
+  const res = {
+    status(code: number) { status = code; return this; },
+    json(value: unknown) { body = value; },
+  } as Response;
+  await importCollection(req, res);
+  return { status, body };
+}
+
+describe('Discogs collection review', () => {
+  const release = (id: number, title: string, catno: string) => ({
+    basic_information: {
+      id, title, artists: [{ name: 'Fixture artist' }], labels: [{ name: 'Fixture label', catno }],
+      formats: [{ name: 'Vinyl', descriptions: ['LP'] }],
+    },
+  });
+
+  it('returns a continuation when the first page has no eligible releases', async () => {
+    get.mockResolvedValueOnce({ data: { username: 'test-collector' } }).mockResolvedValueOnce({
+      data: { pagination: { pages: 2 }, releases: [release(11, 'Saved by title', 'TEST11'), release(12, 'Saved by ID', 'TEST12')] },
+    });
+    query.mockResolvedValueOnce({ rows: [
+      { artist: 'fixture artist', album: 'saved by title', discogs_id: 99 },
+      { artist: 'different credit', album: 'different title', discogs_id: 12 },
+    ] });
+
+    await expect(importPage()).resolves.toEqual({
+      status: 200, body: { albums: [], count: 0, page: 1, totalPages: 2, nextPage: 2 },
+    });
+    expect(get).toHaveBeenLastCalledWith('/users/test-collector/collection/folders/0/releases', {
+      params: { page: 1, per_page: 100 },
+    });
+  });
+
+  it('fetches one requested page and preserves competing releases with their evidence', async () => {
+    get.mockResolvedValueOnce({ data: { username: 'test-collector' } }).mockResolvedValueOnce({
+      data: { pagination: { pages: 2 }, releases: [
+        release(21, 'Side A - Side B', 'FIRST'), release(21, 'Side A - Side B', 'FIRST'), release(22, 'Side A - Side B', 'SECOND'),
+      ] },
+    });
+    query.mockResolvedValueOnce({ rows: [] });
+
+    await expect(importPage('2')).resolves.toMatchObject({
+      status: 200, body: { count: 2, page: 2, totalPages: 2, albums: [
+        { discogsId: 21, artist: 'Fixture artist', album: 'Side A - Side B', pressing: { catalogNumber: 'FIRST', format: 'Vinyl · LP' } },
+        { discogsId: 22, artist: 'Fixture artist', album: 'Side A - Side B', pressing: { catalogNumber: 'SECOND', format: 'Vinyl · LP' } },
+      ] },
+    });
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(get).toHaveBeenLastCalledWith('/users/test-collector/collection/folders/0/releases', {
+      params: { page: 2, per_page: 100 },
+    });
+  });
+
+  it.each(['0', '-1', '1.5', ['1', '2']])('rejects invalid page %j before contacting Discogs', async page => {
+    await expect(importPage(page)).resolves.toMatchObject({ status: 400 });
+    expect(get).not.toHaveBeenCalled();
   });
 });

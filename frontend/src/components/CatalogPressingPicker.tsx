@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { usePressingPreparation } from '../hooks/usePressingPreparation';
 import type { Album, DiscogsAlbum, PressingDetails } from '../services/api';
-import { matchesPressingMedium, withPressingEvidence } from '../services/pressingEvidence';
+import { catalogNumberKey, matchesPressingMedium, withPressingEvidence } from '../services/pressingEvidence';
 import { ModalDialog } from './ModalDialog';
 import { PressingCandidates, PressingSelectionSummary, type PressingCandidate } from './PressingCandidates';
 import './PressingReview.css';
@@ -29,7 +30,6 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
   const evidenceRegion = useRef<HTMLDivElement>(null);
   const saveInProgress = useRef(false);
   const [selectedId, setSelectedId] = useState<number>();
-  const [medium, setMedium] = useState('');
   const [evidence, setEvidence] = useState<Partial<Record<number, PressingDetails>>>({});
   const [saving, setSaving] = useState<'pressing' | 'album'>();
   const [unexpectedIssue, setUnexpectedIssue] = useState<string>();
@@ -40,6 +40,10 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
     year: release.year,
     catalogNumberMatch: release.catalogNumberMatch,
   }));
+  const reviewKey = JSON.stringify(['catalog', album.artist, album.album,
+    searchedNumber ? catalogNumberKey(searchedNumber) : album.masterId || album.discogsId || album.id]);
+  const preparation = usePressingPreparation(reviewKey, choices, evidence);
+  const { medium } = preparation;
   const pressing = releases.find(release => release.discogsId === selectedId);
   const selectedChoice = choices.find(choice => choice.releaseId === selectedId);
   const selectedWithEvidence = selectedChoice && withPressingEvidence(selectedChoice, evidence[selectedChoice.releaseId]);
@@ -103,7 +107,7 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
         }}>
           <div ref={evidenceRegion} className="rh-pressing-review__evidence px-4 py-2 sm:px-6 sm:py-4" role="region" aria-label="Pressing evidence" tabIndex={0}>
             <PressingCandidates choices={choices} searchedNumber={searchedNumber} selectedId={selectedId}
-              onSelect={setSelectedId} onReadEvidence={recordEvidence} disabled={!!saving || duplicate} medium={medium} onMediumChange={setMedium}
+              onSelect={setSelectedId} onReadEvidence={recordEvidence} disabled={!!saving || duplicate} preparation={preparation}
               uncertainAction={onSaveWithoutPressing ? 'If you’re unsure, you can save without pressing below.' : undefined} />
           </div>
           <footer className="rh-pressing-review__footer grid gap-2 px-4 py-2 sm:px-6" role="group" aria-label={duplicate ? 'Saved album' : 'Save album'}>
