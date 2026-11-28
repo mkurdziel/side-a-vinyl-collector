@@ -32,6 +32,7 @@ describe('Album CRUD Operations', () => {
     app.post('/api/albums/:id/removal/undo', albumController.undoAlbumRemoval);
     app.patch('/api/albums/:id/notes', albumController.updateAlbumNotes);
     app.patch('/api/albums/:id/status', albumController.updateAlbumStatus);
+    app.post('/api/albums/:id/status/undo', albumController.undoAlbumMove);
     app.patch('/api/albums/:id/pressing', albumController.updateAlbumPressing);
     app.post('/api/albums/:id/pressing/undo', albumController.undoAlbumPressing);
     app.use(errorHandler);
@@ -219,6 +220,46 @@ describe('Album CRUD Operations', () => {
         .get('/api/albums?status=wishlist');
 
       expect(wishlistResponse.body.albums).toHaveLength(0);
+    });
+
+    it('undoes different moves independently, rejecting old tokens after the shelf cycles back', async () => {
+      const add = async (album: string) => (await request(app).post('/api/albums')
+        .send({ artist: 'Test Artist', album, status: 'wishlist' }).expect(201)).body.album;
+      const first = await add('First album');
+      const second = await add('Second album');
+      const move = (id: number, status: string) => request(app).patch(`/api/albums/${id}/status`).send({ status });
+      const undo = (id: number, undoToken: string) => request(app).post(`/api/albums/${id}/status/undo`).send({ undoToken });
+
+      const movedFirst = await move(first.id, 'collection').expect(200);
+      const movedSecond = await move(second.id, 'collection').expect(200);
+      expect(movedFirst.headers['cache-control']).toBe('no-store');
+      expect(movedFirst.body.undoToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(Date.parse(movedFirst.body.expiresAt)).toBeGreaterThan(Date.now());
+      await move(first.id, 'wishlist').expect(200);
+      const movedFirstAgain = await move(first.id, 'collection').expect(200);
+      expect((await move(first.id, 'collection').expect(200)).body).not.toHaveProperty('undoToken');
+
+      await undo(first.id, movedFirst.body.undoToken).expect(409);
+      await undo(first.id, movedSecond.body.undoToken).expect(409);
+      const attempts = await Promise.all([undo(first.id, movedFirstAgain.body.undoToken), undo(first.id, movedFirstAgain.body.undoToken)]);
+      expect(attempts.map(({ status }) => status).sort()).toEqual([200, 409]);
+      expect(attempts.find(({ status }) => status === 200)?.body.album).toEqual(first);
+      expect((await undo(second.id, movedSecond.body.undoToken).expect(200)).body.album).toEqual(second);
+    });
+
+    it('expires a move receipt and invalidates another when the membership is removed and restored', async () => {
+      const { body: { album } } = await request(app).post('/api/albums')
+        .send({ artist: 'Test Artist', album: 'Saved album', status: 'wishlist' }).expect(201);
+      const url = `/api/albums/${album.id}`;
+      const undoMove = (undoToken: string) => request(app).post(`${url}/status/undo`).send({ undoToken });
+      const expired = await request(app).patch(`${url}/status`).send({ status: 'collection' }).expect(200);
+      await testPool.query("UPDATE album_move_undo SET expires_at = clock_timestamp() - INTERVAL '1 second'");
+      await undoMove(expired.body.undoToken).expect(409);
+      const moved = await request(app).patch(`${url}/status`).send({ status: 'wishlist' }).expect(200);
+      const removed = await request(app).delete(url).expect(200);
+      await request(app).post(`${url}/removal/undo`).send({ undoToken: removed.body.undoToken }).expect(200);
+      await undoMove(moved.body.undoToken).expect(409);
+      expect((await request(app).get(url).expect(200)).body.album.status).toBe('wishlist');
     });
   });
 
@@ -433,8 +474,9 @@ describe('Album CRUD Operations', () => {
     it('restores an unconfirmed pressing and its catalog listing, retaining later shelf and notes edits', async () => {
       const confirmed = await changePressing(release.id, null).expect(200);
       expect(confirmed.headers['cache-control']).toBe('no-store');
-      const { undoToken } = confirmed.body;
+      const { undoToken, expiresAt } = confirmed.body;
       expect(undoToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(Date.parse(expiresAt)).toBeGreaterThan(Date.now());
       await request(app).patch(`/api/albums/${albumId}/status`).send({ status: 'collection', expectedStatus: 'wishlist' }).expect(200);
       await request(app).patch(`/api/albums/${albumId}/notes`).send({ notes: 'Notes after the pressing change' }).expect(200);
       const edited = await request(app).get(`/api/albums/${albumId}`).expect(200);

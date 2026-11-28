@@ -116,9 +116,11 @@ describe('pressing comparison evidence', () => {
     title: album.title, lookup, matches, onClose: vi.fn(), onOpenSaved: vi.fn(),
     returnFocusTo: { current: null }, fallbackFocusTo: { current: null }, ...overrides,
   });
-  const values = (label: string) => renderer!.root.findByType('tbody').findAllByType('tr')
+  const evidenceTable = () => renderer!.root.findAllByType('table')
+    .find(table => textOf(table.findByType('caption')).startsWith('Catalog evidence'))!;
+  const values = (label: string) => evidenceTable().findByType('tbody').findAllByType('tr')
     .find(row => textOf(row.findByType('th')) === label)!.findAllByType('td').map(textOf);
-  const releaseStatuses = () => renderer!.root.findByType('thead').findAllByProps({ role: 'status' }).map(textOf);
+  const releaseStatuses = () => evidenceTable().findByType('thead').findAllByProps({ role: 'status' }).map(textOf);
   const button = (label: string) => renderer!.root.findAllByType('button').find(control => textOf(control) === label)!;
   const radio = (releaseId: number) => renderer!.root.findAllByType('input').find(control =>
     control.props.type === 'radio' && Number(control.props.value) === releaseId)!;
@@ -131,17 +133,18 @@ describe('pressing comparison evidence', () => {
       .mockResolvedValueOnce({ pressing: { catalogNumber: 'FETCHED-10', country: 'UK' } });
     await act(async () => { renderer = create(createComparison([{ ...album, discogs_id: 420 }])); });
     expect(releaseStatuses()).toEqual(['Catalog match: Checking Discogs…', 'Saved copy: Discogs has no additional details.']);
-    expect(values('Catalog number')).toEqual(['SUMMARY-10', '—']);
-    expect(values('Label')).toEqual(['—', '—']);
+    expect(values('Catalog number')).toEqual(['SUMMARY-10', 'Unlisted']);
+    expect(values('Label')).toEqual(['Checking…', 'Unlisted']);
 
     await act(async () => pending.reject(new Error('Offline')));
     expect(releaseStatuses()).toEqual(['Catalog match: Discogs details couldn’t load.', 'Saved copy: Discogs has no additional details.']);
+    expect(values('Label')).toEqual(['Unavailable', 'Unlisted']);
     await act(async () => renderer!.root.findByProps({ 'aria-label': 'Retry details for catalog match' }).props.onClick());
     expect(getPressingDetails.mock.calls.map(([id]) => id)).toEqual([410, 420, 410]);
-    expect(values('Catalog number')).toEqual(['FETCHED-10', '—']);
-    expect(values('Format')).toEqual(['Vinyl', '—']);
-    expect(values('Country')).toEqual(['UK', '—']);
-    expect(releaseStatuses()[0]).toBe('Catalog match: Dashes mark unlisted details.');
+    expect(values('Catalog number')).toEqual(['FETCHED-10', 'Unlisted']);
+    expect(values('Format')).toEqual(['Vinyl', 'Unlisted']);
+    expect(values('Country')).toEqual(['UK', 'Unlisted']);
+    expect(releaseStatuses()[0]).toBe('Catalog match: Discogs details loaded.');
   });
 
   it('deduplicates a shared release and cancels a request for a copy that is no longer selected', async () => {
@@ -174,7 +177,7 @@ describe('pressing comparison evidence', () => {
       }));
     });
     const savedSelect = renderer!.root.findByType('select');
-    expect(renderer!.root.findAllByType('table')).toHaveLength(0);
+    expect(textOf(renderer!.root.findByType('table'))).toContain('Saved pressing 420');
     expect(textOf(renderer!.root)).toContain('Saved pressing evidence');
     expect(radio(410).props.checked).toBe(false);
     expect(radio(430).props.checked).toBe(false);
@@ -182,8 +185,8 @@ describe('pressing comparison evidence', () => {
     expect(getPressingDetails.mock.calls.map(([id]) => id)).toEqual([420]);
     await act(async () => choose(430));
     expect(savedSelect.props.value).toBe(1);
-    expect(values('Catalog number')).toEqual(['ALT-30', '—']);
-    expect(values('Release year')).toEqual(['2017', '—']);
+    expect(values('Catalog number')).toEqual(['ALT-30', 'Checking…']);
+    expect(values('Release year')).toEqual(['2017', 'Checking…']);
     expect(values('Discogs release ID')).toEqual(['430', '420']);
     expect(getPressingDetails.mock.calls.map(([id]) => id)).toEqual([420, 430]);
     expect(getPressingDetails.mock.calls[0][1].aborted).toBe(false);
@@ -199,16 +202,42 @@ describe('pressing comparison evidence', () => {
     await act(async () => {
       renderer = create(createComparison([{ ...album, discogs_id: 420 }], { lookup: first, lookupChoices: [second], searchedNumber: 'S-5233' }));
     });
-    const savedEvidence = renderer!.root.findAllByType('section').find(section => textOf(section).includes('Saved pressing evidence'))!;
+    const savedEvidence = renderer!.root.findAllByType('details').find(section => textOf(section).includes('Saved pressing evidence'))!;
     expect(textOf(savedEvidence)).toContain('CountryUS');
     expect(textOf(savedEvidence)).toContain('S-5233 A-1');
     expect(textOf(renderer!.root)).toContain('Canada');
-    expect(renderer!.root.findAllByType('table')).toHaveLength(0);
+    expect(textOf(renderer!.root.findByType('table'))).toContain('Saved pressing 420');
     await act(async () => choose(430));
-    const fields = renderer!.root.findByType('tbody').findAllByType('th').map(textOf);
+    const fields = evidenceTable().findByType('tbody').findAllByType('th').map(textOf);
     expect(fields.slice(0, 3)).toEqual(['Country', 'Release year', 'Matrix / Runout']);
     expect(values('Matrix / Runout')[0]).toContain('S-5233 A-2');
     expect(values('Matrix / Runout')[1]).toContain('S-5233 A-1');
+  });
+
+  it('cancels pressing confirmation when a media filter excludes the selected release', async () => {
+    getPressingDetails.mockResolvedValue({ pressing: null });
+    const onSavePressing = vi.fn();
+    const vinyl = { ...lookup, pressing: { format: 'Vinyl · LP' } };
+    const otherMedia = [
+      { ...alternate, pressing: { format: 'CD · Album' } },
+      { ...alternate, releaseId: 450, pressing: { format: 'Cassette · Album' } },
+      { ...alternate, releaseId: 460, pressing: { format: 'Vinyl · LP' } },
+    ];
+    await act(async () => {
+      renderer = create(createComparison([{ ...album, discogs_id: 420 }], { lookup: vinyl, lookupChoices: otherMedia, onSavePressing }));
+    });
+    await act(async () => choose(410));
+    await act(async () => button('Use this pressing').props.onClick());
+    expect(button('Confirm pressing')).toBeDefined();
+    await act(async () => renderer!.root.findByType('select').props.onChange({ target: { value: 'CD' } }));
+    expect(button('Confirm pressing')).toBeUndefined();
+    expect(button('Use this pressing')).toBeUndefined();
+    expect(textOf(renderer!.root)).toContain('The selected pressing is outside the CD filter.');
+    expect(onSavePressing).not.toHaveBeenCalled();
+    await act(async () => button('Show selected pressing in All media').props.onClick());
+    expect(radio(410).props.checked).toBe(true);
+    expect(button('Use this pressing')).toBeDefined();
+    expect(button('Confirm pressing')).toBeUndefined();
   });
 
   it('confirms a replacement, allows retry, and focuses the persisted saved outcome', async () => {
@@ -240,7 +269,7 @@ describe('pressing comparison evidence', () => {
     const actions = renderer!.root.findByProps({ 'aria-label': 'Pressing actions' });
     expect(reviewEvidence.props.tabIndex).toBe(0);
     expect(reviewEvidence.parent).toBe(actions.parent);
-    expect(reviewEvidence.findByType('table')).toBeDefined();
+    expect(evidenceTable()).toBeDefined();
     expect(actions.findByType(PressingSelectionSummary).props).toMatchObject({ compact: true, choice: { releaseId: 430 } });
     expect(actions.findAllByType('button').map(textOf)).toContain('Keep current pressing');
     expect(textOf(actions)).toContain('Confirmation records the exact Discogs release on your Collection entry.');
@@ -478,6 +507,29 @@ describe('saving a new catalog pressing', () => {
     expect(onSaveWithoutPressing).toHaveBeenCalledOnce();
     expect(onSave).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('blocks form submission for a retained selection outside the active media filter', async () => {
+    const choices = releases.map((release, index) => ({
+      ...release, pressing: { ...release.pressing, format: index === 1 ? 'CD · Album' : 'Vinyl · LP' },
+    }));
+    const onSave = vi.fn().mockResolvedValue(true);
+    const onSaveWithoutPressing = vi.fn();
+    await act(async () => {
+      renderer = create(createPicker({ album: { ...choices[0], pressingChoices: choices }, onSave, onSaveWithoutPressing }));
+    });
+    const select = renderer!.root.findByType('select');
+    const submit = () => renderer!.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() });
+    await act(async () => renderer!.root.findByProps({ type: 'radio', value: 410 }).props.onChange());
+    await act(async () => select.props.onChange({ target: { value: 'CD' } }));
+    expect(button('Save pressing to Collection').props['aria-disabled']).toBe(true);
+    expect(button('Save without pressing to Collection').props['aria-disabled']).toBe(false);
+    await act(async () => submit());
+    expect(onSave).not.toHaveBeenCalled();
+    await act(async () => button('Show selected pressing in All media').props.onClick());
+    expect(button('Save pressing to Collection').props['aria-disabled']).toBe(false);
+    await act(async () => submit());
+    expect(onSave).toHaveBeenCalledExactlyOnceWith(choices[0]);
   });
 });
 

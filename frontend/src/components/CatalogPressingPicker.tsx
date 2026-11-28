@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { Album, DiscogsAlbum, PressingDetails } from '../services/api';
-import { withPressingEvidence } from '../services/pressingEvidence';
+import { matchesPressingMedium, withPressingEvidence } from '../services/pressingEvidence';
 import { ModalDialog } from './ModalDialog';
 import { PressingCandidates, PressingSelectionSummary, type PressingCandidate } from './PressingCandidates';
 import './PressingReview.css';
@@ -28,6 +28,7 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
   const evidenceRegion = useRef<HTMLDivElement>(null);
   const saveInProgress = useRef(false);
   const [selectedId, setSelectedId] = useState<number>();
+  const [medium, setMedium] = useState('');
   const [evidence, setEvidence] = useState<Partial<Record<number, PressingDetails>>>({});
   const [saving, setSaving] = useState<'pressing' | 'album'>();
   const [unexpectedIssue, setUnexpectedIssue] = useState<string>();
@@ -40,6 +41,8 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
   }));
   const pressing = releases.find(release => release.discogsId === selectedId);
   const selectedChoice = choices.find(choice => choice.releaseId === selectedId);
+  const selectedWithEvidence = selectedChoice && withPressingEvidence(selectedChoice, evidence[selectedChoice.releaseId]);
+  const selectionOutsideMedia = !!selectedWithEvidence && !matchesPressingMedium(selectedWithEvidence, medium);
   const shelf = destination === 'collection' ? 'Collection' : 'Wishlist';
   const saveIssue = unexpectedIssue ?? issue;
   const recordEvidence = useCallback((releaseId: number, details: PressingDetails) => {
@@ -64,7 +67,7 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
   };
 
   const save = async (release?: DiscogsAlbum) => {
-    if (saveInProgress.current || duplicate || (!release && !onSaveWithoutPressing)) return;
+    if (saveInProgress.current || duplicate || (release ? selectionOutsideMedia : !onSaveWithoutPressing)) return;
     saveInProgress.current = true;
     setUnexpectedIssue(undefined);
     setSaving(release ? 'pressing' : 'album');
@@ -82,7 +85,7 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
   return (
     <ModalDialog labelledBy={headingId} onClose={close} returnFocusTo={opener} fallbackFocusTo={fallback}>
       <div className="rh-dialog-panel rh-pressing-review max-w-xl">
-        <header className="rh-dialog-header flex items-start justify-between gap-2 border-b border-gray-200 p-4 sm:px-6">
+        <header className="rh-dialog-header flex items-start justify-between gap-2 border-b border-gray-200 px-4 py-3 sm:px-6">
           <div className="min-w-0 [overflow-wrap:anywhere]">
             <h2 id={headingId} className="text-xl font-semibold">Review pressings</h2>
             <p className="mt-1 line-clamp-2 text-sm text-gray-600">{album.album} · {album.artist}</p>
@@ -98,17 +101,17 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
           event.preventDefault();
           if (pressing) return save(pressing);
         }}>
-          <div ref={evidenceRegion} className="rh-pressing-review__evidence p-4 sm:px-6" role="region" aria-label="Pressing evidence" tabIndex={0}>
+          <div ref={evidenceRegion} className="rh-pressing-review__evidence px-4 py-2 sm:px-6 sm:py-4" role="region" aria-label="Pressing evidence" tabIndex={0}>
             <PressingCandidates choices={choices} searchedNumber={searchedNumber} selectedId={selectedId}
-              onSelect={setSelectedId} onReadEvidence={recordEvidence} disabled={!!saving || duplicate}
+              onSelect={setSelectedId} onReadEvidence={recordEvidence} disabled={!!saving || duplicate} medium={medium} onMediumChange={setMedium}
               uncertainAction={onSaveWithoutPressing ? 'If you’re unsure, you can save without pressing below.' : undefined} />
           </div>
           <footer className="rh-pressing-review__footer grid gap-2 px-4 py-2 sm:px-6" role="group" aria-label={duplicate ? 'Saved album' : 'Save album'}>
-            {selectedChoice && !duplicate && <PressingSelectionSummary compact searchedNumber={searchedNumber}
+            {selectedWithEvidence && !duplicate && <PressingSelectionSummary compact searchedNumber={searchedNumber}
               formats={choices.map(choice => choice.pressing?.format ?? '')}
-              choice={withPressingEvidence(selectedChoice, evidence[selectedChoice.releaseId])} />}
-            {!duplicate && <p id={saveGuidanceId} className="text-xs text-gray-600">
-              {onSaveWithoutPressing
+              choice={selectedWithEvidence} />}
+            {!duplicate && <p id={saveGuidanceId} role={selectionOutsideMedia ? 'status' : undefined} className="text-xs text-gray-600">
+              {selectionOutsideMedia ? `The selected pressing is outside the ${medium} filter. Show it in All media or choose another pressing.` : onSaveWithoutPressing
                 ? `Save an exact Discogs release, or save the album to ${shelf} and identify its pressing later.`
                 : `Choose an exact Discogs release to save to ${shelf}.`}
             </p>}
@@ -126,7 +129,7 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
                     {saving === 'album' ? `Saving album to ${shelf}…` : `Save without pressing to ${shelf}`}
                   </button>}
                   <button type="submit" className="rh-primary-action px-3 text-sm font-semibold aria-disabled:opacity-60"
-                    aria-disabled={!pressing || !!saving} aria-busy={saving === 'pressing'} aria-describedby={saveIssue ? issueId : saveGuidanceId}>
+                    aria-disabled={!pressing || !!saving || selectionOutsideMedia} aria-busy={saving === 'pressing'} aria-describedby={saveIssue ? issueId : saveGuidanceId}>
                     {saving === 'pressing' ? `Saving pressing to ${shelf}…` : `Save pressing to ${shelf}`}
                   </button>
                 </>

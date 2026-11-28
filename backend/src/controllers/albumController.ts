@@ -310,6 +310,7 @@ export const updateAlbumPressing = asyncHandler(async (req: Request, res: Respon
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query(lockRemovalUndo);
     await lockAlbumIdentity(client, original.artist_name, expectedDiscogsId, discogsId);
     const { rows: [saved] } = await client.query<AlbumWithArtist>(`${savedAlbumQuery} FOR UPDATE OF albums, collections`, [id]);
     checkExpectedPressing(saved, expectedDiscogsId);
@@ -324,7 +325,7 @@ export const updateAlbumPressing = asyncHandler(async (req: Request, res: Respon
 
     const undoToken = randomBytes(32).toString('base64url');
     await client.query('UPDATE albums SET discogs_id = $2, catalog_listing = NULL WHERE id = $1', [id, discogsId]);
-    await client.query(`
+    const { rows: [receipt] } = await client.query<{ expires_at: Date }>(`
       INSERT INTO album_pressing_undo (
         collection_id, token_digest, expected_discogs_id, previous_discogs_id, previous_catalog_listing, expires_at
       )
@@ -335,9 +336,13 @@ export const updateAlbumPressing = asyncHandler(async (req: Request, res: Respon
         previous_discogs_id = EXCLUDED.previous_discogs_id,
         previous_catalog_listing = EXCLUDED.previous_catalog_listing,
         expires_at = EXCLUDED.expires_at
+      RETURNING expires_at
     `, [id, undoTokenDigest(undoToken), discogsId, saved.discogs_id ?? null, saved.catalog_listing ?? null]);
+    if (!receipt) throw new Error('Could not record the pressing change.');
     await client.query('COMMIT');
-    res.set('Cache-Control', 'no-store').json({ album: { ...saved, discogs_id: discogsId, catalog_listing: null }, undoToken });
+    res.set('Cache-Control', 'no-store').json({
+      album: { ...saved, discogs_id: discogsId, catalog_listing: null }, undoToken, expiresAt: receipt.expires_at.toISOString(),
+    });
   } catch (error) {
     await client.query('ROLLBACK');
     if (error instanceof Error && 'code' in error && error.code === '23505') {
@@ -381,6 +386,7 @@ export const undoAlbumPressing = asyncHandler(async (req: Request, res: Response
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query(lockRemovalUndo);
     await lockAlbumIdentity(client, original.artist_name, original.expected_discogs_id, original.previous_discogs_id);
     const { rows: [saved] } = await client.query<AlbumWithArtist>(`${savedAlbumQuery} FOR UPDATE OF albums, collections`, [id]);
     checkExpectedPressing(saved, original.expected_discogs_id);
@@ -557,15 +563,77 @@ export const updateAlbumStatus = asyncHandler(async (req: Request, res: Response
     throw new AppError('Invalid expected status', 400);
   }
 
-  const result = await pool.query(
-    'UPDATE collections SET status = $1 WHERE album_id = $2 AND ($3::text IS NULL OR status = $3) RETURNING *',
-    [status, id, expectedStatus ?? null]
-  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(lockRemovalUndo);
+    const { rows: [saved] } = await client.query<{ id: number; status: AlbumWithArtist['status'] | null }>(`
+      SELECT id, status FROM collections WHERE album_id = $1 AND ($2::text IS NULL OR status = $2) FOR UPDATE
+    `, [id, expectedStatus ?? null]);
+    if (!saved) {
+      if (expectedStatus) throw new AppError('This album’s shelf changed. Refresh and try again.', 409);
+      throw new AppError('Album not in collection', 404);
+    }
 
-  if (result.rowCount === 0) {
-    if (expectedStatus) throw new AppError('This album’s shelf changed. Refresh and try again.', 409);
-    throw new AppError('Album not in collection', 404);
+    let undo: { undoToken: string; expiresAt: string } | undefined;
+    if (saved.status !== status) {
+      await client.query('UPDATE collections SET status = $2 WHERE id = $1', [saved.id, status]);
+      if (isShelf(saved.status)) {
+        const undoToken = randomBytes(32).toString('base64url');
+        const { rows: [receipt] } = await client.query<{ expires_at: Date }>(`
+          INSERT INTO album_move_undo (collection_id, token_digest, expected_status, previous_status, expires_at)
+          VALUES ($1, $2, $3, $4, clock_timestamp() + INTERVAL '10 minutes')
+          ON CONFLICT (collection_id) DO UPDATE SET
+            token_digest = EXCLUDED.token_digest, expected_status = EXCLUDED.expected_status,
+            previous_status = EXCLUDED.previous_status, expires_at = EXCLUDED.expires_at
+          RETURNING expires_at
+        `, [saved.id, undoTokenDigest(undoToken), status, saved.status]);
+        if (!receipt) throw new Error('Could not record the shelf move.');
+        undo = { undoToken, expiresAt: receipt.expires_at.toISOString() };
+      }
+    }
+    await client.query('COMMIT');
+    res.set('Cache-Control', 'no-store').json({ message: 'Status updated', status, ...undo });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+export const undoAlbumMove = asyncHandler(async (req: Request, res: Response) => {
+  const rawId = String(req.params.id);
+  const id = Number(rawId);
+  const { undoToken } = req.body ?? {};
+  if (!/^\d+$/.test(rawId) || !isDatabaseId(id) || typeof undoToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(undoToken)) {
+    throw new AppError('Choose a valid shelf move to undo.', 400);
   }
 
-  res.json({ message: 'Status updated', status });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(lockRemovalUndo);
+    const { rows: [saved] } = await client.query<{ id: number; status: AlbumWithArtist['status'] }>(`
+      SELECT id, status FROM collections WHERE album_id = $1 FOR UPDATE
+    `, [id]);
+    if (!saved) throw new AppError('This album is no longer saved.', 404);
+
+    const { rows: [receipt] } = await client.query<{ previous_status: AlbumWithArtist['status'] }>(`
+      DELETE FROM album_move_undo
+      WHERE collection_id = $1 AND token_digest = $2 AND expected_status = $3 AND expires_at > clock_timestamp()
+      RETURNING previous_status
+    `, [saved.id, undoTokenDigest(undoToken), saved.status]);
+    if (!receipt) throw new AppError('This shelf move can no longer be undone. Check the current shelf.', 409);
+
+    await client.query('UPDATE collections SET status = $2 WHERE id = $1', [saved.id, receipt.previous_status]);
+    const { rows: [album] } = await client.query<AlbumWithArtist>(savedAlbumQuery, [id]);
+    await client.query('COMMIT');
+    res.set('Cache-Control', 'no-store').json({ album });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 });

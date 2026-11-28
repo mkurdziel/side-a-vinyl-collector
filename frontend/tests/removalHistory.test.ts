@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemovalHistory, type RemovalHistoryHandle } from '../src/components/RemovalHistory';
 import { ApiError, type Album } from '../src/services/api';
 
-const { undoAlbumRemoval } = vi.hoisted(() => ({ undoAlbumRemoval: vi.fn() }));
+const { undoAlbumRemoval, undoAlbumMove, undoPressing } = vi.hoisted(() => ({
+  undoAlbumRemoval: vi.fn(), undoAlbumMove: vi.fn(), undoPressing: vi.fn(),
+}));
 vi.mock('../src/services/api', async importOriginal => ({
   ...await importOriginal<typeof import('../src/services/api')>(),
-  default: { undoAlbumRemoval },
+  default: { undoAlbumRemoval, undoAlbumMove, undoPressing },
 }));
 
 const shelfRecord: Album = {
@@ -17,14 +19,33 @@ const wishlistRecord: Album = { ...shelfRecord, id: 2, title: 'Giant Steps', sta
 const historyKey = 'side-a-removal-history';
 const legacyKey = 'side-a-last-removal';
 const storage = new Map<string, string>();
+const session = new Map<string, string>();
+type StorageListener = (event: Pick<StorageEvent, 'key' | 'newValue'>) => void;
+const storageListeners = new Set<StorageListener>();
 const history = createRef<RemovalHistoryHandle>();
 const onRestored = vi.fn();
+const onMovedBack = vi.fn();
+const onPressingUndone = vi.fn();
+const onExternalChange = vi.fn();
 let renderer: ReturnType<typeof create>;
 
 async function mount() {
   await act(async () => {
-    renderer = create(createElement(RemovalHistory, { ref: history, onRestored, fallbackFocus: createRef() }));
+    renderer = create(createElement(RemovalHistory, {
+      ref: history, onRestored, onMovedBack, onPressingUndone, onExternalChange, fallbackFocus: createRef(),
+    }));
   });
+}
+
+function activeReceipts() {
+  return [...storage].filter(([key]) => key.startsWith('side-a-library-undo:') && !key.endsWith(':closed') && !storage.has(`${key}:closed`))
+    .map(([, value]) => JSON.parse(value));
+}
+
+async function emitStorageChange(key: string, newValue: string | null) {
+  if (newValue === null) storage.delete(key);
+  else storage.set(key, newValue);
+  await act(async () => storageListeners.forEach(listener => listener({ key, newValue })));
 }
 
 async function record(album: Album, duration = 600_000) {
@@ -39,12 +60,25 @@ function button(name: string) {
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
-  vi.stubGlobal('window', globalThis);
-  vi.stubGlobal('sessionStorage', {
-    getItem: (key: string) => storage.get(key),
-    setItem: (key: string, value: string) => storage.set(key, value),
-    removeItem: (key: string) => storage.delete(key),
+  vi.stubGlobal('window', {
+    setTimeout: (...args: Parameters<typeof setTimeout>) => setTimeout(...args),
+    clearTimeout: (timer: ReturnType<typeof setTimeout>) => clearTimeout(timer),
+    addEventListener: (name: string, listener: StorageListener) => {
+      if (name === 'storage') storageListeners.add(listener);
+    },
+    removeEventListener: (name: string, listener: StorageListener) => {
+      if (name === 'storage') storageListeners.delete(listener);
+    },
   });
+  const browserStorage = (items: Map<string, string>) => ({
+    get length() { return items.size; },
+    key: (index: number) => [...items.keys()][index] ?? null,
+    getItem: (key: string) => items.get(key) ?? null,
+    setItem: (key: string, value: string) => items.set(key, value),
+    removeItem: (key: string) => items.delete(key),
+  });
+  vi.stubGlobal('sessionStorage', browserStorage(session));
+  vi.stubGlobal('localStorage', browserStorage(storage));
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-11-27T18:00:00.000Z'));
 });
@@ -52,6 +86,8 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => renderer?.unmount());
   storage.clear();
+  session.clear();
+  storageListeners.clear();
   vi.resetAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -61,29 +97,30 @@ describe('removal history', () => {
   it.each([
     [shelfRecord, wishlistRecord],
     [wishlistRecord, shelfRecord],
-  ])('restores both receipts across dismissal and reload when %o is restored first', async (first, second) => {
+  ])('restores both receipts across dismissal and a fresh tab when %o is restored first', async (first, second) => {
     await mount();
     const firstReceipt = await record(shelfRecord);
     await act(async () => vi.advanceTimersByTimeAsync(2_000));
     const secondReceipt = await record(wishlistRecord);
     expect(renderer.root.findAllByType('time').map(node => node.props.dateTime)).toEqual([secondReceipt.expiresAt, firstReceipt.expiresAt]);
 
-    await act(async () => button('Dismiss removal notice')!.props.onClick());
+    await act(async () => button('Dismiss library change notice')!.props.onClick());
     expect(renderer.root.findByType('ul').props.hidden).toBe(true);
-    await act(async () => button('Recent removals')!.props.onClick());
+    await act(async () => button('Recent library changes')!.props.onClick());
     expect(renderer.root.findByType('ul').props.hidden).toBe(false);
     await act(async () => renderer.unmount());
+    session.clear();
     await mount();
 
     undoAlbumRemoval.mockResolvedValueOnce({ album: first }).mockResolvedValueOnce({ album: second });
     await act(async () => button(`Undo removal · ${first.title}`)!.props.onClick());
     expect(onRestored).toHaveBeenNthCalledWith(1, first);
     expect(button(`Undo removal · ${first.title}`)).toBeUndefined();
-    expect(JSON.parse(storage.get(historyKey) ?? 'null')).toMatchObject([{ id: second.id }]);
+    expect(activeReceipts()).toMatchObject([{ id: second.id }]);
     await act(async () => button(`Undo removal · ${second.title}`)!.props.onClick());
     expect(undoAlbumRemoval.mock.calls).toEqual([[first.id, `undo-${first.id}`], [second.id, `undo-${second.id}`]]);
     expect(onRestored).toHaveBeenNthCalledWith(2, second);
-    expect(storage.has(historyKey)).toBe(false);
+    expect(activeReceipts()).toEqual([]);
   });
 
   it('expires each receipt separately and keeps a failed undo retryable until its deadline', async () => {
@@ -98,10 +135,10 @@ describe('removal history', () => {
       .mockRejectedValueOnce(new ApiError('This removal can no longer be undone.', 409));
     await act(async () => button('Undo removal · Giant Steps')!.props.onClick());
     expect(JSON.stringify(renderer.toJSON())).toContain('Couldn’t confirm the undo. Try again.');
-    expect(storage.has(historyKey)).toBe(true);
+    expect(activeReceipts()).toHaveLength(1);
     await act(async () => button('Retry undo removal · Giant Steps')!.props.onClick());
     expect(button('Retry undo removal · Giant Steps')).toBeUndefined();
-    expect(storage.has(historyKey)).toBe(false);
+    expect(activeReceipts()).toEqual([]);
     expect(JSON.stringify(renderer.toJSON())).toContain('This removal can no longer be undone.');
   });
 
@@ -120,16 +157,16 @@ describe('removal history', () => {
 
     await act(async () => pending.resolve({ album: shelfRecord }));
     expect(onRestored).toHaveBeenNthCalledWith(2, shelfRecord);
-    expect(storage.has(historyKey)).toBe(false);
+    expect(activeReceipts()).toEqual([]);
   });
 
   it('ignores malformed data, migrates a valid old receipt, and clears pending state after backup restore', async () => {
     const { id, title, status } = shelfRecord;
-    storage.set(historyKey, '{broken');
-    storage.set(legacyKey, JSON.stringify({ id, title, status, kind: 'removed', undoToken: 'old', expiresAt: new Date(Date.now() + 600_000).toISOString() }));
+    session.set(historyKey, '{broken');
+    session.set(legacyKey, JSON.stringify({ id, title, status, kind: 'removed', undoToken: 'old', expiresAt: new Date(Date.now() + 600_000).toISOString() }));
     await mount();
     expect(button('Undo removal · Blue Train')).toBeDefined();
-    expect(storage.has(legacyKey)).toBe(false);
+    expect(session.has(legacyKey)).toBe(false);
 
     const pending = Promise.withResolvers<{ album: Album }>();
     undoAlbumRemoval.mockReturnValueOnce(pending.promise);
@@ -139,6 +176,89 @@ describe('removal history', () => {
     await act(async () => pending.resolve({ album: shelfRecord }));
     expect(onRestored).not.toHaveBeenCalled();
     expect(renderer.toJSON()).toBeNull();
-    expect(storage.has(historyKey)).toBe(false);
+    expect(activeReceipts()).toEqual([]);
+  });
+
+  it('keeps receipts added by another tab and only consumes the matching token', async () => {
+    await mount();
+    await record(shelfRecord);
+    const remote = { ...wishlistRecord, kind: 'removal', undoToken: 'remote', expiresAt: new Date(Date.now() + 600_000).toISOString() };
+    const key = `side-a-library-undo:removal:${remote.id}:${remote.undoToken}`;
+    await emitStorageChange(key, JSON.stringify(remote));
+    expect(button('Undo removal · Giant Steps')).toBeDefined();
+
+    const pending = Promise.withResolvers<{ album: Album }>();
+    undoAlbumRemoval.mockReturnValueOnce(pending.promise);
+    await act(async () => button('Undo removal · Giant Steps')!.props.onClick());
+    const newer = { ...remote, undoToken: 'newer', expiresAt: new Date(Date.now() + 601_000).toISOString() };
+    await emitStorageChange(`side-a-library-undo:removal:${newer.id}:${newer.undoToken}`, JSON.stringify(newer));
+    await act(async () => pending.resolve({ album: wishlistRecord }));
+    expect(onRestored).not.toHaveBeenCalled();
+    expect(onExternalChange).toHaveBeenCalledTimes(2);
+    expect(button('Undo removal · Blue Train')).toBeDefined();
+
+    undoAlbumRemoval.mockResolvedValueOnce({ album: wishlistRecord });
+    await act(async () => button('Undo removal · Giant Steps')!.props.onClick());
+    expect(undoAlbumRemoval).toHaveBeenLastCalledWith(wishlistRecord.id, 'newer');
+    expect(button('Undo removal · Giant Steps')).toBeUndefined();
+    await emitStorageChange(`side-a-library-undo:removal:${newer.id}:${newer.undoToken}`, JSON.stringify(newer));
+    expect(button('Undo removal · Giant Steps')).toBeUndefined();
+    expect(button('Undo removal · Blue Train')).toBeDefined();
+  });
+
+  it('recovers separate moves and a pressing update after remounting the history', async () => {
+    await mount();
+    const expiry = { expiresAt: new Date(Date.now() + 600_000).toISOString() };
+    await act(async () => {
+      for (const album of [shelfRecord, wishlistRecord]) {
+        history.current!.recordMove({ albumId: album.id, title: album.title, from: album.status,
+          to: album.status === 'collection' ? 'wishlist' : 'collection' }, { ...expiry, undoToken: `move-${album.id}` });
+      }
+      history.current!.recordPressing(shelfRecord, { ...expiry, undoToken: 'pressing' });
+    });
+    await act(async () => renderer.unmount());
+    await mount();
+
+    undoAlbumMove.mockResolvedValueOnce({ album: shelfRecord }).mockResolvedValueOnce({ album: wishlistRecord });
+    undoPressing.mockResolvedValueOnce({ album: shelfRecord });
+    await act(async () => { expect(await history.current!.undoMove(shelfRecord.id)).toBe(true); });
+    await act(async () => button('Undo pressing change · Blue Train')!.props.onClick());
+    await act(async () => button('Undo move · Giant Steps')!.props.onClick());
+    expect(undoAlbumMove.mock.calls).toEqual([[shelfRecord.id, 'move-1'], [wishlistRecord.id, 'move-2']]);
+    expect(undoPressing).toHaveBeenCalledWith(shelfRecord.id, 'pressing');
+    expect(onMovedBack.mock.calls).toEqual([[shelfRecord], [wishlistRecord]]);
+    expect(onPressingUndone).toHaveBeenCalledWith(shelfRecord);
+  });
+
+  it('drops unavailable album changes and rejects old responses after a restore in another tab', async () => {
+    await mount();
+    const receipt = await record(wishlistRecord);
+    await act(async () => {
+      history.current!.recordPressing(shelfRecord, { ...receipt, undoToken: 'pressing' });
+      history.current!.forgetAlbumChanges(shelfRecord.id);
+    });
+    expect(button('Undo pressing change · Blue Train')).toBeUndefined();
+    expect(button('Undo removal · Giant Steps')).toBeDefined();
+
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+    await emitStorageChange(`side-a-library-restored:${Date.now()}`, '');
+    await act(async () => history.current!.recordRemoval(wishlistRecord, receipt));
+    expect(renderer.toJSON()).toBeNull();
+    expect(onExternalChange).toHaveBeenCalledTimes(1);
+
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+    await record(shelfRecord);
+    expect(button('Undo removal · Blue Train')).toBeDefined();
+  });
+
+  it('offers tab-only undo and explains its scope when browser persistence is blocked', async () => {
+    vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new DOMException('Blocked', 'SecurityError'); });
+    await mount();
+    await record(shelfRecord);
+    expect(JSON.stringify(renderer.toJSON())).toContain('Undo is available while this tab stays open.');
+    expect(activeReceipts()).toEqual([]);
+    undoAlbumRemoval.mockResolvedValueOnce({ album: shelfRecord });
+    await act(async () => button('Undo removal · Blue Train')!.props.onClick());
+    expect(onRestored).toHaveBeenCalledWith(shelfRecord);
   });
 });

@@ -133,7 +133,7 @@ export const importBackup = asyncHandler(async (req: Request, res: Response) => 
     try {
       await client.query('BEGIN');
       // Lock removal receipts first, matching the membership transactions that use them.
-      await client.query('TRUNCATE TABLE album_removal_undo, album_pressing_undo, barcodes, collections, albums, artists RESTART IDENTITY');
+      await client.query('TRUNCATE TABLE album_removal_undo, album_pressing_undo, album_move_undo, barcodes, collections, albums, artists RESTART IDENTITY');
       for (const artist of rows.artists) artist.updated_at ??= artist.created_at;
       for (const row of rows.collections) row.status ??= 'collection';
       for (const album of rows.albums) {
@@ -160,11 +160,14 @@ export const importBackup = asyncHandler(async (req: Request, res: Response) => 
         const nextId = rows[table].reduce((next, row) => Math.max(next, row.id + 1), 1);
         await client.query(`ALTER SEQUENCE ${table}_id_seq RESTART WITH ${nextId}`);
       }
+      const { rows: [restore] } = await client.query<{ restored_at: Date }>('SELECT clock_timestamp() AS restored_at');
+      if (!restore) throw new Error('Could not record the backup restore time.');
       committing = true;
       await client.query('COMMIT');
       return {
         message: skippedArtwork.length || manifest.warnings.length ? 'Backup restored with warnings' : 'Backup restored',
         stats: { albums: manifest.albums, artists: rows.artists.length, artwork: written.length, barcodes: manifest.barcodes },
+        restoredAt: restore.restored_at.toISOString(),
         warnings: compatibilityWarnings,
         skippedArtwork,
       };

@@ -68,6 +68,22 @@ export function pressingMedia(format = ''): string[] {
   })));
 }
 
+export function matchesPressingMedium(choice: PressingCandidate, medium: string) {
+  return !medium || pressingMedia(choice.pressing?.format).includes(medium);
+}
+
+export function pressingFormatFacts(value: string) {
+  const parts = formatParts(value);
+  const size = parts.find(part => /^\d{1,2}\s*(?:"|″|inch(?:es)?)$/i.test(part));
+  return {
+    format: pressingMedia(value).join(' · '),
+    size: size ? `${Number.parseInt(size, 10)}"` : '',
+    type: parts.find(part => /^(LP|EP)$/i.test(part)) ?? '',
+    mix: parts.find(part => /^(mono|stereo|quadraphonic)$/i.test(part)) ?? '',
+    speed: parts.find(part => /^(?:16|33|45|78)[\d\s./⅓¼]*\s*rpm$/i.test(part)) ?? '',
+  };
+}
+
 export function withPressingEvidence(choice: PressingCandidate, details?: PressingDetails | null,
   priority: 'listing' | 'release' = 'listing'): PressingCandidate {
   if (!details) return choice;
@@ -83,7 +99,7 @@ export function withPressingEvidence(choice: PressingCandidate, details?: Pressi
   } };
 }
 
-function catalogNumberKey(value: string) {
+export function catalogNumberKey(value: string) {
   return value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().match(/[\p{L}\p{N}]+/gu)?.join('') ?? '';
 }
 

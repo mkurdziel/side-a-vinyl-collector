@@ -1,4 +1,4 @@
-import { createElement, useState } from 'react';
+import { createElement, useState, type ComponentProps } from 'react';
 import { act, create, type ReactTestInstance } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PressingDetails } from '../src/services/api';
@@ -19,6 +19,11 @@ const status = () => renderer!.root.findAllByProps({ role: 'status' }).map(textO
 const radios = () => renderer!.root.findAllByProps({ type: 'radio' }).map(control => control.props.value);
 const radioLabels = () => renderer!.root.findAllByType('label').filter(node => node.findAllByProps({ type: 'radio' }).length > 0);
 
+function CandidatePicker(props: Omit<ComponentProps<typeof PressingCandidates>, 'medium' | 'onMediumChange'>) {
+  const [medium, setMedium] = useState('');
+  return createElement(PressingCandidates, { ...props, medium, onMediumChange: setMedium });
+}
+
 afterEach(async () => {
   await act(async () => renderer?.unmount());
   renderer = undefined;
@@ -34,6 +39,25 @@ const choices: PressingCandidate[] = [
 ];
 
 describe('pressing candidate evidence', () => {
+  it('compares physical fields before selection without treating an unlisted mix as a difference', async () => {
+    await act(async () => {
+      renderer = create(createElement(CandidatePicker, {
+        choices: [
+          { releaseId: 21, pressing: { catalogNumber: 'S 5233', format: 'Vinyl · LP · Album', country: 'Canada' } },
+          { releaseId: 22, pressing: { catalogNumber: 'S-5233', format: 'Vinyl · LP · Stereo', country: 'US' } },
+        ],
+        savedReleaseId: 22,
+        onSelect: vi.fn(),
+      }));
+    });
+    const comparison = renderer!.root.findByType('table');
+    expect(textOf(comparison.findByType('thead'))).toContain('Saved pressing 22');
+    const evidenceRows = comparison.findByType('tbody').findAllByType('tr');
+    expect(evidenceRows.map(textOf)).toEqual(['CountryUSCanada', 'FormatVinylVinyl', 'MixStereoUnlisted']);
+    expect(evidenceRows.map(row => row.props.className)).toEqual(['rh-evidence-priority', undefined, undefined]);
+    expect(renderer!.root.findAllByProps({ type: 'radio' }).every(radio => !radio.props.checked)).toBe(true);
+  });
+
   it('surfaces a long format qualifier when its shorter sibling already fits', () => {
     const mono = 'Vinyl · LP · Album · Reissue · Mono';
     const stereo = 'Vinyl · LP · Album · Reissue · Remastered · Stereo';
@@ -66,12 +90,14 @@ describe('pressing candidate evidence', () => {
     const matching = [vinyl, ...choices.slice(0, 2), compactDisc];
     getPressingDetails.mockResolvedValue({ pressing: null });
     await act(async () => {
-      renderer = create(createElement(PressingCandidates, { choices: matching, onSelect: vi.fn(), searchedNumber: 'PCS 7088' }));
+      renderer = create(createElement(CandidatePicker, { choices: matching, onSelect: vi.fn(), searchedNumber: 'PCS 7088' }));
     });
 
     const vinylRadio = radioLabels()[0];
     expect(textOf(vinylRadio)).toMatch(/Catalog number PCS 7088.*Format Vinyl · LP · Album.*Country UK & Ireland.*Release year 2016.*Discogs release 9269057.*Label Apple Records/);
     expect(textOf(vinylRadio)).not.toContain('Universal Music Group');
+    expect(renderer!.root.findAllByType('details')).toHaveLength(0);
+    await act(async () => button('Listing details and pins').props.onClick());
     const listing = renderer!.root.findAllByType('details').find(node => textOf(node).includes('release 9269057'))!;
     expect(listing.props.open).toBeUndefined();
     expect(textOf(listing)).toContain(credits);
@@ -101,7 +127,7 @@ describe('pressing candidate evidence', () => {
     const formats = [`${prefix} · Remastered · Stereo`, `${prefix} · Mono`];
     const onSelect = vi.fn();
     await act(async () => {
-      renderer = create(createElement(PressingCandidates, {
+      renderer = create(createElement(CandidatePicker, {
         choices: formats.map((format, index) => ({
           releaseId: index + 10, pressing: { catalogNumber: 'PCS 7088', format },
         })),
@@ -115,6 +141,7 @@ describe('pressing candidate evidence', () => {
     ]);
     expect(radioLabels().map(textOf).every(label => !label.includes('Limited Edition'))).toBe(true);
     expect(onSelect).not.toHaveBeenCalled();
+    await act(async () => button('Listing details').props.onClick());
     const rows = renderer!.root.findAllByType('li');
     rows.forEach((row, index) => {
       const listing = row.findByType('details');
@@ -137,16 +164,24 @@ describe('pressing candidate evidence', () => {
     getPressingDetails.mockResolvedValue({ pressing: null });
     const onSelect = vi.fn();
     await act(async () => {
-      renderer = create(createElement(PressingCandidates, { choices: matching, selectedId: 2, onSelect }));
+      renderer = create(createElement(CandidatePicker, { choices: matching, selectedId: 2, onSelect }));
     });
     const mediumFilter = renderer!.root.findByType('select');
     expect(mediumFilter.findAllByType('option').map(textOf)).toEqual(['All media', 'Vinyl', 'Cassette', 'CD']);
+    await act(async () => button('Listing details and pins').props.onClick());
     await act(async () => button('Pin').props.onClick());
     await act(async () => mediumFilter.props.onChange({ target: { value: 'CD' } }));
     expect(radios()).toEqual([4, 5]);
     expect(status()).toContain('2 CD pressings');
     expect(textOf(renderer!.root.findByType('section'))).toContain('Discogs release 1');
-    expect(textOf(renderer!.root.findByType(PressingSelectionSummary))).toContain('Discogs release 2');
+    expect(button('Show selected pressing in All media')).toBeDefined();
+    const pinnedSelection = renderer!.root.findAllByType('button').find(control => control.props['aria-label']?.startsWith('Select pressing ·'))!;
+    expect(pinnedSelection.props['aria-disabled']).toBe(true);
+    await act(async () => pinnedSelection.props.onClick());
+    expect(onSelect).not.toHaveBeenCalled();
+    await act(async () => button('Show selected pressing in All media').props.onClick());
+    expect(mediumFilter.props.value).toBe('');
+    expect(renderer!.root.findByProps({ type: 'radio', value: 2 }).props.checked).toBe(true);
     await act(async () => mediumFilter.props.onChange({ target: { value: 'Vinyl' } }));
     expect(radios()).toEqual([1, 2, 5]);
     expect(renderer!.root.findByProps({ type: 'radio', value: 2 }).props.checked).toBe(true);
@@ -160,7 +195,7 @@ describe('pressing candidate evidence', () => {
       .mockRejectedValueOnce(new Error('Offline'))
       .mockResolvedValueOnce({ pressing: null })
       .mockResolvedValueOnce({ pressing: { matrixRunouts: [{ value: 'YEX-102' }] } });
-    await act(async () => { renderer = create(createElement(PressingCandidates, { choices, onSelect, searchedNumber: 'S-5233' })); });
+    await act(async () => { renderer = create(createElement(CandidatePicker, { choices, onSelect, searchedNumber: 'S-5233' })); });
     const fieldset = renderer!.root.findByType('fieldset');
     expect(textOf(fieldset)).toContain('S-5233 is shared by 3 pressings in these results.');
     expect(textOf(fieldset)).toContain('LP · Mono');
@@ -178,6 +213,7 @@ describe('pressing candidate evidence', () => {
     await act(async () => button('Retry runout markings').props.onClick());
     expect(getPressingDetails.mock.calls.map(([releaseId]) => releaseId)).toEqual([1, 2, 3, 2]);
     expect(textOf(fieldset)).toContain('S-5233 is shared by 3 pressings in these results.');
+    await act(async () => button('Listing details and pins').props.onClick());
     expect(textOf(fieldset)).toContain('S-5233 · ALT-12');
     expect(textOf(fieldset)).toContain('Country US');
     expect(textOf(fieldset)).toContain('YEX-101');
@@ -189,7 +225,7 @@ describe('pressing candidate evidence', () => {
 
   it('aborts evidence reads for pressings that leave view', async () => {
     getPressingDetails.mockImplementation(() => new Promise(() => {}));
-    await act(async () => { renderer = create(createElement(PressingCandidates, { choices, onSelect: vi.fn() })); });
+    await act(async () => { renderer = create(createElement(CandidatePicker, { choices, onSelect: vi.fn() })); });
     await act(async () => button('Compare runout markings').props.onClick());
     await act(async () => button('More pressings').props.onClick());
     expect(radios()).toEqual([4, 5]);
@@ -209,13 +245,14 @@ describe('pressing candidate evidence', () => {
     ))!;
     function Chooser() {
       const [selectedId, setSelectedId] = useState<number>();
-      return createElement(PressingCandidates, { choices, selectedId, onSelect: id => {
+      return createElement(CandidatePicker, { choices, selectedId, onSelect: id => {
         onSelect(id);
         setSelectedId(id);
       } });
     }
 
     await act(async () => { renderer = create(createElement(Chooser)); });
+    await act(async () => button('Listing details and pins').props.onClick());
     await act(async () => pin('S 5233').props.onClick());
     await act(async () => button('More pressings').props.onClick());
     expect(getPressingDetails.mock.calls[0][1].aborted).toBe(false);
@@ -249,7 +286,7 @@ describe('pressing candidate evidence', () => {
     getPressingDetails.mockResolvedValueOnce({ pressing: null })
       .mockRejectedValueOnce(new Error('Offline'))
       .mockResolvedValue({ pressing: null });
-    await act(async () => { renderer = create(createElement(PressingCandidates, {
+    await act(async () => { renderer = create(createElement(CandidatePicker, {
       choices, onSelect: vi.fn(), uncertainAction: 'If you’re unsure, save the album without a pressing.',
     })); });
     await act(async () => button('Compare runout markings').props.onClick());
@@ -261,6 +298,7 @@ describe('pressing candidate evidence', () => {
     expect(missing()).toEqual(['Discogs lists no runout markings for these pressings. Compare the format with your record. If you’re unsure, save the album without a pressing.']);
 
     await act(async () => button('More pressings').props.onClick());
+    await act(async () => button('Listing details and pins').props.onClick());
     await act(async () => button('Pin').props.onClick());
     await act(async () => button('Pin').props.onClick());
     expect(radios()).toEqual([4, 5]);

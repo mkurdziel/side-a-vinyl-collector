@@ -1,3 +1,5 @@
+import { useId, useState } from 'react';
+import { readManualAlbumDrafts, type StoredManualAlbumDraft } from '../services/manualAlbumDrafts';
 import { ModalDialog } from './ModalDialog';
 
 interface AddMenuProps {
@@ -6,6 +8,7 @@ interface AddMenuProps {
   onSearchClick: () => void;
   onCatalogNumberClick: () => void;
   onManualClick: () => void;
+  onResumeManualClick?: (draft: StoredManualAlbumDraft) => void;
   onImportClick: () => void;
   onClose: () => void;
   discogsConfigured: boolean | null;
@@ -14,8 +17,16 @@ interface AddMenuProps {
 }
 
 export const AddMenu = ({
-  onBarcodeClick, onImageClick, onSearchClick, onCatalogNumberClick, onManualClick, onImportClick, onClose, discogsConfigured, discogsCheckFailed, viewMode,
+  onBarcodeClick, onImageClick, onSearchClick, onCatalogNumberClick, onManualClick, onResumeManualClick, onImportClick, onClose, discogsConfigured, discogsCheckFailed, viewMode,
 }: AddMenuProps) => {
+  const draftDescriptionId = useId();
+  const [manualDrafts] = useState(readManualAlbumDrafts);
+  const [manualDraft, ...otherDrafts] = manualDrafts;
+  const draftLabel = (draft: StoredManualAlbumDraft) => {
+    const name = [draft.artist.trim(), draft.album.trim()].filter(Boolean).join(' · ') || draft.searchText?.trim();
+    return [name, draft.shelf === 'collection' ? 'Collection' : 'Wishlist'].filter(Boolean).join(' · ');
+  };
+
   return (
     <ModalDialog labelledBy="add-album-title" onClose={onClose}>
       <div className="rh-dialog-panel max-w-3xl">
@@ -32,6 +43,9 @@ export const AddMenu = ({
           </button>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 sm:p-6">
+          <p className="col-span-full text-sm text-gray-600">
+            Save the album now if you know the title, or confirm the exact pressing when you can check your copy.
+          </p>
           <button
             className="rh-add-method group"
             onClick={onSearchClick}
@@ -91,6 +105,24 @@ export const AddMenu = ({
 
         </div>
         <div className="flex flex-wrap items-start gap-2 border-t border-gray-200 px-4 py-2 sm:px-6">
+          {manualDraft && onResumeManualClick && (
+            <button type="button" className="rh-lookup-link min-w-0 max-w-full text-left" aria-label="Resume manual entry"
+              aria-describedby={draftDescriptionId} onClick={() => onResumeManualClick(manualDraft)}>
+              <span className="block">Resume manual entry</span>
+              <span id={draftDescriptionId} className="block truncate text-xs font-normal text-gray-600">
+                {draftLabel(manualDraft)}
+              </span>
+            </button>
+          )}
+          {otherDrafts.length > 0 && onResumeManualClick && (
+            <details className="rh-lookup-recovery min-w-0 max-w-full">
+              <summary>Other manual drafts</summary>
+              <div className="grid pb-2">
+                {otherDrafts.map(entry => <button key={entry.id} type="button" className="rh-lookup-link min-w-0 text-left [overflow-wrap:anywhere]"
+                  onClick={() => onResumeManualClick(entry)}>{draftLabel(entry)}</button>)}
+              </div>
+            </details>
+          )}
           <button type="button" onClick={onManualClick}
             className="min-h-11 rounded-lg px-2 text-sm font-semibold text-purple-600 hover:bg-gray-100">
             Add album manually
