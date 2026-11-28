@@ -457,7 +457,7 @@ export function PressingComparison({
         <summary>Saved pressing evidence</summary>
         {savedEvidenceSummary}
       </details>)}
-    {lookupRelease && <details className="rh-pressing-secondary">
+    {lookupRelease && savedRelease && lookupRelease !== savedRelease && <details className="rh-pressing-secondary">
       <summary>Full pressing comparison
         {(lookupDetails?.status === 'failed' || savedDetails?.status === 'failed') && ' · Details unavailable'}
       </summary>
@@ -598,7 +598,7 @@ export function PressingComparison({
           {offerKeepPressing && selected && (
             <section className="rh-pressing-review__footer grid gap-2 px-4 py-2 sm:px-6" aria-label="Pressing actions">
               {savedReleaseChanged && <p ref={changedNotice} tabIndex={-1} role="status" className="text-sm text-gray-600">
-                {alreadySaved ? 'The saved copy was updated and now matches this pressing.' : 'The saved pressing changed. Open Compare listings to check the update before confirming again.'}
+                {alreadySaved ? 'The saved copy was updated and now matches this pressing.' : 'The saved pressing changed. Open the listing evidence before confirming again.'}
               </p>}
               {morePressingsUrl && candidate && <p id={sampleNoticeId} className="text-xs text-gray-600">Only part of the Discogs results are shown.</p>}
               {saveStatus && candidate ? (

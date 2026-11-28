@@ -47,6 +47,91 @@ const choices: PressingCandidate[] = [
 ];
 
 describe('pressing candidate evidence', () => {
+  it.each([
+    { name: 'one known listing', editions: choices.slice(0, 1), expectedColumns: 2 },
+    { name: 'one listing from a partial response', editions: choices.slice(0, 1), sampled: true, expectedColumns: 2 },
+    { name: 'one listing matching the saved release', editions: choices.slice(0, 1), savedReleaseId: 1, expectedColumns: 2 },
+    { name: 'one listing and a different saved release', editions: choices.slice(0, 1), savedReleaseId: 44, expectedColumns: 3 },
+    { name: 'a saved candidate selected beside another available listing', editions: choices.slice(0, 2), savedReleaseId: 1,
+      selectedId: 1, expectedColumns: 3 },
+  ])('names the evidence action accurately for $name', async ({ editions, savedReleaseId, selectedId, sampled, expectedColumns }) => {
+    const focusEvidence = vi.fn();
+    const onSelect = vi.fn();
+    const morePressingsUrl = sampled ? 'https://www.discogs.com/search/?q=Artist+Album&type=release' : undefined;
+    await act(async () => {
+      renderer = create(createElement(CandidatePicker, { choices: editions, savedReleaseId, selectedId, morePressingsUrl, onSelect }), {
+        createNodeMock: node => node.type === 'h3' && node.props.children === 'Listing evidence'
+          ? { focus: focusEvidence, closest: () => null } : null,
+      });
+    });
+    const single = expectedColumns === 2;
+    expect(button(single ? 'Compare listings' : 'Inspect listing evidence')).toBeUndefined();
+    await act(async () => button(single ? 'Inspect listing evidence' : 'Compare listings').props.onClick());
+    expect(focusEvidence).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    expect(renderer!.root.findByType('thead').findAllByType('th')).toHaveLength(expectedColumns);
+    expect(radios()).toEqual(editions.map(edition => edition.releaseId));
+    expect(onSelect).not.toHaveBeenCalled();
+    if (single) {
+      expect(textOf(button('Check runout marks').parent!)).toContain('Look just inside the last track for etched or stamped marks.');
+      expect(textOf(renderer!.root)).toContain('More evidence and runout marks');
+      expect(getPressingDetails).not.toHaveBeenCalled();
+    }
+    if (sampled) {
+      const link = renderer!.root.findByProps({ href: morePressingsUrl });
+      expect(textOf(link)).toContain('Find more on Discogs');
+      expect(textOf(link.parent!)).toContain('One listing shown from a partial Discogs result.');
+    }
+  });
+
+  it('finds a compared release on another page and explicitly reveals a filtered release without selecting it', async () => {
+    const editions = Array.from({ length: 6 }, (_, index) => ({
+      releaseId: 501 + index, pressing: { format: index === 4 ? 'CD' : 'Vinyl · LP', catalogNumber: `ABC-${index + 1}` },
+    }));
+    const found = vi.fn();
+    const focus = vi.fn();
+    const onSelect = vi.fn();
+    const onChangeMedium = vi.fn();
+    getPressingDetails.mockResolvedValue({ pressing: null });
+    await act(async () => {
+      renderer = create(createElement(CandidatePicker, { choices: editions, selectedId: 502, onSelect, onChangeMedium }), {
+        createNodeMock: node => node.type === 'ul' ? { querySelector: (query: string) => {
+          found(query);
+          return { focus, closest: () => null };
+        } } : null,
+      });
+    });
+    await toggleComparison();
+    const pin = renderer!.root.findAllByType('button').find(control => control.props['aria-label']?.startsWith('Pin for comparison · ABC-2,'))!;
+    await act(async () => pin.props.onClick());
+    await act(async () => selectByLabel('Media').props.onChange({ target: { value: 'Vinyl' } }));
+    await act(async () => selectByLabel('First listing').props.onChange({ target: { value: '504' } }));
+    await act(async () => selectByLabel('Second listing').props.onChange({ target: { value: '505' } }));
+    expect(selectByLabel('Media').props.value).toBe('Vinyl');
+    expect(radios()).toEqual([501, 502, 503]);
+    expect(renderer!.root.findByProps({ type: 'radio', value: 502 }).props.checked).toBe(true);
+
+    await act(async () => button('Go to Discogs release 504 · page 2').props.onClick());
+    expect(found).toHaveBeenLastCalledWith('input[value="504"]');
+    expect(focus).toHaveBeenLastCalledWith({ preventScroll: true });
+    expect(radios()).toEqual([504, 506]);
+    expect(selectByLabel('Media').props.value).toBe('Vinyl');
+    expect(onChangeMedium).toHaveBeenCalledTimes(1);
+
+    await act(async () => button('Go to Discogs release 505 · All media · page 2').props.onClick());
+    expect(found).toHaveBeenLastCalledWith('input[value="505"]');
+    expect(radios()).toEqual([504, 505, 506]);
+    expect(selectByLabel('Media').props.value).toBe('');
+    expect(onChangeMedium).toHaveBeenCalledTimes(2);
+    expect(renderer!.root.findByProps({ type: 'radio', value: 505 }).props.checked).toBe(false);
+    await toggleComparison();
+    await toggleComparison();
+    expect(textOf(renderer!.root.findByType('thead'))).toBe('EvidenceFirst listing 504Second listing 505');
+    expect(button('Go to 1 pinned pressing')).toBeDefined();
+    await act(async () => button('Previous pressings').props.onClick());
+    expect(renderer!.root.findByProps({ type: 'radio', value: 502 }).props.checked).toBe(true);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   it('scopes shared numbers and partial results before the choices and distinguishes Discogs markets', async () => {
     const more = 'https://www.discogs.com/search/?q=Artist+Album+S-5233&type=release';
     const onSelect = vi.fn();
@@ -257,7 +342,7 @@ describe('pressing candidate evidence', () => {
         ],
         onSelect,
       }), { createNodeMock: node => {
-        if (node.type === 'h3' && node.props.children === 'Runout marks on these pressings') return { focus: focusRunouts };
+        if (node.type === 'h3' && node.props.children === 'Runout marks on these pressings') return { focus: focusRunouts, closest: () => null };
         if (node.type === 'ul') return { querySelector };
         return null;
       } });

@@ -1,7 +1,7 @@
 import type { Album } from './api';
 
 type Shelf = Album['status'];
-export type NameSearchScope = 'saved' | Shelf | 'catalog';
+export type NameSearchScope = 'saved' | Shelf | 'catalog' | 'collection-catalog' | 'wishlist-catalog';
 export type SearchScope = NameSearchScope | 'catalog-number';
 export type LookupMode = 'name' | 'catalog-number';
 export type ResultKind = 'saved' | 'catalog';
@@ -35,9 +35,12 @@ export interface SearchSession {
 
 const key = 'side-a:search-session:v1';
 const isShelf = (value: unknown): value is Shelf => value === 'collection' || value === 'wishlist';
-const isNameScope = (value: unknown): value is NameSearchScope => value === 'saved' || value === 'catalog' || isShelf(value);
+const isNameScope = (value: unknown): value is NameSearchScope => value === 'saved' || value === 'catalog' ||
+  value === 'collection-catalog' || value === 'wishlist-catalog' || isShelf(value);
 export const lookupMode = (scope: SearchScope): LookupMode => scope === 'catalog-number' ? 'catalog-number' : 'name';
 export const isSingleCharacterName = (query: string, scope: SearchScope) => scope !== 'catalog-number' && [...query.trim()].length === 1;
+export const searchesCatalog = (scope: SearchScope) => scope === 'catalog' || scope === 'catalog-number' ||
+  scope === 'collection-catalog' || scope === 'wishlist-catalog';
 
 function parseNavigation(value: unknown, mode: LookupMode): LookupNavigation | undefined {
   if (!value || typeof value !== 'object') return;
@@ -59,7 +62,7 @@ function parseAnchor(value: unknown, active?: LookupNavigation): LookupAnchor | 
   const { target, kind, throughOffset } = value as Partial<LookupAnchor>;
   if (typeof target !== 'string' || typeof throughOffset !== 'number' || !Number.isSafeInteger(throughOffset) || throughOffset < 0) return;
   if (kind === 'saved' && active.scope !== 'catalog-number' && /^saved-result-\d+$/.test(target)) return { target, kind, throughOffset };
-  if (kind !== 'catalog' || (active.scope !== 'catalog' && active.scope !== 'catalog-number')) return;
+  if (kind !== 'catalog' || !searchesCatalog(active.scope) || isSingleCharacterName(active.query, active.scope)) return;
   if (target.startsWith('catalog-result-') || (active.scope === 'catalog-number' && /^number-saved-result-\d+$/.test(target))) {
     return { target, kind, throughOffset };
   }

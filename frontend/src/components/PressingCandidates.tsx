@@ -214,7 +214,8 @@ export function PressingPreview({ reference, target, searchedNumber, showAll = f
         {label} <span className="rh-pressing-preview__release">{choice.releaseId}</span>
       </th>)}
     </tr></thead>
-    <tbody>{!rows.length && <tr><td colSpan={columns.length + 1}>No physical details listed yet.</td></tr>}
+    <tbody>{!rows.length && <tr><td colSpan={columns.length + 1}>{columns.some(column => column.state === 'pending')
+      ? 'Checking Discogs for listing evidence…' : 'No physical details listed yet.'}</td></tr>}
     {rows.map(({ label, values, differs }) => <tr key={label} className={differs ? 'rh-evidence-priority' : undefined}>
       <th scope="row">{label}{differs && <span className="rh-pressing-difference">Differs</span>}</th>
       {values.map((value, index) => <td key={index} className={value ? undefined : 'text-gray-600'}>
@@ -457,19 +458,13 @@ function CandidateRunout({ choice, result, onRetry, disabled, fullEvidence = fal
   );
 }
 
-export function PressingPairEvidence({ reference, target, searchedNumber, loadDetails, onLocate, canLocate, unavailableLocation,
-  disabled, uncertainAction, announceChanges, children }: {
-  reference: PreviewColumn;
+function ExpandedPressingEvidence({ reference, target, searchedNumber, loadDetails, disabled, uncertainAction }: {
+  reference?: PreviewColumn;
   target: PreviewColumn;
   searchedNumber?: string;
   loadDetails?: LoadPressingDetails;
-  onLocate?: (releaseId: number) => void;
-  canLocate?: (releaseId: number) => boolean;
-  unavailableLocation?: (releaseId: number) => string;
   disabled?: boolean;
   uncertainAction?: string;
-  announceChanges?: boolean;
-  children?: ReactNode;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [loadLocally] = useState(createPressingDetailsLoader);
@@ -478,12 +473,7 @@ export function PressingPairEvidence({ reference, target, searchedNumber, loadDe
     setEvidence(current => ({ ...current, [releaseId]: result }));
   }, []);
   const retry = (releaseId: number) => setEvidence(current => ({ ...current, [releaseId]: undefined }));
-  const columns = [reference, target];
-  const difference = strongestDifference(reference.choice, target.choice, searchedNumber);
-  const cue = difference?.label === pressingFieldLabels.country ? 'Check the label. Release market is where sold.'
-    : difference?.cue ?? 'Look for etched or stamped marks beside the label.';
-  const diffSummary = difference ? `${difference.label} differs, ${difference.values.map(value => concisePressingValue(value, 36)).join(' and ')}.`
-    : 'No confirmed differences in the listing preview.';
+  const columns = reference ? [reference, target] : [target];
   const full: PreviewColumn[] = columns.map(column => {
     const result = evidence[column.choice.releaseId];
     return {
@@ -493,39 +483,68 @@ export function PressingPairEvidence({ reference, target, searchedNumber, loadDe
     };
   });
 
+  return <details className="rh-pressing-secondary" onToggle={event => setDetailsOpen(event.currentTarget.open)}>
+    <summary>More evidence and runout marks</summary>
+    {detailsOpen && <div className="grid min-w-0 gap-2 pb-2">
+      {full.map(({ choice: { releaseId } }) => !evidence[releaseId] && <EvidenceRequest key={releaseId} releaseId={releaseId}
+        loadDetails={loadDetails ?? loadLocally} onResult={record} />)}
+      <PressingPreview reference={reference && full[0]} target={reference ? full[1] : full[0]} searchedNumber={searchedNumber} showAll includeListedFormat />
+      <div className={reference ? 'rh-pressing-pair' : undefined} role="group" aria-label={`Runout marks for this ${reference ? 'pair' : 'listing'}`}>
+        {full.map(({ choice }) => {
+          const source = discogsReleaseSource(choice.releaseId);
+          return <div key={choice.releaseId} className="min-w-0">
+            {source?.url && <a className="rh-comparison-source text-xs" href={source.url} target="_blank" rel="noreferrer">
+              Release {choice.releaseId} on Discogs<span className="sr-only"> (opens in a new tab)</span>
+            </a>}
+            <CandidateRunout fullEvidence choice={choice} result={evidence[choice.releaseId]} onRetry={retry} disabled={disabled} />
+          </div>;
+        })}
+      </div>
+      {uncertainAction && <p className="text-xs text-gray-600">{uncertainAction}</p>}
+    </div>}
+  </details>;
+}
+
+export function PressingPairEvidence({ reference, target, searchedNumber, loadDetails, onLocate, canLocate, locateContext, unavailableLocation,
+  disabled, uncertainAction, announceChanges, children }: {
+  reference: PreviewColumn;
+  target: PreviewColumn;
+  searchedNumber?: string;
+  loadDetails?: LoadPressingDetails;
+  onLocate?: (releaseId: number) => void;
+  canLocate?: (releaseId: number) => boolean;
+  locateContext?: (releaseId: number) => string | undefined;
+  unavailableLocation?: (releaseId: number) => string;
+  disabled?: boolean;
+  uncertainAction?: string;
+  announceChanges?: boolean;
+  children?: ReactNode;
+}) {
+  const difference = strongestDifference(reference.choice, target.choice, searchedNumber);
+  const cue = difference?.label === pressingFieldLabels.country ? 'Check the label. Release market is where sold.'
+    : difference?.cue ?? 'Look for etched or stamped marks beside the label.';
+  const diffSummary = difference ? `${difference.label} differs, ${difference.values.map(value => concisePressingValue(value, 36)).join(' and ')}.`
+    : 'No confirmed differences in the listing preview.';
+
   return <>
     <PressingPreview reference={reference} target={target} searchedNumber={searchedNumber} cue={cue} />
     {children}
     {onLocate && <div className="rh-pressing-pair" aria-label="Find the compared listings" role="group">
-      {columns.map(({ choice: { releaseId } }) => !canLocate || canLocate(releaseId)
-        ? <button key={releaseId} type="button" className="rh-lookup-link text-left" disabled={disabled}
-          aria-label={`Go to Discogs release ${releaseId}`} onClick={() => onLocate(releaseId)}>Find release {releaseId}</button>
-        : <p key={releaseId} className="self-center text-xs text-gray-600">
-          {unavailableLocation?.(releaseId) ?? `Release ${releaseId} is outside these choices.`}
-        </p>)}
+      {[reference, target].map(({ choice: { releaseId } }) => {
+        const location = locateContext?.(releaseId);
+        return !canLocate || canLocate(releaseId)
+          ? <button key={releaseId} type="button" className="rh-lookup-link text-left" disabled={disabled}
+            aria-label={`Go to Discogs release ${releaseId}${location ? ` · ${location}` : ''}`}
+            onClick={() => onLocate(releaseId)}>Find release {releaseId}{location && ` · ${location}`}</button>
+          : <p key={releaseId} className="self-center text-xs text-gray-600">
+            {unavailableLocation?.(releaseId) ?? `Release ${releaseId} is outside these choices.`}
+          </p>;
+      })}
     </div>}
     <p role="status" className="sr-only">{announceChanges && `Comparing Discogs releases ${reference.choice.releaseId} and ${target.choice.releaseId}. ${diffSummary}`}</p>
     {!difference && uncertainAction && <p className="text-xs text-gray-600">{uncertainAction}</p>}
-    <details className="rh-pressing-secondary" onToggle={event => setDetailsOpen(event.currentTarget.open)}>
-      <summary>More evidence and runout marks</summary>
-      {detailsOpen && <div className="grid min-w-0 gap-2 pb-2">
-        {full.map(({ choice: { releaseId } }) => !evidence[releaseId] && <EvidenceRequest key={releaseId} releaseId={releaseId}
-          loadDetails={loadDetails ?? loadLocally} onResult={record} />)}
-        <PressingPreview reference={full[0]} target={full[1]} searchedNumber={searchedNumber} showAll includeListedFormat />
-        <div className="rh-pressing-pair" role="group" aria-label="Runout marks for this pair">
-          {full.map(({ choice }) => {
-            const source = discogsReleaseSource(choice.releaseId);
-            return <div key={choice.releaseId} className="min-w-0">
-              {source?.url && <a className="rh-comparison-source text-xs" href={source.url} target="_blank" rel="noreferrer">
-                Release {choice.releaseId} on Discogs<span className="sr-only"> (opens in a new tab)</span>
-              </a>}
-              <CandidateRunout fullEvidence choice={choice} result={evidence[choice.releaseId]} onRetry={retry} disabled={disabled} />
-            </div>;
-          })}
-        </div>
-        {difference && uncertainAction && <p className="text-xs text-gray-600">{uncertainAction}</p>}
-      </div>}
-    </details>
+    <ExpandedPressingEvidence reference={reference} target={target} searchedNumber={searchedNumber} loadDetails={loadDetails}
+      disabled={disabled} uncertainAction={difference ? uncertainAction : undefined} />
   </>;
 }
 
@@ -589,7 +608,7 @@ export function PressingCandidates({
   const candidateList = useRef<HTMLUListElement>(null);
   const { checkingRunouts: showRunouts, comparing: showComparison, page: requestedPage, medium, pins: pinnedIds, update } = preparation;
   const [focusRequest, setFocusRequest] = useState<{ releaseId: number }>();
-  const [chosenPair, setChosenPair] = useState<{ firstId: number; secondId: number }>();
+  const [chosenPair, setChosenPair] = useState<{ firstId: number; secondId: number; explicit?: boolean }>();
   const focusShortlist = useRef(false);
   const shortlistOrigin = useRef<number>(undefined);
   const focusComparison = useRef(false);
@@ -641,22 +660,24 @@ export function PressingCandidates({
   const first = saved ?? visible[0];
   const example = !selection && first ? firstAlternative(first, visible, searchedNumber) ?? (saved ? undefined : first) : undefined;
   const target = selection ?? example ?? (visible.length ? saved : undefined);
-  const reference = target && !selectedOutsideMedia && target.releaseId !== savedReleaseId
-    ? saved ?? visible.find(choice => choice.releaseId !== target.releaseId)
+  const reference = target && !selectedOutsideMedia
+    ? (saved && saved.releaseId !== target.releaseId ? saved : visible.find(choice => choice.releaseId !== target.releaseId))
     : undefined;
   const targetLabel = selectedOutsideMedia ? 'Selected pressing outside filter'
     : selection ? (target?.releaseId === savedReleaseId ? 'Saved pressing selected' : 'Selected pressing')
-      : example ? 'Catalog example' : 'Saved pressing';
+      : example ? (reference ? 'Catalog example' : 'Catalog listing') : 'Saved pressing';
   const cue = example && exampleCue(example, reference, searchedNumber);
-  const needsChoiceJump = (morePressingsUrl || cue?.describeMarket) && visible.length > 0;
+  const needsChoiceJump = (morePressingsUrl || cue?.describeMarket) && visible.length > 0 && unique.length > 1;
   const comparisonChoices = saved ? [saved, ...withDetails.filter(choice => choice.releaseId !== savedReleaseId)] : withDetails;
   const firstChoice = chosenPair && comparisonChoices.find(choice => choice.releaseId === chosenPair.firstId);
   const secondChoice = chosenPair && comparisonChoices.find(choice => choice.releaseId === chosenPair.secondId);
-  const customPair = allowPairChoice && firstChoice && secondChoice ? { firstChoice, secondChoice } : undefined;
+  const customPair = firstChoice && secondChoice ? { firstChoice, secondChoice } : undefined;
+  const isExplicitPair = !!(customPair && chosenPair?.explicit);
   const rightListing = customPair?.secondChoice ?? target;
   const leftListing = customPair?.firstChoice ?? reference ?? (allowPairChoice && rightListing
     ? comparisonChoices.find(choice => choice.releaseId !== rightListing.releaseId) : undefined);
   const canChoosePair = allowPairChoice && leftListing && rightListing;
+  const canCompare = !!(leftListing && rightListing);
 
   useLayoutEffect(() => {
     if (!showComparison || !focusComparison.current) return;
@@ -687,7 +708,10 @@ export function PressingCandidates({
   useLayoutEffect(() => {
     if (!showRunouts || !focusRunouts.current) return;
     focusRunouts.current = false;
-    runoutHeading.current?.focus();
+    const heading = runoutHeading.current;
+    if (!heading) return;
+    heading.focus({ preventScroll: true });
+    revealPressingEvidence(heading, 'nearest');
   }, [showRunouts]);
 
   const toggleComparison = () => {
@@ -750,23 +774,39 @@ export function PressingCandidates({
     if (evidence[choice.releaseId]?.status === 'ready' || (choice.releaseId === selectedId && selectedEvidence)) return undefined;
     if (evidence[choice.releaseId]?.status === 'error') return 'unavailable';
     if (requests.some(request => request.releaseId === choice.releaseId)) return 'pending';
-    return choice.releaseId === selectedId ? selectedEvidenceState : undefined;
+    return choice.releaseId === selectedId || unique.length === 1 ? selectedEvidenceState : undefined;
   };
   const listingColumn = (choice: PressingCandidate, label: string): PreviewColumn => ({
-    choice: choice.releaseId === selectedId ? withPressingEvidence(choice, selectedEvidence, 'release') : choice,
+    choice: choice.releaseId === selectedId || (unique.length === 1 && unique[0].releaseId === choice.releaseId)
+      ? withPressingEvidence(choice, selectedEvidence, 'release') : choice,
     label,
     state: evidenceState(choice),
   });
   const referenceColumn = leftListing && listingColumn(leftListing, leftListing.releaseId === savedReleaseId ? 'Saved pressing'
-    : customPair ? 'First listing' : 'Catalog reference');
+    : isExplicitPair ? 'First listing' : 'Catalog reference');
   const targetColumn = rightListing && listingColumn(rightListing.releaseId === savedReleaseId && saved ? saved : rightListing,
-    customPair ? (rightListing.releaseId === savedReleaseId ? 'Saved pressing' : 'Second listing') : targetLabel);
-  const isVisibleChoice = (releaseId: number) => visible.some(choice => choice.releaseId === releaseId);
+    isExplicitPair ? (rightListing.releaseId === savedReleaseId ? 'Saved pressing' : 'Second listing') : targetLabel);
   const choiceLocation = (releaseId: number) => {
     const index = available.findIndex(choice => choice.releaseId === releaseId);
-    if (index >= 0) return `Release ${releaseId} is on pressing page ${Math.floor(index / pageSize) + 1}.`;
-    if (medium && withDetails.some(choice => choice.releaseId === releaseId)) return `Release ${releaseId} is outside the ${medium} filter.`;
-    return `Release ${releaseId} is the saved listing.`;
+    if (index >= 0) return { page: Math.floor(index / pageSize), allMedia: false };
+    const allIndex = withDetails.findIndex(choice => choice.releaseId === releaseId);
+    return allIndex < 0 ? undefined : { page: Math.floor(allIndex / pageSize), allMedia: true };
+  };
+  const locateContext = (releaseId: number) => {
+    const location = choiceLocation(releaseId);
+    if (!location) return undefined;
+    if (location.allMedia) return `All media · page ${location.page + 1}`;
+    return location.page === page ? undefined : `page ${location.page + 1}`;
+  };
+  const locateComparedChoice = (releaseId: number) => {
+    const location = choiceLocation(releaseId);
+    if (!location) return;
+    if (!location.allMedia && location.page === page) {
+      returnToChoices(releaseId);
+      return;
+    }
+    if (!customPair && leftListing && rightListing) setChosenPair({ firstId: leftListing.releaseId, secondId: rightListing.releaseId });
+    findChoice(releaseId, location.allMedia);
   };
 
   if (!unique.length) return null;
@@ -788,7 +828,7 @@ export function PressingCandidates({
           <div className="rh-pressing-chooser-actions">
             <button type="button" ref={compareToggle} className="rh-lookup-link rh-pressing-compare"
               aria-expanded={showComparison} aria-controls={`${runoutToolsId} ${comparisonId} ${candidatesId}`}
-              onClick={toggleComparison}>Compare listings</button>
+              onClick={toggleComparison}>{canCompare ? 'Compare listings' : 'Inspect listing evidence'}</button>
             {firstPin && <button type="button" className="rh-lookup-link rh-pressing-compare" aria-controls={showComparison ? shortlistId : undefined}
               aria-label={secondPin ? 'Compare 2 pinned pressings' : 'Go to 1 pinned pressing'}
               onClick={() => jumpToShortlist()}>{secondPin ? 'Compare 2 pins' : '1 pinned'}</button>}
@@ -797,7 +837,9 @@ export function PressingCandidates({
         {(shared || morePressingsUrl) && <div className="rh-pressing-scope">
           <p className="text-xs text-gray-600">
             {shared && <span id={sharedNumberId} className="block">{shared.number} is shared by {shared.count} pressings in these results.</span>}
-            {morePressingsUrl && <span id={incompleteListId} className="block">Discogs returned a partial list for this album.</span>}
+            {morePressingsUrl && <span id={incompleteListId} className="block">
+              {unique.length === 1 ? 'One listing shown from a partial Discogs result.' : 'Discogs returned a partial list for this album.'}
+            </span>}
           </p>
           {morePressingsUrl && <a href={morePressingsUrl} className="rh-comparison-source rh-pressing-scope__link" target="_blank" rel="noreferrer">
             Find more on Discogs<span className="sr-only"> (opens in a new tab)</span>
@@ -809,7 +851,7 @@ export function PressingCandidates({
               <span className="block font-semibold text-gray-900">Example only · Discogs {example.releaseId}</span>
               {cue.difference && <><strong className="font-semibold text-gray-900">{cue.difference}</strong>{' '}</>}
               {cue.guidance}
-            </> : 'Check the number, label, or etched marks on your copy.'}
+            </> : 'Look just inside the last track for etched or stamped marks.'}
           </p>
           <button type="button" className="rh-lookup-link rh-pressing-example__action"
             aria-expanded={showRunouts} aria-controls={candidatesId} onClick={toggleRunouts}>
@@ -818,8 +860,8 @@ export function PressingCandidates({
           {cue?.describeMarket && <p className="rh-pressing-example__market text-xs text-gray-600">Market means where sold. Where made can differ.</p>}
         </div>
       </div>
-      <div id={runoutToolsId} hidden={!showComparison}>
-        {showComparison && <div className="rh-pressing-evidence-tools">
+      <div id={runoutToolsId} hidden={!showComparison || !canCompare}>
+        {showComparison && canCompare && <div className="rh-pressing-evidence-tools">
           <div className="flex flex-wrap items-center gap-x-3">
             <RecordEvidenceHelp />
             {example && unique.length > 1 && <button type="button" className="rh-lookup-link -ml-2 text-left" onClick={() => findChoice(example.releaseId)}>
@@ -870,7 +912,7 @@ export function PressingCandidates({
                     {choice.catalogNumberMatch === 'unverified' && <span className="block text-gray-600">Check the number on the listing.</span>}
                   </span>
                 </label>
-                {showComparison && <div className={`flex min-w-0 flex-wrap items-center gap-x-1 px-2 ${showRunouts ? '' : 'sm:max-w-64 sm:justify-end'}`}>
+                {showComparison && (canCompare || unique.length > 1) && <div className={`flex min-w-0 flex-wrap items-center gap-x-1 px-2 ${showRunouts ? '' : 'sm:max-w-64 sm:justify-end'}`}>
                   {allowPinning && <button type="button" className="rh-lookup-link aria-disabled:opacity-60"
                     aria-label={`${isPinned ? 'Unpin pressing' : 'Pin for comparison'} · ${candidateLabel(choice, searchedNumber, formats)}`}
                     aria-describedby={pinHintId} aria-disabled={!isPinned && pinned.length >= pinLimit}
@@ -901,21 +943,27 @@ export function PressingCandidates({
           <div className="rh-pressing-chooser-heading">
             <h3 id={comparisonHeadingId} ref={comparisonHeading} tabIndex={-1} className="text-sm font-semibold">Listing evidence</h3>
             <button type="button" className="rh-lookup-link" aria-controls={candidatesId}
-              onClick={() => returnToChoices()}>Back to pressings</button>
+              onClick={() => returnToChoices()}>{visible.length === 1 ? 'Back to pressing' : 'Back to pressings'}</button>
           </div>
           {referenceColumn && targetColumn ? (
             <PressingPairEvidence reference={referenceColumn} target={targetColumn} searchedNumber={searchedNumber}
-              loadDetails={loadDetails ?? loadLocally} onLocate={returnToChoices} canLocate={isVisibleChoice} unavailableLocation={choiceLocation}
-              disabled={disabled} uncertainAction={uncertainAction} announceChanges={!!customPair}>
+              loadDetails={loadDetails ?? loadLocally} onLocate={locateComparedChoice}
+              canLocate={releaseId => !!choiceLocation(releaseId)} locateContext={locateContext}
+              unavailableLocation={releaseId => `Release ${releaseId} is the saved listing.`}
+              disabled={disabled} uncertainAction={uncertainAction} announceChanges={isExplicitPair}>
               {canChoosePair && <PressingPairSelects choices={comparisonChoices} searchedNumber={searchedNumber} savedReleaseId={savedReleaseId}
                 firstId={leftListing.releaseId} secondId={rightListing.releaseId}
-                onChangeFirst={firstId => setChosenPair({ firstId, secondId: rightListing.releaseId })}
-                onChangeSecond={secondId => setChosenPair({ firstId: leftListing.releaseId, secondId })} />}
+                onChangeFirst={firstId => setChosenPair({ firstId, secondId: rightListing.releaseId, explicit: true })}
+                onChangeSecond={secondId => setChosenPair({ firstId: leftListing.releaseId, secondId, explicit: true })} />}
             </PressingPairEvidence>
-          ) : targetColumn && (unique.length > 1 || !savedComparison) && <PressingPreview searchedNumber={searchedNumber} target={targetColumn} />}
+          ) : targetColumn && <>
+            <PressingPreview searchedNumber={searchedNumber} target={targetColumn} cue="Check the sleeve or center label for the catalog number." />
+            <ExpandedPressingEvidence target={targetColumn} searchedNumber={searchedNumber}
+              loadDetails={loadDetails ?? loadLocally} disabled={disabled} uncertainAction={uncertainAction} />
+          </>}
         </div>}
       </div>
-      {showComparison && savedComparison}
+      {showComparison && canCompare && savedComparison}
       {showComparison && firstPin && (
         <section id={shortlistId} aria-labelledby={`${shortlistId}-title`} className="rh-pressing-evidence-tools grid min-w-0 gap-2">
           <div className="rh-pressing-chooser-heading">

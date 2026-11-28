@@ -28,6 +28,17 @@
 
 .rh-discogs-dock-short { display: none; }
 
+.rh-discogs-discard-action {
+  color: color-mix(in srgb, var(--rh-danger) 58%, var(--rh-ink));
+  background: var(--rh-danger-wash);
+  border-color: var(--rh-danger);
+}
+
+.rh-discogs-discard-action:hover,
+.rh-discogs-discard-action:focus-visible {
+  background: color-mix(in srgb, var(--rh-danger) 20%, var(--rh-surface));
+}
+
 @media (max-width: 25rem) {
   .rh-discogs-dock-wide { display: none; }
   .rh-discogs-dock-short { display: inline; }
