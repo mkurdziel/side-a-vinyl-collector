@@ -145,8 +145,23 @@ export const fetchOfficialCoverArt = asyncHandler(async (req: Request, res: Resp
 /**
  * Search for cover art candidates from MusicBrainz and Discogs
  */
+function coverArtQueryValue(value: unknown, field: string): string | undefined {
+  if (value === undefined) return;
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text || text.length > 255 || /\p{Cc}/u.test(text)) {
+    throw new AppError(`Enter a valid ${field} for the artwork search.`, 400);
+  }
+  return text;
+}
+
 export const searchCoverArt = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
+  const numericId = Number(id);
+  if (!/^\d+$/.test(String(id)) || !Number.isInteger(numericId) || numericId <= 0 || numericId > 2_147_483_647) {
+    throw new AppError('Choose a valid album.', 400);
+  }
+  const queryArtist = coverArtQueryValue(req.query?.artist, 'artist');
+  const queryTitle = coverArtQueryValue(req.query?.title, 'album title');
 
   const result = await pool.query(
     `SELECT a.id, a.title, ar.name as artist 
@@ -160,13 +175,15 @@ export const searchCoverArt = asyncHandler(async (req: Request, res: Response) =
     throw new AppError('Album not found', 404);
   }
 
-  const { artist, title } = result.rows[0];
+  const artist = queryArtist ?? result.rows[0].artist;
+  const title = queryTitle ?? result.rows[0].title;
 
   console.log(`Searching cover art for: ${artist} - ${title}`);
 
-  // Fetch from MusicBrainz and Discogs in parallel
+  // MusicBrainz puts both terms inside quoted search phrases.
+  const escapePhrase = (value: string) => value.replace(/["\\]/g, '\\$&');
   const [mbResults, discogsResults] = await Promise.all([
-    musicbrainzService.searchReleasesWithCoverArt(artist, title),
+    musicbrainzService.searchReleasesWithCoverArt(escapePhrase(artist), escapePhrase(title)),
     discogsService.searchByQuery(`${artist} - ${title}`, 5)
   ]);
 

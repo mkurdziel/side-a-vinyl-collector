@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { usePressingPreparation } from '../hooks/usePressingPreparation';
 import { ApiError, type DiscogsAlbum, type PressingDetails, type SavedTitleMatch } from '../services/api';
 import { catalogNumberKey, createPressingDetailsLoader, matchesPressingMedium, pressingFormatFacts, withPressingEvidence } from '../services/pressingEvidence';
 import { formatUndoDeadline } from '../services/undoDeadline';
@@ -180,7 +181,6 @@ export function PressingComparison({
   const savedEvidenceId = useId();
   const [selectedId, setSelectedId] = useState<number>();
   const [candidateId, setCandidateId] = useState<number>();
-  const [medium, setMedium] = useState('');
   const [candidateEvidence, setCandidateEvidence] = useState<Partial<Record<number, PressingDetails>>>({});
   const [openingId, setOpeningId] = useState<number>();
   const [failedId, setFailedId] = useState<number>();
@@ -214,6 +214,11 @@ export function PressingComparison({
   });
   const candidates = [lookup, ...(lookupChoices ?? [])].filter(isReleaseCandidate)
     .filter((candidate, index, choices) => choices.findIndex(choice => choice.releaseId === candidate.releaseId) === index);
+  const lookupKey = searchedNumber ? catalogNumberKey(searchedNumber)
+    : lookupStatus ? 'saved-album' : lookup?.source?.url ?? lookup?.releaseId ?? title;
+  const reviewKey = JSON.stringify(['saved', matches.map(copy => copy.id).sort((a, b) => a - b), lookupKey]);
+  const preparation = usePressingPreparation(reviewKey, candidates, candidateEvidence);
+  const { medium } = preparation;
   const candidate = candidates.find(choice => choice.releaseId === candidateId);
   const previewCandidate = candidate ?? (candidates.length === 1 ? candidates[0] : undefined);
   const selectionOutsideMedia = candidates.length > 1 && !!candidate &&
@@ -560,7 +565,7 @@ export function PressingComparison({
                 savedEvidenceState={savedRelease && !savedDetails ? 'pending' : savedDetails?.status === 'failed' ? 'unavailable' : undefined}
                 selectedEvidence={lookupPressing}
                 selectedEvidenceState={lookupRelease && !lookupDetails ? 'pending' : lookupDetails?.status === 'failed' ? 'unavailable' : undefined}
-                disabled={busy || lookupPending} medium={medium} onMediumChange={value => { setMedium(value); setSaveSelection(undefined); }}
+                disabled={busy || lookupPending} preparation={preparation} onChangeMedium={() => setSaveSelection(undefined)}
                 uncertainAction={offerKeepPressing ? (savedRelease ? 'If you’re unsure, keep the current pressing.' : 'If you’re unsure, leave the pressing unconfirmed.') : undefined}
                 loadDetails={loadPressingDetails} onReadEvidence={recordCandidateEvidence}
                 savedComparison={savedComparison} />

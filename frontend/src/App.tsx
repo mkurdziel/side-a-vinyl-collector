@@ -1247,7 +1247,8 @@ function App() {
             </button>
           </div>
 
-          {!searchActive && <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
+          {searchActive ? <p className="text-sm text-gray-600">Browsing <strong className="font-semibold text-gray-900">{shelfLabel[addOrigin?.shelf ?? viewMode]}</strong></p>
+            : <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
             <div className="rh-shelf-controls flex items-center gap-2">
               <div className="rh-view-switcher flex" role="group" aria-label="Browse shelf">
                 {shelves.map(shelf => (
@@ -1287,21 +1288,6 @@ function App() {
               runSearch(searchQuery);
             }}
           >
-            <div className="rh-search-options">
-              <div className="rh-search-modes" role="group" aria-label="Search by">
-                <button type="button" aria-pressed={!numberSearch} onClick={() => changeLookupMethod('name')}>Album or artist</button>
-                <button type="button" aria-pressed={numberSearch} onClick={() => changeLookupMethod('catalog-number')}>Catalog number</button>
-              </div>
-              <details className="rh-search-tips">
-                <summary aria-label="Search tips"><span className="hidden sm:inline">Search </span>Tips</summary>
-                <div>
-                  <p>Use Search in to choose shelves or online catalogs for name searches. Catalog-number lookup searches Discogs.</p>
-                  <p>Find the catalog number on the sleeve or label. Check the label, format, and year before confirming an exact release.</p>
-                  <p>Each artist and title has one shelf entry. Save the album first if you still need to identify its pressing.</p>
-                  <p className="rh-keyboard-tip">Focus search with <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd>.</p>
-                </div>
-              </details>
-            </div>
             <label htmlFor="album-search" className="sr-only">{numberSearch ? 'Search catalog number' : 'Search by album or artist'}</label>
             <div className="rh-query-controls flex min-w-0 gap-1.5 sm:gap-2">
               <div className="rh-search relative min-w-0 flex-1">
@@ -1342,33 +1328,48 @@ function App() {
                 <span className="hidden sm:inline">{numberSearch ? 'Look up in Discogs' : 'Search'}</span>
               </button>
             </div>
-            {!numberSearch && <div className="rh-search-scope flex flex-wrap items-center gap-x-2">
-              <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">{addOrigin ? 'Add search in' : 'Search in'}</label>
-              <select
-                id="search-scope"
-                value={searchScope}
-                onChange={event => changeScope(event.target.value as SearchScope)}
-                className="max-w-full rounded-lg border border-gray-300 px-2 text-sm"
-              >
-                <option value="saved">Collection and Wishlist</option>
-                <option value="collection">Collection only</option>
-                <option value="wishlist">Wishlist only</option>
-                <option value="catalog">Shelves and online catalogs</option>
-              </select>
-            </div>}
-            {numberSearch && <p className="rh-number-scope text-xs text-gray-600" id="number-lookup-source">Looks up numbers in Discogs</p>}
-              <button
-                type="button"
-                className="rh-primary-action rh-add-trigger flex shrink-0 items-center justify-center gap-1 px-2.5 py-2 text-sm font-semibold sm:gap-2 sm:px-4"
-                aria-label="Add Album"
-                aria-haspopup="dialog"
-                onClick={() => setShowAddMenu(true)}
-              >
-                <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                Add<span className="hidden sm:inline"> Album</span>
-              </button>
+            <button
+              type="button"
+              className="rh-primary-action rh-add-trigger flex shrink-0 items-center justify-center gap-1 px-2.5 py-2 text-sm font-semibold sm:gap-2 sm:px-4"
+              aria-label="Add Album"
+              aria-haspopup="dialog"
+              onClick={() => setShowAddMenu(true)}
+            >
+              <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              Add<span className="hidden sm:inline"> Album</span>
+            </button>
+            <div className="rh-search-options">
+              <div className="rh-search-modes" role="group" aria-label="Search by">
+                <button type="button" aria-pressed={!numberSearch} onClick={() => changeLookupMethod('name')}>Album or artist</button>
+                <button type="button" aria-pressed={numberSearch} onClick={() => changeLookupMethod('catalog-number')}>Catalog number</button>
+              </div>
+              <details className="rh-search-tips">
+                <summary aria-label="Search tips"><span className="hidden sm:inline">Search </span>Tips</summary>
+                <div>
+                  <p>Search in controls where albums are found. Choose a shelf when you save a new album.</p>
+                  <p>Find the catalog number on the sleeve or label. Check the label, format, and year before confirming an exact release.</p>
+                  <p>Each artist and title has one shelf entry. Save the album first if you still need to identify its pressing.</p>
+                  <p className="rh-keyboard-tip">Focus search with <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd>.</p>
+                </div>
+              </details>
+              {!numberSearch && <div className="rh-search-scope flex flex-wrap items-center gap-x-2">
+                <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">{addOrigin ? 'Add search in' : 'Search in'}</label>
+                <select
+                  id="search-scope"
+                  value={searchScope}
+                  onChange={event => changeScope(event.target.value as SearchScope)}
+                  className="max-w-full rounded-lg border border-gray-300 px-2 text-sm"
+                >
+                  <option value="saved">Collection and Wishlist</option>
+                  <option value="collection">Collection only</option>
+                  <option value="wishlist">Wishlist only</option>
+                  <option value="catalog">Shelves and online catalogs</option>
+                </select>
+              </div>}
+              {numberSearch && <p className="rh-number-scope text-xs text-gray-600" id="number-lookup-source">Looks up numbers in Discogs</p>}
+            </div>
           </form>
         </div>
 

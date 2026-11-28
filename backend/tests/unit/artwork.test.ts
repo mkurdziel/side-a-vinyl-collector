@@ -30,13 +30,13 @@ const officialAlbum = {
   coverImageUrl: officialUrl, hasCoverArt: true,
 } satisfies MusicBrainzAlbum;
 
-function invoke(handler: RequestHandler, body = {}) {
+function invoke(handler: RequestHandler, body = {}, search = {}, id = '42') {
   return new Promise<any>((resolve, reject) => {
     const response = {
       status: vi.fn().mockReturnThis(),
       json: resolve,
     } as unknown as Response;
-    handler({ params: { id: '42' }, body } as unknown as Request, response, reject);
+    handler({ params: { id }, query: search, body } as unknown as Request, response, reject);
   });
 }
 
@@ -172,6 +172,35 @@ describe('artwork candidates and manual selection', () => {
       { source: 'MusicBrainz', url: officialUrl, title: 'Dummy', year: 1994, id: 'mbid' },
       { source: 'Discogs', url: fallbackUrl, title: 'Dummy', id: 7 },
     ]);
+    expect(musicbrainz.searchReleasesWithCoverArt).toHaveBeenCalledWith('Portishead', 'Dummy');
+    expect(discogs.searchByQuery).toHaveBeenCalledWith('Portishead - Dummy', 5);
+  });
+
+  it('uses trimmed artwork search overrides without editing the saved album', async () => {
+    musicbrainz.searchReleasesWithCoverArt.mockResolvedValue([]);
+    discogs.searchByQuery.mockResolvedValue([]);
+
+    await invoke(searchCoverArt, {}, { artist: '  David Bowie  ', title: ' "Heroes" ' });
+
+    expect(musicbrainz.searchReleasesWithCoverArt).toHaveBeenCalledWith('David Bowie', '\\"Heroes\\"');
+    expect(discogs.searchByQuery).toHaveBeenCalledWith('David Bowie - "Heroes"', 5);
+    expect(query.mock.calls.filter(([sql]) => /UPDATE albums/.test(sql))).toEqual([]);
+  });
+
+  it.each([{ artist: ' ' }, { title: ['First', 'Second'] }, { title: 'x'.repeat(256) }, { title: 'Embedded\nseparator' }])(
+    'rejects invalid artwork search input before contacting providers (%j)', async search => {
+      await expect(invoke(searchCoverArt, {}, search)).rejects.toMatchObject({ statusCode: 400 });
+      expect(musicbrainz.searchReleasesWithCoverArt).not.toHaveBeenCalled();
+      expect(discogs.searchByQuery).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects artwork search for a missing or invalid record', async () => {
+    await expect(invoke(searchCoverArt, {}, {}, '2147483648')).rejects.toMatchObject({ statusCode: 400 });
+    query.mockResolvedValueOnce({ rows: [] });
+    await expect(invoke(searchCoverArt, {}, { title: 'Edited title' })).rejects.toMatchObject({ statusCode: 404 });
+    expect(musicbrainz.searchReleasesWithCoverArt).not.toHaveBeenCalled();
+    expect(discogs.searchByQuery).not.toHaveBeenCalled();
   });
 
   it('still marks successfully saved manual selections fetched', async () => {

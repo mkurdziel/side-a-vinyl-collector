@@ -57,6 +57,25 @@
   font-weight: 400;
 }
 
+.rh-pressing-chooser-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 8px;
+}
+
+.rh-pressing-compare {
+  flex: 0 0 auto;
+  line-height: 1.25;
+}
+
+.rh-pressing-pin-count {
+  display: block;
+  color: var(--rh-ink-2);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
 .rh-pressing-example {
   display: flex;
   align-items: center;
@@ -132,7 +151,7 @@
 
   .rh-pressing-review__actions button,
   .rh-pressing-example__find,
-  .rh-pressing-tools button,
+  .rh-pressing-compare,
   .rh-pressing-evidence-tools :is(button, summary) {
     font-size: 0.8125rem;
     line-height: 1.25;
