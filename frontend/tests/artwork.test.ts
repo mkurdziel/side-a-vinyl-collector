@@ -208,20 +208,36 @@ it('enlarges either image and restores the paired comparison, focus, and deliber
   });
   await act(async () => button('Find different artwork').props.onClick());
   await act(async () => renderer!.root.findByProps({ 'aria-label': 'Preview Dummy cover from Discogs, 1994' }).props.onClick());
-  await act(async () => renderer!.root.findByProps({ src: alternative.url }).props.onLoad({ currentTarget: { naturalWidth: 700, naturalHeight: 700 } }));
   const figures = () => renderer!.root.findAllByType('figure');
-  await act(async () => renderer!.root.findByProps({ 'aria-label': 'Enlarge current artwork' }).props.onClick());
+  expect(figures().flatMap(figure => figure.findAllByType('button'))).toHaveLength(0);
+  await act(async () => {
+    figures()[0].findByType('img').props.onLoad({ currentTarget: { naturalWidth: 280, naturalHeight: 360 } });
+    figures()[1].findByType('img').props.onLoad({ currentTarget: { naturalWidth: 700, naturalHeight: 525 } });
+  });
+  const enlargeCurrent = renderer!.root.findByProps({ 'aria-label': 'Enlarge current artwork' });
+  const enlargeSelected = () => renderer!.root.findByProps({ 'aria-label': 'Enlarge selected artwork' });
+  expect([enlargeCurrent, enlargeSelected()].map(control => control.props.className)).toEqual([
+    'rh-lookup-link -ml-2 text-left', 'rh-lookup-link -ml-2 text-left',
+  ]);
+  await act(async () => enlargeCurrent.props.onClick());
   expect(figures()).toHaveLength(1);
   expect(figures()[0].findByType('img').props.alt).toBe('Cover currently saved for this album');
+  expect(figures()[0].props.style).toEqual({ width: 280 });
+  expect(textOf(figures()[0])).toContain('Source 280 × 360 px');
+  expect(textOf(figures()[0])).toContain('Shown at source width or smaller.');
   expect(headingFocus).toHaveBeenCalledTimes(2);
   expect(button('Apply artwork')).toBeUndefined();
   await act(async () => button('Back to comparison').props.onClick());
   expect(currentFocus).toHaveBeenCalledOnce();
   expect(figures()).toHaveLength(2);
-  await act(async () => renderer!.root.findByProps({ 'aria-label': 'Enlarge selected artwork' }).props.onClick());
+  await act(async () => enlargeSelected().props.onClick());
   expect(figures()).toHaveLength(1);
   expect(figures()[0].findByType('img').props.alt).toBe('Proposed replacement cover for this album');
+  expect(figures()[0].findByType('img').props.className).toContain('h-auto');
+  expect(figures()[0].props.style).toEqual({ width: 700 });
+  expect(textOf(figures()[0])).toContain('Source 700 × 525 px');
   expect(figures()[0].findByType('a').props.href).toBe('https://www.discogs.com/release/11');
+  expect(button('Apply artwork')).toBeUndefined();
   await act(async () => renderer!.root.findAllByType('dialog')[1].props.onCancel({ preventDefault: vi.fn(), stopPropagation: vi.fn() }));
   expect(selectedFocus).toHaveBeenCalledOnce();
   expect(figures()).toHaveLength(2);

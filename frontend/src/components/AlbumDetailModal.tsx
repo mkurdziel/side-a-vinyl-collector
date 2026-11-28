@@ -17,6 +17,11 @@ type PressingResult = { status: 'loading' | 'failed' } | { status: 'ready'; pres
 type ArtworkOperation = { kind: 'search' | 'save'; albumId: number };
 type ArtworkNotice = 'empty' | 'failed' | 'updated';
 type ArtworkSide = 'current' | 'selected';
+type ArtworkSize = { width: number; height: number };
+
+function artworkSizeLabel(size: ArtworkSize) {
+  return `${size.width} × ${size.height} px`;
+}
 
 function artworkRelease(source: SearchCoverArtResult['source'] | undefined, id: string | number | undefined) {
   if (source === 'Discogs' && typeof id === 'number') {
@@ -50,15 +55,16 @@ function artworkFromUrl(url: string | undefined, cached: boolean) {
   return { source: url ? 'External image' : cached ? 'Saved artwork' : 'Source unlisted', identified: false };
 }
 
-function ArtworkFigure({ label, title, source, sourceIdentified = true, year, release, dimensions, unavailable, onEnlarge, enlargeButtonRef, children }: {
+function ArtworkFigure({ label, title, source, sourceIdentified = true, year, release, size, unavailable, enlarged, onEnlarge, enlargeButtonRef, children }: {
   label: string;
   title?: string;
   source: string;
   sourceIdentified?: boolean;
   year?: number;
   release?: ReturnType<typeof artworkRelease>;
-  dimensions?: string;
+  size?: ArtworkSize;
   unavailable?: boolean;
+  enlarged?: boolean;
   onEnlarge?: () => void;
   enlargeButtonRef?: RefObject<HTMLButtonElement | null>;
   children: ReactNode;
@@ -68,16 +74,18 @@ function ArtworkFigure({ label, title, source, sourceIdentified = true, year, re
   const gap = [!sourceIdentified && 'artwork provider', !title && 'artwork title', !hasYear && 'release year', !release && 'release link']
     .filter(part => typeof part === 'string');
   return (
-    <figure aria-labelledby={headingId} className="min-w-0 space-y-2 [overflow-wrap:anywhere]">
+    <figure aria-labelledby={headingId} className={`min-w-0 space-y-2 [overflow-wrap:anywhere]${enlarged ? ' mx-auto max-w-full' : ''}`}
+      style={enlarged && size ? { width: size.width } : undefined}>
       <figcaption id={headingId} className="text-sm font-semibold">{label}</figcaption>
-      <div className="aspect-square overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
+      <div className={`overflow-hidden rounded-lg bg-gray-50${enlarged ? '' : ' aspect-square border border-gray-200'}`}>
         {unavailable ? <p className="grid h-full place-items-center p-2 text-center text-xs text-gray-600">Image unavailable</p> : children}
       </div>
-      {onEnlarge && !unavailable && <button ref={enlargeButtonRef} type="button" className="rh-lookup-link -ml-2 text-left sm:hidden"
+      {onEnlarge && size && !unavailable && <button ref={enlargeButtonRef} type="button" className="rh-lookup-link -ml-2 text-left"
         aria-label={`Enlarge ${label.toLowerCase()}`} onClick={onEnlarge}>Enlarge {label === 'Current artwork' ? 'current' : 'selected'}</button>}
       <div className="space-y-0.5 text-xs text-gray-600">
         {title && <p className="text-sm font-medium text-gray-900">{title}</p>}
-        <p>{source}{hasYear && <> · <span className="sr-only">Release year </span>{year}</>}{dimensions && ` · ${dimensions} px`}</p>
+        <p>{source}{hasYear && <> · <span className="sr-only">Release year </span>{year}</>}{size && ` · ${enlarged ? 'Source ' : ''}${artworkSizeLabel(size)}`}</p>
+        {enlarged && size && !unavailable && size.width < 400 && <p>Shown at source width or smaller.</p>}
         {release && (
           <a className="rh-comparison-source" href={release.url} target="_blank" rel="noreferrer"
             aria-label={`${release.full} for ${label.toLowerCase()} (opens in a new tab)`}>
@@ -151,7 +159,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
   const [currentArtwork, setCurrentArtwork] = useState<SearchCoverArtResult>();
   const [expandedArtwork, setExpandedArtwork] = useState<ArtworkSide>();
   const [candidates, setCandidates] = useState<SearchCoverArtResult[]>([]);
-  const [imageDimensions, setImageDimensions] = useState<Record<string, string>>({});
+  const [imageDimensions, setImageDimensions] = useState<Record<string, ArtworkSize | 'Unavailable'>>({});
   const [savingArtwork, setSavingArtwork] = useState(false);
   const [artworkNotice, setArtworkNotice] = useState<ArtworkNotice>();
   const [lastArtworkQuery, setLastArtworkQuery] = useState<SearchCoverArtQuery>();
@@ -169,6 +177,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
   const editArtworkButton = useRef<HTMLButtonElement>(null);
   const artworkChooserHeading = useRef<HTMLHeadingElement>(null);
   const previewHeading = useRef<HTMLHeadingElement>(null);
+  const comparisonBody = useRef<HTMLDivElement>(null);
   const enlargeCurrentButton = useRef<HTMLButtonElement>(null);
   const enlargeSelectedButton = useRef<HTMLButtonElement>(null);
   const restoreEnlargeButton = useRef<ArtworkSide | undefined>(undefined);
@@ -224,7 +233,10 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
   }, [selectedArtwork]);
 
   useLayoutEffect(() => {
-    if (expandedArtwork) previewHeading.current?.focus();
+    if (expandedArtwork) {
+      if (comparisonBody.current) comparisonBody.current.scrollTop = 0;
+      previewHeading.current?.focus();
+    }
     else if (restoreEnlargeButton.current) {
       const enlarge = restoreEnlargeButton.current === 'current' ? enlargeCurrentButton.current : enlargeSelectedButton.current;
       if (enlarge?.getClientRects().length) enlarge.focus();
@@ -298,8 +310,10 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
     setExpandedArtwork(undefined);
   };
 
+  const currentDimensions = imageDimensions[coverUrl];
   const selectedDimensions = selectedArtwork && imageDimensions[selectedArtwork.url];
-  const canApplyArtwork = !!selectedDimensions && selectedDimensions !== 'Unavailable' && !savingArtwork;
+  const canApplyArtwork = !!selectedDimensions && selectedDimensions !== 'Unavailable' && !savingArtwork && !expandedArtwork;
+  const comparisonImageClass = expandedArtwork ? 'block h-auto w-full' : 'size-full object-contain';
 
   const applyArtwork = async () => {
     if (!selectedArtwork || !canApplyArtwork || artworkOperation.current) return;
@@ -368,7 +382,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
   };
   const recordDimensions = (url: string, image: HTMLImageElement) => {
     const { naturalWidth, naturalHeight } = image;
-    const dimensions = naturalWidth > 0 && naturalHeight > 0 ? `${naturalWidth} × ${naturalHeight}` : 'Unavailable';
+    const dimensions = naturalWidth > 0 && naturalHeight > 0 ? { width: naturalWidth, height: naturalHeight } : 'Unavailable';
     setImageDimensions(previous => ({ ...previous, [url]: dimensions }));
   };
   const markArtworkUnavailable = (url: string) => setImageDimensions(previous => ({ ...previous, [url]: 'Unavailable' }));
@@ -525,21 +539,21 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
             </div>
 
             {selectedArtwork ? <>
-              <div className="min-h-0 space-y-3 overflow-y-auto p-4 sm:p-6">
+              <div ref={comparisonBody} className="min-h-0 space-y-3 overflow-y-auto p-4 sm:p-6">
                 <div className={expandedArtwork ? 'mx-auto max-w-[min(100%,65dvh)]' : 'grid max-w-lg grid-cols-2 gap-3 sm:gap-5'}>
                   {expandedArtwork !== 'selected' && <ArtworkFigure label="Current artwork" title={artworkTitle} source={artworkSource} year={artworkYear}
                     sourceIdentified={!!(knownArtwork || matchedArtwork) || currentImage.identified}
-                    release={currentRelease}
-                    dimensions={imageDimensions[coverUrl] === 'Unavailable' ? undefined : imageDimensions[coverUrl]} unavailable={failedCoverUrl === coverUrl}
+                    release={currentRelease} enlarged={expandedArtwork === 'current'}
+                    size={currentDimensions === 'Unavailable' ? undefined : currentDimensions} unavailable={failedCoverUrl === coverUrl}
                     enlargeButtonRef={enlargeCurrentButton} onEnlarge={!expandedArtwork && !savingArtwork ? () => setExpandedArtwork('current') : undefined}>
-                    <img src={coverUrl} alt="Cover currently saved for this album" className="size-full object-contain"
+                    <img src={coverUrl} alt="Cover currently saved for this album" className={comparisonImageClass}
                       onLoad={event => recordDimensions(coverUrl, event.currentTarget)} onError={() => setFailedCoverUrl(coverUrl)} />
                   </ArtworkFigure>}
                   {expandedArtwork !== 'current' && <ArtworkFigure label="Selected artwork" title={selectedArtwork.title} source={selectedArtwork.source} year={selectedArtwork.year}
-                    release={artworkRelease(selectedArtwork.source, selectedArtwork.id)}
-                    dimensions={selectedDimensions === 'Unavailable' ? undefined : selectedDimensions} unavailable={selectedDimensions === 'Unavailable'}
+                    release={artworkRelease(selectedArtwork.source, selectedArtwork.id)} enlarged={expandedArtwork === 'selected'}
+                    size={selectedDimensions === 'Unavailable' ? undefined : selectedDimensions} unavailable={selectedDimensions === 'Unavailable'}
                     enlargeButtonRef={enlargeSelectedButton} onEnlarge={!expandedArtwork && !savingArtwork ? () => setExpandedArtwork('selected') : undefined}>
-                    <img src={selectedArtwork.url} alt="Proposed replacement cover for this album" className="size-full object-contain"
+                    <img src={selectedArtwork.url} alt="Proposed replacement cover for this album" className={comparisonImageClass}
                       onLoad={event => recordDimensions(selectedArtwork.url, event.currentTarget)} onError={() => markArtworkUnavailable(selectedArtwork.url)} />
                   </ArtworkFigure>}
                 </div>
@@ -597,8 +611,9 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
                   const key = candidate.url;
                   const dimensions = imageDimensions[key];
                   const failed = dimensions === 'Unavailable';
+                  const size = !failed && dimensions ? artworkSizeLabel(dimensions) : undefined;
                   const reference = artworkReference(candidate, candidates);
-                  const evidence = [candidate.year, dimensions && !failed ? `${dimensions} px` : undefined, reference?.full].filter(Boolean);
+                  const evidence = [candidate.year, size, reference?.full].filter(Boolean);
                   const accessibleName = [`Preview ${candidate.title} cover from ${candidate.source}`, ...evidence].join(', ');
 
                   return (
@@ -635,7 +650,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
                       <span className="block pt-2 [overflow-wrap:anywhere]">
                         <span className="block text-sm font-medium text-gray-900">{candidate.title}</span>
                         <span className="block text-xs text-gray-600">{candidate.source}{candidate.year ? ` · ${candidate.year}` : ''}</span>
-                        {!failed && dimensions && <span className="block text-xs text-gray-600">{dimensions} px</span>}
+                        {size && <span className="block text-xs text-gray-600">{size}</span>}
                         {reference && <span title={reference.full} className="block text-xs text-gray-600">{reference.visible}</span>}
                         {failed ? null : (
                           <span className="mt-1 block text-sm font-medium text-purple-700">

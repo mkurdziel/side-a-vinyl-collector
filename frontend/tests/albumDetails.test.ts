@@ -509,7 +509,7 @@ describe('saving a new catalog pressing', () => {
     await act(async () => button('Check runout markings').props.onClick());
     await act(async () => button('Retry runout markings').props.onClick());
     expect(getPressingDetails.mock.calls.map(([id]) => id)).toEqual([410, 410]);
-    expect(textOf(renderer!.root)).toContain('Discogs lists no runout markings for this release.');
+    expect(textOf(renderer!.root)).toContain('Discogs lists no runout markings for release 410.');
     expect(button('Save without pressing').props['aria-disabled']).toBe(false);
     await act(async () => candidate.props.onChange());
     expect(button('Save pressing').props['aria-disabled']).toBe(false);

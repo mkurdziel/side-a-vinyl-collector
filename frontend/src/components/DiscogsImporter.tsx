@@ -3,6 +3,7 @@ import api, { ApiError, type DiscogsAlbum, type DiscogsCollectionPage } from '..
 import {
   entryFor, getImportLibrary, importTitleKey, needsImportCheck, readDiscogsImport, readImportReview, reconcileImport,
   reviewChoiceFor, writeDiscogsImport, writeImportReview, type ImportEntry, type ImportReviewChoice, type ImportReviewDraft,
+  type ImportReviewNotice,
 } from '../services/discogsImportSession';
 import { ModalDialog } from './ModalDialog';
 import { SaveShelfSelect } from './SaveDestinationActions';
@@ -12,7 +13,6 @@ type ImportProgress = { albumId: number; destination: Shelf; current: number; to
 type ListStatus = 'idle' | 'loading' | 'ready' | 'error' | 'connection-error';
 type Recovery = 'idle' | 'checking' | 'ready' | 'error';
 type CollectionPages = Map<number, DiscogsAlbum[]>;
-type ReviewNotice = { choice: ImportReviewChoice; reason: string; canReplace: boolean };
 
 const shelves: Shelf[] = ['collection', 'wishlist'];
 const shelfNames: Record<Shelf, string> = { collection: 'Collection', wishlist: 'Wishlist' };
@@ -97,7 +97,7 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
   const [previousDestination, setPreviousDestination] = useState<Shelf>();
   const destination = draft?.destination ?? previousDestination ?? viewMode;
   const selectedIds = new Set(draft?.choices.map(choice => choice.discogsId));
-  const [reviewNotices, setReviewNotices] = useState<ReviewNotice[]>([]);
+  const reviewNotices = draft?.notices ?? [];
   const [activePressingReview, setActivePressingReview] = useState<string>();
   const [restoringPage, setRestoringPage] = useState<number | null>(null);
   const restoring = restoringPage !== null;
@@ -106,7 +106,8 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
   const panel = useRef<HTMLDivElement>(null);
   const header = useRef<HTMLDivElement>(null);
   const reviewHeading = useRef<HTMLParagraphElement>(null);
-  const focusReview = useRef(false);
+  const noticesHeading = useRef<HTMLParagraphElement>(null);
+  const reviewFocus = useRef<'overview' | 'changes' | null>(null);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const discardConfirmation = useRef<HTMLElement>(null);
   const discardButton = useRef<HTMLButtonElement>(null);
@@ -119,9 +120,11 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
   const busy = fetchStatus === 'loading' || progress !== null || recovery === 'checking' || restoring || confirmingDiscard;
 
   useLayoutEffect(() => {
-    if (open && focusReview.current && reviewHeading.current) {
-      focusReview.current = false;
-      focusInReview(panel.current, header.current, reviewHeading.current);
+    if (open && reviewFocus.current) {
+      const target = reviewFocus.current === 'changes' ? noticesHeading.current ?? reviewHeading.current : reviewHeading.current;
+      if (!target) return;
+      reviewFocus.current = null;
+      focusInReview(panel.current, header.current, target);
     }
   }, [draft, open, pagination]);
 
@@ -140,7 +143,9 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
     setDraft(next);
   };
 
-  const draftForReview = () => reviewDraft.current ?? { choices: [], destination, lastPage: pagination?.page ?? 1 };
+  const draftForReview = (): ImportReviewDraft => reviewDraft.current ?? {
+    choices: [], notices: [], destination, lastPage: pagination?.page ?? 1,
+  };
 
   const remember = (next: ImportEntry[]) => {
     journal.current = next;
@@ -196,13 +201,14 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
       const loaded = Math.max(pagination?.page ?? 1, result.page);
       const nextPage = loaded < result.totalPages ? loaded + 1 : undefined;
       const currentDraft = draftForReview();
-      const needsReview = bulkChoicesToReview(currentDraft.choices, countPressings(combinePages(pages)));
+      const needsReview = new Set(bulkChoicesToReview(currentDraft.choices, countPressings(combinePages(pages))));
+      if (needsReview.size) reviewFocus.current = 'changes';
       if (reviewDraft.current || loaded > 1) {
-        rememberDraft({ ...currentDraft, lastPage: loaded, choices: currentDraft.choices.filter(choice => !needsReview.includes(choice)) });
+        rememberDraft({
+          ...currentDraft, lastPage: loaded, choices: currentDraft.choices.filter(choice => !needsReview.has(choice)),
+          notices: [...currentDraft.notices, ...[...needsReview].map(choice => ({ choice, cause: 'competing' as const }))],
+        });
       }
-      if (needsReview.length) setReviewNotices(previous => [...previous, ...needsReview.map(choice => ({
-        choice, reason: 'Another pressing appeared.', canReplace: true,
-      }))]);
       setLoadedPages(pages);
       setPagination({ page: loaded, totalPages: result.totalPages, nextPage });
       setFetchStatus('ready');
@@ -220,7 +226,8 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
     setRestoreFailed(false);
     setRestoringPage(0);
     try {
-      const library = savedDraft.choices.length ? await getImportLibrary(AbortSignal.timeout(requestTimeout)) : [];
+      const library = savedDraft.choices.length || savedDraft.notices.length
+        ? await getImportLibrary(AbortSignal.timeout(requestTimeout)) : [];
       const savedByTitle = new Map(library.map(album => [importTitleKey(album.artist_name, album.title), album.status]));
       const savedByRelease = new Map(library.map(album => [album.discogs_id, album.status]));
       const pages: CollectionPages = new Map();
@@ -232,24 +239,28 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
         result = await api.importDiscogsCollection(result.nextPage, AbortSignal.timeout(requestTimeout));
         pages.set(result.page, result.albums);
       }
+      const getSavedShelf = (choice: Pick<DiscogsAlbum, 'discogsId' | 'artist' | 'album'>) =>
+        savedByRelease.get(choice.discogsId) ?? savedByTitle.get(titleKey(choice));
+      for (const [page, albums] of pages) pages.set(page, albums.filter(album => !getSavedShelf(album)));
       const fresh = combinePages(pages);
       const releases = new Map(fresh.map(album => [album.discogsId, album]));
-      const ambiguous = bulkChoicesToReview(savedDraft.choices, countPressings(fresh));
-      const notices: ReviewNotice[] = [];
-      const choices = savedDraft.choices.filter(choice => {
-        const savedShelf = savedByRelease.get(choice.discogsId) ?? savedByTitle.get(titleKey(choice));
+      const ambiguous = new Set(bulkChoicesToReview(savedDraft.choices, countPressings(fresh)));
+      const currentNotice = (choice: ImportReviewChoice): ImportReviewNotice => {
+        const shelf = getSavedShelf(choice);
+        if (shelf) return { choice, cause: 'saved', shelf };
         const release = releases.get(choice.discogsId);
-        if (savedShelf) notices.push({ choice, reason: `Already in ${shelfNames[savedShelf]}.`, canReplace: false });
-        else if (!release || titleKey(release) !== titleKey(choice)) {
-          notices.push({ choice, reason: 'Unavailable on the refreshed pages.', canReplace: true });
-        } else if (ambiguous.includes(choice)) notices.push({ choice, reason: 'Another pressing appeared.', canReplace: true });
-        else return true;
+        return { choice, cause: release && titleKey(release) === titleKey(choice) ? 'competing' : 'unavailable' };
+      };
+      const notices = savedDraft.notices.map(({ choice }) => currentNotice(choice));
+      const choices = savedDraft.choices.filter(choice => {
+        const notice = currentNotice(choice);
+        if (notice.cause === 'competing' && !ambiguous.has(choice)) return true;
+        notices.push(notice);
         return false;
       });
 
-      focusReview.current = true;
-      rememberDraft({ ...savedDraft, choices, lastPage: result.page });
-      setReviewNotices(notices);
+      reviewFocus.current = notices.length ? 'changes' : 'overview';
+      rememberDraft({ ...savedDraft, choices, notices, lastPage: result.page });
       setLoadedPages(pages);
       setPagination({ page: result.page, totalPages: result.totalPages, nextPage: result.nextPage });
       setFetchStatus('ready');
@@ -281,7 +292,10 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
       const stored = remember([...journal.current.filter(entry => !ids.has(entry.album.discogsId) || !needsImportCheck(entry)), ...queue]);
       if (!verify) {
         setPreviousDestination(destination);
-        rememberDraft(null, stored);
+        const current = reviewDraft.current;
+        rememberDraft(current?.notices.length ? {
+          ...current, choices: current.choices.filter(choice => !ids.has(choice.discogsId)),
+        } : null, stored);
       }
 
       for (const [index, entry] of queue.entries()) {
@@ -336,7 +350,8 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
   const processedTitles = new Set(entries.map(entry => titleKey(entry.album)));
   const remaining = catalog.filter(album => !processedTitles.has(titleKey(album)));
   const selected = remaining.filter(album => selectedIds.has(album.discogsId));
-  const allEligible = remaining.filter(album => titleCounts.get(titleKey(album)) === 1);
+  const reviewTitles = new Set(reviewNotices.map(({ choice }) => titleKey(choice)));
+  const allEligible = remaining.filter(album => titleCounts.get(titleKey(album)) === 1 && !reviewTitles.has(titleKey(album)));
   const hasUnselectedEligible = allEligible.some(album => !selectedIds.has(album.discogsId));
   const eligibleTitleCount = new Set(remaining.map(titleKey)).size;
   const retryJobs = entries.filter(entry => entry.status === 'failed');
@@ -367,7 +382,9 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
     : recovery === 'error' ? 'Could not check which records were saved. Check your shelves again to continue.'
       : initialRecovery && resumeJobs.length > 0 ? 'An import was interrupted. Outcomes found on your shelves are shown below.'
         : initialRecovery && summary ? 'Checked both shelves. Your import outcomes are below.' : null;
-  const draftSummary = draft && `${draft.choices.length} selected for ${shelfNames[draft.destination]}`;
+  const draftSummary = draft && [`${draft.choices.length} selected for ${shelfNames[draft.destination]}`,
+    draft.notices.length ? `${draft.notices.length} to review` : null].filter(Boolean).join(' · ');
+  const unresolvedCount = reviewNotices.filter(notice => notice.cause !== 'saved').length;
 
   const chooseAlbum = (album: Pick<DiscogsAlbum, 'discogsId' | 'artist' | 'album'>, checked: boolean) => {
     if (operationInProgress.current) return;
@@ -375,8 +392,15 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
     const title = titleKey(album);
     const choices = current.choices.filter(choice => titleKey(choice) !== title);
     if (checked) choices.push(reviewChoiceFor(album, 'chosen'));
-    rememberDraft({ ...current, choices });
-    setReviewNotices(previous => previous.filter(notice => titleKey(notice.choice) !== title));
+    const notices = checked ? current.notices.filter(notice => titleKey(notice.choice) !== title) : current.notices;
+    rememberDraft({ ...current, choices, notices });
+  };
+
+  const dismissNotice = (title: string) => {
+    const current = reviewDraft.current;
+    if (busy || operationInProgress.current || !current) return;
+    reviewFocus.current = 'changes';
+    rememberDraft({ ...current, notices: current.notices.filter(notice => titleKey(notice.choice) !== title) });
   };
 
   const chooseAll = () => {
@@ -390,12 +414,11 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
 
   const discardReview = () => {
     if (operationInProgress.current) return;
-    focusReview.current = true;
+    reviewFocus.current = 'overview';
     setConfirmingDiscard(false);
     rememberDraft(null);
     setPreviousDestination(undefined);
     setRestoreFailed(false);
-    setReviewNotices([]);
     setActivePressingReview(undefined);
     setLoadedPages(new Map());
     setPagination(undefined);
@@ -404,7 +427,7 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
 
   const requestDiscard = () => {
     if (busy || operationInProgress.current) return;
-    if (draft?.choices.length) setConfirmingDiscard(true);
+    if (draft?.choices.length || draft?.notices.length) setConfirmingDiscard(true);
     else discardReview();
   };
 
@@ -423,9 +446,14 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
   const discardControl = (className: string) => confirmingDiscard && draft ? (
     <section ref={discardConfirmation} className="w-full space-y-2 rounded-lg border border-gray-300 bg-gray-100 p-3" aria-labelledby="discogs-discard-heading">
       <h3 id="discogs-discard-heading" className="text-sm font-semibold">
-        Discard {draft.choices.length} {draft.choices.length === 1 ? 'selection' : 'selections'} for {shelfNames[draft.destination]}?
+        {draft.choices.length
+          ? `Discard ${draft.choices.length} ${draft.choices.length === 1 ? 'selection' : 'selections'} for ${shelfNames[draft.destination]}?`
+          : 'Discard saved Discogs review?'}
       </h3>
-      <p id="discogs-discard-details" className="text-sm text-gray-600">This clears your choices and the pages you reviewed.</p>
+      <p id="discogs-discard-details" className="text-sm text-gray-600">
+        {draft.notices.length ? 'This clears the saved review, including records flagged for your attention.'
+          : 'This clears your choices and the pages you reviewed.'}
+      </p>
       <div className="flex flex-wrap gap-2">
         <button type="button" className={secondaryAction} ref={keepReviewButton} onClick={keepReview}
           aria-describedby="discogs-discard-heading discogs-discard-details">Keep review</button>
@@ -545,8 +573,8 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
             <section className="space-y-2" aria-label="Saved Discogs review">
               <p ref={reviewHeading} tabIndex={-1} className="text-sm font-semibold text-gray-900">Saved review · {draftSummary}</p>
               <p className="text-sm text-gray-600" role={restoreFailed ? 'alert' : 'status'}>
-                {restoreFailed ? 'Could not refresh your review. Your choices are kept. Try again.'
-                  : restoringPage === 0 ? 'Checking both shelves for your selected records…'
+                {restoreFailed ? 'Could not refresh your review. Your draft is kept. Try again.'
+                  : restoringPage === 0 ? 'Checking both shelves for this review…'
                     : restoring ? `Refreshing page ${restoringPage} of ${draft.lastPage}…`
                       : 'Resume to refresh the Discogs pages you reviewed and check both shelves.'}
               </p>
@@ -585,28 +613,38 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
             </div>
           )}
 
-          {reviewNotices.length > 0 && <section className="space-y-1 border-y border-gray-200 py-2" aria-label="Changes to your Discogs selection">
-            <p className="text-sm font-medium text-gray-900" role="status">
-              {reviewNotices.length} {reviewNotices.length === 1 ? 'selection needs' : 'selections need'} your attention.
+          {hasCatalog && reviewNotices.length > 0 && <section className="space-y-1 border-y border-gray-200 py-2" aria-label="Changes to your Discogs selection">
+            <p ref={noticesHeading} tabIndex={-1} className="text-sm font-medium text-gray-900" role="status">
+              {unresolvedCount ? `${unresolvedCount} ${unresolvedCount === 1 ? 'selection needs' : 'selections need'} your attention.`
+                : 'These records are already on your shelves.'}
             </p>
             <ul className="divide-y divide-gray-200 text-sm text-gray-600 [overflow-wrap:anywhere]">
-              {reviewNotices.map(({ choice, reason, canReplace }) => {
+              {reviewNotices.map(notice => {
+                const { choice } = notice;
                 const title = titleKey(choice);
+                const canReplace = notice.cause !== 'saved';
                 const alternatives = canReplace && !processedTitles.has(title) ? pressingsByTitle.get(title) ?? [] : [];
                 const headingId = alternatives.length ? pressingHeadingId(alternatives[0]) : undefined;
                 const action = alternatives.length === 1 ? 'Review pressing' : 'Review pressings';
+                const reason = notice.cause === 'saved' ? `Already in ${shelfNames[notice.shelf]}.`
+                  : !headingId || notice.cause === 'unavailable' ? 'Unavailable on the refreshed pages.'
+                    : alternatives.length > 1 ? 'Another pressing appeared.' : 'One pressing is available to review.';
                 return <li key={choice.discogsId} className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 py-1">
                   <p className="min-w-0 text-sm">
                     <strong className="font-semibold text-gray-900">{choice.album}</strong> by {choice.artist} · Discogs {choice.discogsId}. {reason}
                     {canReplace && !headingId && morePage && ' Load more records to keep looking.'}
                   </p>
-                  {headingId && <a href={`#${headingId}`} className="rh-lookup-link inline-grid text-left"
-                    aria-label={`${action} for ${choice.album} by ${choice.artist}`}
-                    onClick={event => {
-                      event.preventDefault();
-                      setActivePressingReview(title);
-                      jumpToReviewTarget(headingId);
-                    }}>{action}</a>}
+                  <div className="flex flex-wrap items-center gap-x-2">
+                    {headingId && <a href={`#${headingId}`} className="rh-lookup-link inline-grid text-left"
+                      aria-label={`${action} for ${choice.album} by ${choice.artist}`}
+                      onClick={event => {
+                        event.preventDefault();
+                        setActivePressingReview(title);
+                        jumpToReviewTarget(headingId);
+                      }}>{action}</a>}
+                    <button type="button" className="min-h-11 rounded-lg px-2 text-left text-sm text-gray-600 hover:bg-gray-100" disabled={busy}
+                      aria-label={`Dismiss review notice for ${choice.album} by ${choice.artist}`} onClick={() => dismissNotice(title)}>Dismiss notice</button>
+                  </div>
                 </li>;
               })}
             </ul>

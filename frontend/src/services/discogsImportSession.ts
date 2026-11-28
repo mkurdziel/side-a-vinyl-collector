@@ -15,8 +15,13 @@ export type ImportReviewChoice = Pick<DiscogsAlbum, 'discogsId' | 'artist' | 'al
   source: 'chosen' | 'bulk';
 };
 
+export type ImportReviewNotice = { choice: ImportReviewChoice } & (
+  { cause: 'competing' | 'unavailable' } | { cause: 'saved'; shelf: Shelf }
+);
+
 export type ImportReviewDraft = {
   choices: ImportReviewChoice[];
+  notices: ImportReviewNotice[];
   destination: Shelf;
   lastPage: number;
 };
@@ -44,15 +49,27 @@ function isReviewChoice(value: unknown): value is ImportReviewChoice {
     (source === 'chosen' || source === 'bulk');
 }
 
+function isReviewNotice(value: unknown): value is ImportReviewNotice {
+  if (!value || typeof value !== 'object') return false;
+  const notice = value as ImportReviewNotice;
+  return isReviewChoice(notice.choice) && (notice.cause === 'competing' || notice.cause === 'unavailable' ||
+    (notice.cause === 'saved' && isShelf(notice.shelf)));
+}
+
 export function readImportReview(): ImportReviewDraft | null {
   try {
     const raw = globalThis.sessionStorage.getItem(reviewKey);
     if (!raw) return null;
-    const { choices, destination, lastPage } = JSON.parse(raw) as ImportReviewDraft;
+    const { choices, notices, destination, lastPage } = JSON.parse(raw) as ImportReviewDraft;
     if (!isShelf(destination) || !Number.isSafeInteger(lastPage) || lastPage < 1 || !Array.isArray(choices)) return null;
     const unique = new Map<string, ImportReviewChoice>();
     for (const choice of choices.filter(isReviewChoice)) unique.set(importTitleKey(choice.artist, choice.album), choice);
-    return { choices: [...unique.values()], destination, lastPage };
+    const pending = new Map<string, ImportReviewNotice>();
+    for (const notice of Array.isArray(notices) ? notices.filter(isReviewNotice) : []) {
+      const title = importTitleKey(notice.choice.artist, notice.choice.album);
+      if (!unique.has(title)) pending.set(title, notice);
+    }
+    return { choices: [...unique.values()], notices: [...pending.values()], destination, lastPage };
   } catch {
     return null;
   }

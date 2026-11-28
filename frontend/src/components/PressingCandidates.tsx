@@ -366,21 +366,19 @@ function CandidateRunout({ choice, result, onRetry, disabled }: {
 }
 
 function allRunoutsMissing(choices: readonly PressingCandidate[], evidence: Partial<Record<number, EvidenceResult>>) {
-  return choices.length > 1 && choices.every(choice => (
+  return choices.length > 0 && choices.every(choice => (
     !choice.pressing?.matrixRunouts?.length && evidence[choice.releaseId]?.status === 'ready'
   ));
 }
 
-function MissingRunouts({ choices, uncertainAction }: { choices: readonly PressingCandidate[]; uncertainAction: string }) {
+function missingRunoutMessage(choices: readonly PressingCandidate[], scope: string, uncertainAction: string) {
   const differences = [...differingFields(choices)]
     .filter(field => field === 'format' || field === 'label')
     .map(field => pressingFieldLabels[field].toLowerCase());
   const next = differences.length
     ? `Compare the ${new Intl.ListFormat('en').format(differences)} on your sleeve or label.`
     : 'Check the catalog number and label on your copy.';
-  return <p role="status" className="border-y border-gray-200 px-2 py-2 text-sm text-gray-600">
-    Discogs lists no runout markings for these pressings. {next}{' '}{uncertainAction}
-  </p>;
+  return `Discogs lists no runout markings for ${scope}. ${next} ${uncertainAction}`;
 }
 
 export function PressingCandidates({
@@ -395,8 +393,10 @@ export function PressingCandidates({
   const candidatesId = useId();
   const comparisonId = useId();
   const runoutToolsId = useId();
+  const runoutStatusId = useId();
   const mediumId = useId();
   const shortlistId = useId();
+  const pinnedRunoutStatusId = useId();
   const pinHintId = useId();
   const shortlistHeading = useRef<HTMLHeadingElement>(null);
   const shortlistJump = useRef<HTMLButtonElement>(null);
@@ -441,7 +441,9 @@ export function PressingCandidates({
   const compareGrid = showRunouts && visible.length > 1;
   const inlineRunouts = showRunouts ? visible.filter(choice => !pinnedIds.includes(choice.releaseId)) : [];
   const visibleMissing = allRunoutsMissing(inlineRunouts, evidence);
-  const pinnedMissing = allRunoutsMissing(pinned, evidence);
+  const inlineRunoutScope = inlineRunouts.length === 1 ? `release ${inlineRunouts[0].releaseId}`
+    : inlineRunouts.length === visible.length ? 'these pressings' : 'the unpinned pressings shown here';
+  const pinnedMissing = pinned.length > 1 && allRunoutsMissing(pinned, evidence);
   const varying = differingFields(withDetails);
   const pinnedDifferences = differingFields(pinned);
   // Keep the warning based on the search listing. Detailed release lookups can add more label numbers.
@@ -586,7 +588,13 @@ export function PressingCandidates({
         </div>
       </div>}
       {selectedOutsideMedia && <button type="button" className="rh-lookup-link -ml-2 text-left" onClick={showSelection}>Show selected pressing in All media</button>}
-      {showRunouts && <h3 ref={runoutHeading} tabIndex={-1} className="text-sm font-semibold">Runout marks on these pressings</h3>}
+      {showRunouts && <div>
+        <h3 ref={runoutHeading} tabIndex={-1} className="text-sm font-semibold"
+          aria-describedby={visibleMissing ? runoutStatusId : undefined}>Runout marks on these pressings</h3>
+        <p id={runoutStatusId} role="status" aria-atomic="true" className="text-sm text-gray-600">
+          {visibleMissing && missingRunoutMessage(inlineRunouts, inlineRunoutScope, uncertainAction)}
+        </p>
+      </div>}
       <ul id={candidatesId} ref={candidateList} className={`min-w-0 divide-y divide-gray-200 border-y border-gray-200 ${compareGrid
         ? '@min-[30rem]:grid @min-[30rem]:grid-cols-2 @min-[30rem]:gap-2 @min-[30rem]:divide-y-0 @min-[30rem]:border-y-0' : ''}
         ${compareGrid && visible.length > 2 ? '@min-[40rem]:grid-cols-3' : ''}`}>
@@ -621,7 +629,6 @@ export function PressingCandidates({
           );
         })}
       </ul>
-      {visibleMissing && <MissingRunouts choices={inlineRunouts} uncertainAction={uncertainAction} />}
       {(allowPinning || medium) && (
         <div className="flex flex-wrap items-center gap-x-2 text-sm">
           <p role="status" className="mr-auto text-xs text-gray-600">
@@ -658,9 +665,13 @@ export function PressingCandidates({
         <section aria-labelledby={shortlistId} className="min-w-0 space-y-2 border-y border-gray-200 py-2">
           <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-2">
             <div className="min-w-0 flex-1">
-              <h3 id={shortlistId} ref={shortlistHeading} tabIndex={-1} className="text-sm font-semibold">Pinned pressings</h3>
+              <h3 id={shortlistId} ref={shortlistHeading} tabIndex={-1} className="text-sm font-semibold"
+                aria-describedby={pinnedMissing ? pinnedRunoutStatusId : undefined}>Pinned pressings</h3>
               <p id={pinHintId} className="text-sm text-gray-600" role="status">
                 {pinned.length < pinLimit ? 'Pin one more pressing to compare across pages.' : 'Two pressings pinned. Unpin one to compare another.'}
+              </p>
+              <p id={pinnedRunoutStatusId} role="status" aria-atomic="true" className="text-sm text-gray-600">
+                {pinnedMissing && missingRunoutMessage(pinned, 'the pinned pressings', uncertainAction)}
               </p>
             </div>
             <button type="button" className="rh-lookup-link" onClick={() => shortlistJump.current?.focus()}>Back to pressing choices</button>
@@ -691,7 +702,6 @@ export function PressingCandidates({
               </li>;
             })}
           </ul>
-          {pinnedMissing && <MissingRunouts choices={pinned} uncertainAction={uncertainAction} />}
         </section>
       )}
       {selectedOffPage && <details className="rh-pressing-secondary">
