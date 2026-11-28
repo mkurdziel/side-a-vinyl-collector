@@ -1,0 +1,62 @@
+.rh-pressing-review.rh-dialog-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.rh-pressing-review > .rh-dialog-header {
+  position: static;
+  flex: none;
+}
+
+.rh-pressing-review__content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-block-size: 0;
+}
+
+.rh-pressing-review__evidence {
+  flex: 1 1 auto;
+  min-block-size: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: 12px;
+}
+
+.rh-pressing-review__evidence:focus-visible {
+  outline-offset: -3px;
+}
+
+.rh-pressing-review__footer {
+  flex: none;
+  max-block-size: 48vh;
+  max-block-size: 48dvh;
+  overflow: auto;
+  scroll-padding-block: 12px;
+  border-block-start: 1px solid var(--rh-edge);
+  background: var(--rh-surface);
+}
+
+/* At high zoom or in a short window, let every control share one scroll region. */
+@media (max-width: 17.5rem), (max-height: 28rem) {
+  .rh-pressing-review.rh-dialog-panel {
+    display: block;
+    overflow: auto;
+    scroll-padding-block: 12px;
+  }
+
+  .rh-pressing-review__content {
+    display: block;
+  }
+
+  .rh-pressing-review__evidence {
+    overflow: visible;
+  }
+
+  .rh-pressing-review__footer {
+    max-block-size: none;
+    overflow: visible;
+  }
+}

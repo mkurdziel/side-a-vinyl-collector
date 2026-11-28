@@ -69,16 +69,14 @@ describe('album image uploads', () => {
     expect(renderer!.root.findByType('input')).toBeDefined();
   });
 
-  it('lets a cover match be saved to either shelf and puts the active shelf first', async () => {
+  it('defaults Save to the active shelf and saves to the selected shelf', async () => {
     analyzeImage.mockResolvedValueOnce({ extractedText: {}, discogsMatches: [coverMatch] });
     addAlbum.mockResolvedValueOnce({ album: savedAlbum });
     await upload(coverFile, 'wishlist');
-    const addButtons = renderer!.root.findAllByType('button')
-      .filter(button => button.props['aria-label']?.startsWith('Save without pressing to '));
-    expect(addButtons.map(button => button.props['aria-label'])).toEqual([
-      'Save without pressing to Wishlist · Dummy', 'Save without pressing to Collection · Dummy',
-    ]);
-    await act(async () => addButtons[1].props.onClick());
+    const destination = renderer!.root.findByProps({ 'aria-label': 'Save to · Dummy' });
+    expect(destination.props.value).toBe('wishlist');
+    await act(async () => destination.props.onChange({ target: { value: 'collection' } }));
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Save without pressing to Collection · Dummy' }).props.onClick());
     expect(addAlbum).toHaveBeenCalledExactlyOnceWith({ artist: 'Portishead', album: 'Dummy',
       coverImageUrl: 'https://example.test/cover.jpg', catalogListing: { source: 'discogs', kind: 'master', id: 200 },
       status: 'collection', applyCatalogReference: true });

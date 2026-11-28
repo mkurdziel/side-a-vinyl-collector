@@ -4,6 +4,7 @@ import { createPressingDetailsLoader, withPressingEvidence } from '../services/p
 import { discogsReleaseSource, savedCatalogSource, savedCopyContext, savedCopyLabel, type CatalogSource } from '../albumDisplay';
 import { ModalDialog } from './ModalDialog';
 import { PressingCandidates, PressingSelectionSummary, type PressingCandidate } from './PressingCandidates';
+import './PressingReview.css';
 
 export type SavedAlbumOutcome = 'opened' | 'removed' | 'unavailable';
 export type OpenSavedAlbum = (id: number, opener: HTMLButtonElement, inlineError?: boolean) => Promise<SavedAlbumOutcome>;
@@ -232,6 +233,15 @@ export function PressingComparison({
     if (receipt) (receiptNotice.current ?? savedOutcome.current)?.focus();
   }, [receipt]);
 
+  useLayoutEffect(() => {
+    if (candidateId === undefined) return;
+    const region = candidateRegion.current;
+    const focused = region?.ownerDocument?.activeElement;
+    if (focused?.matches('input[type="radio"]') && region?.contains(focused)) {
+      focused.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  }, [candidateId]);
+
   useEffect(() => {
     const requests = releaseRequests.current;
     return () => {
@@ -397,12 +407,17 @@ export function PressingComparison({
       {keepLabel}
     </button>
   );
+  const selectedSummary = candidate && !alreadySaved && <PressingSelectionSummary compact searchedNumber={searchedNumber}
+    choice={withPressingEvidence(candidate, lookupPressing, 'release')} />;
 
   return (
     <ModalDialog labelledBy={headingId} onClose={close} onEscape={escape} returnFocusTo={returnFocusTo} fallbackFocusTo={fallbackFocusTo}>
-      <div className="rh-dialog-panel max-w-3xl">
-        <div className="rh-dialog-header flex items-center justify-between gap-2 border-b border-gray-200 px-4 py-3 sm:px-6">
-          <h2 id={headingId} ref={dialogHeading} tabIndex={-1} className="text-xl font-semibold">Review pressings</h2>
+      <div className="rh-dialog-panel rh-pressing-review max-w-3xl">
+        <div className="rh-dialog-header flex items-start justify-between gap-2 border-b border-gray-200 px-4 py-3 sm:px-6">
+          <div className="min-w-0">
+            <h2 id={headingId} ref={dialogHeading} tabIndex={-1} className="text-xl font-semibold">Review pressings</h2>
+            <p className="mt-1 line-clamp-2 text-sm text-gray-600">{title}{(catalogArtist ?? selected?.artist_name) && ` · ${catalogArtist ?? selected?.artist_name}`}</p>
+          </div>
           <button type="button" className="rh-dialog-close" onClick={close} aria-label="Close pressing review"
             aria-disabled={saveSelection?.status === 'saving' || undoing}>
             <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -410,12 +425,11 @@ export function PressingComparison({
             </svg>
           </button>
         </div>
-        <div className="grid gap-4 p-4 sm:gap-5 sm:p-6 [overflow-wrap:anywhere]">
-          <div>
-            <p className="font-semibold">{title}</p>
-            {(catalogArtist ?? selected?.artist_name) && <p className="text-sm text-gray-600">{catalogArtist ?? selected?.artist_name}</p>}
+        <div className="rh-pressing-review__content">
+          <div className="rh-pressing-review__evidence grid content-start gap-4 p-4 sm:gap-5 sm:p-6"
+            role="region" aria-label="Pressing evidence" tabIndex={0}>
             {selected && (
-              <div className="rh-comparison-outcome mt-2">
+              <div className="rh-comparison-outcome">
                 <div className="flex flex-wrap items-center justify-between gap-x-2">
                   <p ref={savedOutcome} tabIndex={-1} role="status">
                     {pressingUpdated && 'Pressing updated. '}{currentReceipt?.outcome === 'undone' && 'Pressing change undone. '}
@@ -432,102 +446,121 @@ export function PressingComparison({
                 {currentReceipt?.error && <p ref={receiptNotice} tabIndex={-1} role="alert" className="text-sm font-normal text-red-600">{currentReceipt.error}</p>}
               </div>
             )}
-          </div>
-          {removed && (
-            <div className="rounded-lg border border-gray-300 p-2 text-sm">
-              <p id={removalId} ref={removalNotice} role="status" tabIndex={-1}>
-                {savedCopyLabel(removed)} is no longer saved.
-                {selected && ' Showing a remaining copy.'}
-              </p>
-              {!selected && <button ref={returnAfterRemoval} type="button" className="rh-lookup-link"
-                aria-describedby={removalId} onClick={close}>{backLabel ?? 'Back to results'}</button>}
-            </div>
-          )}
-          {lookupStatus && <div className={lookupStatus === 'ready' && candidates.length > 0 ? 'sr-only' : 'text-sm text-gray-600'}>
-            <p role="status">{lookupPending ? 'Finding matching pressings on Discogs…' : lookupStatus === 'error'
-              ? 'Couldn’t find catalog pressings right now.' : candidates.length > 0 ? 'Catalog pressings are ready.' : 'No matching Discogs pressings found.'}</p>
-            {lookupStatus === 'error' && onRetryLookup && <button type="button" className="rh-lookup-link" onClick={() => {
-              dialogHeading.current?.focus({ preventScroll: true });
-              onRetryLookup();
-            }}>Retry catalog search</button>}
-          </div>}
-          {selected && availableCopies.length > 1 && (
-            <div className="rh-comparison-toolbar">
-              <div className="rh-comparison-select">
-                <label htmlFor={copySelectId} className="text-sm font-semibold">Saved copy to compare</label>
-                <select ref={copySelect} id={copySelectId} value={selected.id} disabled={busy}
-                  onChange={event => { setSelectedId(Number(event.target.value)); setFailedId(undefined); setSaveSelection(undefined); }}>
-                  {availableCopies.map(copy => <option key={copy.id} value={copy.id}>{savedCopyContext(copy)}</option>)}
-                </select>
+            {removed && (
+              <div className="rounded-lg border border-gray-300 p-2 text-sm">
+                <p id={removalId} ref={removalNotice} role="status" tabIndex={-1}>
+                  {savedCopyLabel(removed)} is no longer saved.
+                  {selected && ' Showing a remaining copy.'}
+                </p>
+                {!selected && <button ref={returnAfterRemoval} type="button" className="rh-lookup-link"
+                  aria-describedby={removalId} onClick={close}>{backLabel ?? 'Back to results'}</button>}
               </div>
-            </div>
-          )}
-          {!candidate && savedRelease && <section aria-labelledby={savedEvidenceId} className="grid gap-2 border-t border-gray-200 pt-3">
-            <h3 id={savedEvidenceId} className="text-sm font-semibold">Saved pressing evidence</h3>
-            <ReleaseDetailsStatus column="Saved copy" releaseId={savedRelease} details={savedDetails} hasGaps={false} onRetry={retryDetails} />
-            {savedPressing && <dl className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
-              {fieldRows.map(({ label, savedValue }) => savedValue && <div key={label}>
-                <dt className="text-xs text-gray-600">{label}</dt><dd className="font-medium">{savedValue}</dd>
-              </div>)}
-              {savedRunouts.length > 0 && <div className="col-span-full">
-                <dt className="mb-1 text-xs text-gray-600">Matrix / Runout</dt>
-                <dd><RunoutMarkings markings={savedRunouts} /></dd>
-              </div>}
-            </dl>}
-          </section>}
-          {candidates.length > 1 && <div ref={candidateRegion}>
-            <PressingCandidates choices={candidates} selectedId={candidate?.releaseId}
-              onSelect={id => { setCandidateId(id); setSaveSelection(undefined); }}
-              searchedNumber={searchedNumber} savedReleaseId={savedRelease} disabled={busy || lookupPending}
-              uncertainAction={offerKeepPressing ? (savedRelease ? 'If you’re unsure, keep the current pressing.' : 'If you’re unsure, leave the pressing unconfirmed.') : undefined}
-              loadDetails={loadPressingDetails} />
-          </div>}
-          {candidate && <div>
-            <table className="rh-pressing-table">
-              <caption className="sr-only">Catalog evidence for {lookupRecord}</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Evidence</th>
-                  <th scope="col" aria-label="Catalog match">Catalog match
-                    <ReleaseDetailsStatus column="Catalog match" releaseId={lookupRelease} details={lookupDetails} hasGaps={lookupHasGaps} onRetry={retryDetails} />
-                  </th>
-                  <th scope="col" aria-label="Saved copy">Saved copy
-                    <ReleaseDetailsStatus column="Saved copy" releaseId={savedRelease} details={savedDetails}
-                      hasRecord={!!selected} hasGaps={savedHasGaps} onRetry={retryDetails} />
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {evidence.map(({ label, lookupValue, savedValue, priority }) => (
-                  <tr key={label} className={priority === 0 ? 'rh-evidence-priority' : undefined}>
-                    <th scope="row">{label}</th>
-                    <td>{lookupValue || '—'}</td>
-                    <td>{savedValue || '—'}</td>
+            )}
+            {lookupStatus && <div className={lookupStatus === 'ready' && candidates.length > 0 ? 'sr-only' : 'text-sm text-gray-600'}>
+              <p role="status">{lookupPending ? 'Finding matching pressings on Discogs…' : lookupStatus === 'error'
+                ? 'Couldn’t find catalog pressings right now.' : candidates.length > 0 ? 'Catalog pressings are ready.' : 'No matching Discogs pressings found.'}</p>
+              {lookupStatus === 'error' && onRetryLookup && <button type="button" className="rh-lookup-link" onClick={() => {
+                dialogHeading.current?.focus({ preventScroll: true });
+                onRetryLookup();
+              }}>Retry catalog search</button>}
+            </div>}
+            {selected && availableCopies.length > 1 && (
+              <div className="rh-comparison-toolbar">
+                <div className="rh-comparison-select">
+                  <label htmlFor={copySelectId} className="text-sm font-semibold">Saved copy to compare</label>
+                  <select ref={copySelect} id={copySelectId} value={selected.id} disabled={busy}
+                    onChange={event => { setSelectedId(Number(event.target.value)); setFailedId(undefined); setSaveSelection(undefined); }}>
+                    {availableCopies.map(copy => <option key={copy.id} value={copy.id}>{savedCopyContext(copy)}</option>)}
+                  </select>
+                </div>
+              </div>
+            )}
+            {!candidate && savedRelease && <section aria-labelledby={savedEvidenceId} className="grid gap-2 border-t border-gray-200 pt-3">
+              <h3 id={savedEvidenceId} className="text-sm font-semibold">Saved pressing evidence</h3>
+              <ReleaseDetailsStatus column="Saved copy" releaseId={savedRelease} details={savedDetails} hasGaps={false} onRetry={retryDetails} />
+              {savedPressing && <dl className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
+                {fieldRows.map(({ label, savedValue }) => savedValue && <div key={label}>
+                  <dt className="text-xs text-gray-600">{label}</dt><dd className="font-medium">{savedValue}</dd>
+                </div>)}
+                {savedRunouts.length > 0 && <div className="col-span-full">
+                  <dt className="mb-1 text-xs text-gray-600">Matrix / Runout</dt>
+                  <dd><RunoutMarkings markings={savedRunouts} /></dd>
+                </div>}
+              </dl>}
+            </section>}
+            {candidates.length > 1 && <div ref={candidateRegion}>
+              <PressingCandidates choices={candidates} selectedId={candidate?.releaseId}
+                onSelect={id => { setCandidateId(id); setSaveSelection(undefined); }}
+                searchedNumber={searchedNumber} savedReleaseId={savedRelease} disabled={busy || lookupPending}
+                uncertainAction={offerKeepPressing ? (savedRelease ? 'If you’re unsure, keep the current pressing.' : 'If you’re unsure, leave the pressing unconfirmed.') : undefined}
+                loadDetails={loadPressingDetails} />
+            </div>}
+            {candidate && <div>
+              <table className="rh-pressing-table">
+                <caption className="sr-only">Catalog evidence for {lookupRecord}</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Evidence</th>
+                    <th scope="col" aria-label="Catalog match">Catalog match
+                      <ReleaseDetailsStatus column="Catalog match" releaseId={lookupRelease} details={lookupDetails} hasGaps={lookupHasGaps} onRetry={retryDetails} />
+                    </th>
+                    <th scope="col" aria-label="Saved copy">Saved copy
+                      <ReleaseDetailsStatus column="Saved copy" releaseId={savedRelease} details={savedDetails}
+                        hasRecord={!!selected} hasGaps={savedHasGaps} onRetry={retryDetails} />
+                    </th>
                   </tr>
-                ))}
-                <tr>
-                  <th scope="row">Discogs release ID</th><td>{lookupRelease}</td><td>{savedRelease ?? '—'}</td>
-                </tr>
-              </tbody>
-            </table>
-            {candidates.length === 1 && recordHelp}
-          </div>}
-          {selected && !lookupPending && <p className="text-sm text-gray-600">Side A saves one entry per artist and title.</p>}
-          {offerKeepPressing && selected && (
+                </thead>
+                <tbody>
+                  {evidence.map(({ label, lookupValue, savedValue, priority }) => (
+                    <tr key={label} className={priority === 0 ? 'rh-evidence-priority' : undefined}>
+                      <th scope="row">{label}</th>
+                      <td>{lookupValue || '—'}</td>
+                      <td>{savedValue || '—'}</td>
+                    </tr>
+                  ))}
+                  <tr>
+                    <th scope="row">Discogs release ID</th><td>{lookupRelease}</td><td>{savedRelease ?? '—'}</td>
+                  </tr>
+                </tbody>
+              </table>
+              {candidates.length === 1 && recordHelp}
+            </div>}
+            {selected && !lookupPending && <p className="text-sm text-gray-600">Side A saves one entry per artist and title.</p>}
             <div>
-              {savedReleaseChanged && <p ref={changedNotice} tabIndex={-1} role="status" className="mb-2 text-sm text-gray-600">
+              <div className="rh-comparison-links">
+                {selected && onOpenSaved && (
+                  <button type="button" className="rh-lookup-link text-left"
+                    aria-label={`${action} · ${savedCopyLabel(selected)}`}
+                    aria-haspopup="dialog" aria-disabled={busy} aria-busy={openingId === selected.id}
+                    onClick={event => void inspect(selected, event.currentTarget)}>
+                    {action}
+                  </button>
+                )}
+                {sourceLink('Catalog match', lookupRelease ? `${lookupRecord}, release ${lookupRelease}` : lookupRecord, lookupSource)}
+                {selected && sourceLink('Saved copy', savedCopyLabel(selected), savedSource)}
+                {onSearch && <button type="button" className="rh-lookup-link" aria-disabled={saveSelection?.status === 'saving' || undoing}
+                  onClick={() => { if (!saving.current) onSearch(); }}>{searchLabel}</button>}
+                {backLabel && !offerKeepPressing && !(removed && !selected) && <button type="button" className="rh-lookup-link" aria-disabled={saveSelection?.status === 'saving' || undoing}
+                  onClick={close}>{backLabel}</button>}
+              </div>
+              {selected && failedId === selected.id && <p role="alert" className="px-2 text-sm text-red-600">Couldn’t open this saved copy. Try again.</p>}
+            </div>
+          </div>
+          {offerKeepPressing && selected && (
+            <section className="rh-pressing-review__footer grid gap-2 px-4 py-2 sm:px-6" aria-label="Pressing actions">
+              {savedReleaseChanged && <p ref={changedNotice} tabIndex={-1} role="status" className="text-sm text-gray-600">
                 {alreadySaved ? 'The saved copy was updated and now matches this pressing.' : 'The saved pressing changed. Check the updated evidence before confirming again.'}
               </p>}
               {saveStatus && candidate ? (
-                <div className="grid gap-2 rounded-lg border border-gray-300 p-3" role="group" aria-labelledby={savePromptId}>
+                <div className="grid gap-2" role="group" aria-labelledby={savePromptId}>
                   <p id={savePromptId} ref={savePrompt} tabIndex={-1} className="text-sm font-medium">
                     {savedRelease ? 'Replace the pressing for' : 'Save a pressing for'} {availableCopies.length === 1
                       ? `${selected.title} in ${selectedShelf}` : savedCopyLabel(selected)}?
                   </p>
-                  <PressingSelectionSummary choice={withPressingEvidence(candidate, lookupPressing, 'release')} />
-                  {savedRelease && availableCopies.length === 1 && <p className="text-sm text-gray-600">Currently saved as Discogs release {savedRelease}.</p>}
+                  {selectedSummary}
+                  {savedRelease && availableCopies.length === 1 && <p className="text-xs text-gray-600">Currently saved as Discogs release {savedRelease}.</p>}
                   {saveStatus === 'failed' && <p id={saveErrorId} role="alert" className="text-sm text-red-600">{saveSelection?.message}</p>}
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap items-center justify-end gap-1.5">
                     <button type="button" className="rh-lookup-link" aria-disabled={busy} onClick={cancelSave}>Cancel</button>
                     {keepPressing}
                     <button ref={confirmSave} type="button" className="rh-primary-action px-3 text-sm font-semibold"
@@ -539,38 +572,22 @@ export function PressingComparison({
                   </div>
                 </div>
               ) : (
-                <div className="flex flex-wrap items-center gap-2">
-                  {keepPressing}
+                <>
+                  {selectedSummary}
                   {alreadySaved && !savedReleaseChanged && <p className="text-sm text-gray-600">This pressing is already saved.</p>}
-                  {candidate && !lookupPending && !alreadySaved && <button ref={saveTrigger} type="button"
-                    className="rh-primary-action px-3 text-sm font-semibold" aria-disabled={busy}
-                    onClick={() => {
-                      if (!busy) setSaveSelection({ copyId: selected.id, releaseId: candidate.releaseId,
-                        previousRelease: selected.discogs_id, status: 'confirming' });
-                    }}>Use this pressing</button>}
-                </div>
+                  <div className="flex flex-wrap items-center justify-end gap-1.5">
+                    {keepPressing}
+                    {candidate && !lookupPending && !alreadySaved && <button ref={saveTrigger} type="button"
+                      className="rh-primary-action px-3 text-sm font-semibold" aria-disabled={busy}
+                      onClick={() => {
+                        if (!busy) setSaveSelection({ copyId: selected.id, releaseId: candidate.releaseId,
+                          previousRelease: selected.discogs_id, status: 'confirming' });
+                      }}>Use this pressing</button>}
+                  </div>
+                </>
               )}
-            </div>
+            </section>
           )}
-          <div>
-            <div className="rh-comparison-links">
-              {selected && onOpenSaved && (
-                <button type="button" className="rh-lookup-link text-left"
-                  aria-label={`${action} · ${savedCopyLabel(selected)}`}
-                  aria-haspopup="dialog" aria-disabled={busy} aria-busy={openingId === selected.id}
-                  onClick={event => void inspect(selected, event.currentTarget)}>
-                  {action}
-                </button>
-              )}
-              {sourceLink('Catalog match', lookupRelease ? `${lookupRecord}, release ${lookupRelease}` : lookupRecord, lookupSource)}
-              {selected && sourceLink('Saved copy', savedCopyLabel(selected), savedSource)}
-              {onSearch && <button type="button" className="rh-lookup-link" aria-disabled={saveSelection?.status === 'saving' || undoing}
-                onClick={() => { if (!saving.current) onSearch(); }}>{searchLabel}</button>}
-              {backLabel && !offerKeepPressing && !(removed && !selected) && <button type="button" className="rh-lookup-link" aria-disabled={saveSelection?.status === 'saving' || undoing}
-                onClick={close}>{backLabel}</button>}
-            </div>
-            {selected && failedId === selected.id && <p role="alert" className="px-2 text-sm text-red-600">Couldn’t open this saved copy. Try again.</p>}
-          </div>
         </div>
       </div>
     </ModalDialog>

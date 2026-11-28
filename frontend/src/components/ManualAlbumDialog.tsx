@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { toast } from 'react-hot-toast';
 import api, { ApiError, type Album } from '../services/api';
 import { ModalDialog } from './ModalDialog';
+import { SaveShelfSelect } from './SaveDestinationActions';
 
 export type ManualAlbumDraft = { artist?: string; album?: string; searchText?: string };
 type Shelf = Album['status'];
@@ -101,14 +102,7 @@ export function ManualAlbumDialog({ draft, initialShelf, onClose, onSaved, onOpe
               <input ref={titleField} name="album" required maxLength={255} defaultValue={draft.album?.slice(0, 255)} onChange={clearIssue}
                 className="min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-base" />
             </label>
-            <label className="grid gap-1.5 text-sm font-medium">
-              Save to
-              <select value={destination} onChange={event => { setDestination(event.target.value as Shelf); clearIssue(); }}
-                className="min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-base">
-                <option value="collection">Collection</option>
-                <option value="wishlist">Wishlist</option>
-              </select>
-            </label>
+            <SaveShelfSelect value={destination} onChange={shelf => { setDestination(shelf); clearIssue(); }} />
           </fieldset>
           {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
           {saving && <p role="status" className="text-sm text-gray-600">Adding to {label}…</p>}

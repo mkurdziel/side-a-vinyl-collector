@@ -166,9 +166,16 @@ class ApiService {
     });
   }
 
-  async deleteAlbum(id: number, expectedStatus?: Album['status']): Promise<void> {
+  async deleteAlbum(id: number, expectedStatus?: Album['status']): Promise<{ message: string; undoToken: string; expiresAt: string }> {
     const expected = expectedStatus ? `?expectedStatus=${expectedStatus}` : '';
     return this.request(`/api/albums/${id}${expected}`, { method: 'DELETE' });
+  }
+
+  async undoAlbumRemoval(id: number, undoToken: string): Promise<{ album: Album }> {
+    return this.request(`/api/albums/${id}/removal/undo`, {
+      method: 'POST',
+      body: JSON.stringify({ undoToken }),
+    });
   }
 
   async updateNotes(id: number, notes: string): Promise<void> {

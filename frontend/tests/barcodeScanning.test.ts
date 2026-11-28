@@ -248,7 +248,7 @@ describe('barcode lookup requests', () => {
     expect(quagga.init.mock.calls.at(-1)![0].inputStream.constraints.deviceId).toEqual({ exact: 'rear-main' });
   });
 
-  it('prefers the active shelf and saves one barcode match when both destinations are clicked', async () => {
+  it('defaults Save to the active shelf and blocks a repeated barcode save', async () => {
     scanBarcode.mockResolvedValue({ artist: 'Portishead', album: 'Dummy', discogsId: 17, masterId: 108, coverImageUrl: 'https://example.test/cover.jpg' });
     const save = Promise.withResolvers<object>();
     addAlbum.mockReturnValueOnce(save.promise);
@@ -256,14 +256,12 @@ describe('barcode lookup requests', () => {
     await startBarcodeCamera();
     await act(async () => quagga.onDetected.mock.calls[0]![0](result));
 
-    const addButtons = renderer!.root.findAllByType('button')
-      .filter(button => button.props['aria-label']?.startsWith('Save without pressing to '));
-    expect(addButtons.map(button => button.props['aria-label'])).toEqual([
-      'Save without pressing to Wishlist · Dummy', 'Save without pressing to Collection · Dummy',
-    ]);
+    const destination = renderer!.root.findByProps({ 'aria-label': 'Save to · Dummy' });
+    expect(destination.props.value).toBe('wishlist');
+    const addButton = renderer!.root.findByProps({ 'aria-label': 'Save without pressing to Wishlist · Dummy' });
     await act(async () => {
-      addButtons[0].props.onClick();
-      addButtons[1].props.onClick();
+      addButton.props.onClick();
+      addButton.props.onClick();
     });
     expect(addAlbum).toHaveBeenCalledExactlyOnceWith({
       artist: 'Portishead', album: 'Dummy', barcode: '0602537340436', coverImageUrl: 'https://example.test/cover.jpg',
@@ -304,6 +302,7 @@ describe('barcode lookup requests', () => {
     await startBarcodeCamera();
     await act(async () => quagga.onDetected.mock.calls[0]![0](result));
     const opener = { isConnected: true };
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Save to · Dummy' }).props.onChange({ target: { value: 'wishlist' } }));
     await act(async () => renderer!.root.findByProps({ 'aria-label': 'Review pressings for Dummy in Wishlist' })
       .props.onClick({ currentTarget: opener }));
     const picker = renderer!.root.findByType('form');

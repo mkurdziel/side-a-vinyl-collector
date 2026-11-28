@@ -120,6 +120,9 @@ async function lockAlbumIdentity(client: PoolClient, artist: string, ...releaseI
   await client.query("SELECT pg_advisory_xact_lock(hashtextextended('artist:' || lower($1), 0))", [artist]);
 }
 
+// Lock the receipts before the library tables, matching the order used by backup restore.
+const lockRemovalUndo = 'LOCK TABLE album_removal_undo IN ROW EXCLUSIVE MODE';
+
 function parseCatalogListing(value: unknown): CatalogListing | null {
   if (value == null) return null;
   if (typeof value === 'object' && !Array.isArray(value)) {
@@ -163,6 +166,7 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
 
   try {
     await client.query('BEGIN');
+    await client.query(lockRemovalUndo);
 
     await lockAlbumIdentity(client, artist, discogsId || null);
     const existing = await client.query<{ id: number }>(`
@@ -198,6 +202,7 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
       await client.query('ROLLBACK');
       return res.status(409).json({ error: 'This album is already saved.', status: 'error', existingAlbumId: albumId });
     }
+    await client.query('DELETE FROM album_removal_undo WHERE album_id = $1', [albumId]);
 
     if (applyCatalogReference && existing.rows.length) {
       await client.query('UPDATE albums SET discogs_id = $1, catalog_listing = $2 WHERE id = $3',
@@ -275,7 +280,7 @@ function checkExpectedPressing(album: AlbumWithArtist | undefined, expectedDisco
   }
 }
 
-function pressingUndoDigest(token: string) {
+function undoTokenDigest(token: string) {
   return createHash('sha256').update(token).digest('hex');
 }
 
@@ -330,7 +335,7 @@ export const updateAlbumPressing = asyncHandler(async (req: Request, res: Respon
         previous_discogs_id = EXCLUDED.previous_discogs_id,
         previous_catalog_listing = EXCLUDED.previous_catalog_listing,
         expires_at = EXCLUDED.expires_at
-    `, [id, pressingUndoDigest(undoToken), discogsId, saved.discogs_id ?? null, saved.catalog_listing ?? null]);
+    `, [id, undoTokenDigest(undoToken), discogsId, saved.discogs_id ?? null, saved.catalog_listing ?? null]);
     await client.query('COMMIT');
     res.set('Cache-Control', 'no-store').json({ album: { ...saved, discogs_id: discogsId, catalog_listing: null }, undoToken });
   } catch (error) {
@@ -354,7 +359,7 @@ export const undoAlbumPressing = asyncHandler(async (req: Request, res: Response
     throw new AppError('Choose a valid saved pressing change to undo.', 400);
   }
 
-  const digest = pressingUndoDigest(undoToken);
+  const digest = undoTokenDigest(undoToken);
   const { rows: [original] } = await pool.query<{
     artist_name: string;
     title: string;
@@ -413,24 +418,116 @@ export const undoAlbumPressing = asyncHandler(async (req: Request, res: Response
 });
 
 export const deleteAlbum = asyncHandler(async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const rawId = String(req.params.id);
+  const id = Number(rawId);
   const { expectedStatus } = req.query;
 
+  if (!/^\d+$/.test(rawId) || !isDatabaseId(id)) {
+    throw new AppError('Choose a valid album to remove.', 400);
+  }
   if (expectedStatus !== undefined && !isShelf(expectedStatus)) {
     throw new AppError('Invalid expected status', 400);
   }
 
-  const result = await pool.query(
-    'DELETE FROM collections WHERE album_id = $1 AND ($2::text IS NULL OR status = $2) RETURNING *',
-    [id, expectedStatus ?? null]
-  );
+  const undoToken = randomBytes(32).toString('base64url');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(lockRemovalUndo);
+    // Pressing changes can lock both the album and its membership, so share their artist lock first.
+    const { rows: [identity] } = await client.query<{ artist_name: string }>(`
+      SELECT artists.name AS artist_name FROM albums JOIN artists ON artists.id = albums.artist_id WHERE albums.id = $1
+    `, [id]);
+    if (identity) await lockAlbumIdentity(client, identity.artist_name);
+    await client.query('SELECT id FROM albums WHERE id = $1 FOR NO KEY UPDATE', [id]);
+    await client.query('DELETE FROM album_removal_undo WHERE expires_at <= CURRENT_TIMESTAMP');
+    const { rows: [receipt] } = await client.query<{ expires_at: Date }>(`
+      WITH removed AS (
+        DELETE FROM collections WHERE album_id = $1 AND ($2::text IS NULL OR status = $2)
+        RETURNING id, album_id, status, notes, added_at
+      )
+      INSERT INTO album_removal_undo (album_id, collection_id, status, notes, added_at, token_digest, expires_at)
+      SELECT album_id, id, status, notes, added_at, $3, clock_timestamp() + INTERVAL '10 minutes'
+      FROM removed
+      ON CONFLICT (album_id) DO UPDATE SET
+        collection_id = EXCLUDED.collection_id,
+        status = EXCLUDED.status,
+        notes = EXCLUDED.notes,
+        added_at = EXCLUDED.added_at,
+        token_digest = EXCLUDED.token_digest,
+        expires_at = EXCLUDED.expires_at
+      RETURNING expires_at
+    `, [id, expectedStatus ?? null, undoTokenDigest(undoToken)]);
+    if (!receipt) {
+      if (expectedStatus) throw new AppError('This album’s shelf changed. Refresh and try again.', 409);
+      throw new AppError('Album not in collection', 404);
+    }
 
-  if (result.rowCount === 0) {
-    if (expectedStatus) throw new AppError('This album’s shelf changed. Refresh and try again.', 409);
-    throw new AppError('Album not in collection', 404);
+    await client.query('COMMIT');
+    res.set('Cache-Control', 'no-store').json({
+      message: 'Album removed from collection', undoToken, expiresAt: receipt.expires_at.toISOString(),
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+const expiredRemovalUndo = 'This removal can no longer be undone. Check your shelves before adding the album again.';
+
+export const undoAlbumRemoval = asyncHandler(async (req: Request, res: Response) => {
+  const rawId = String(req.params.id);
+  const id = Number(rawId);
+  const { undoToken } = req.body ?? {};
+  if (!/^\d+$/.test(rawId) || !isDatabaseId(id) || typeof undoToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(undoToken)) {
+    throw new AppError('Choose a valid album removal to undo.', 400);
   }
 
-  res.json({ message: 'Album removed from collection' });
+  const digest = undoTokenDigest(undoToken);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(lockRemovalUndo);
+    const { rows: [original] } = await client.query<{ artist_name: string; title: string }>(`
+      SELECT artists.name AS artist_name, albums.title
+      FROM album_removal_undo
+      JOIN albums ON albums.id = album_removal_undo.album_id
+      JOIN artists ON artists.id = albums.artist_id
+      WHERE album_removal_undo.album_id = $1 AND token_digest = $2 AND expires_at > clock_timestamp()
+    `, [id, digest]);
+    if (!original) throw new AppError(expiredRemovalUndo, 409);
+
+    await lockAlbumIdentity(client, original.artist_name);
+    await client.query('SELECT id FROM albums WHERE id = $1 FOR NO KEY UPDATE', [id]);
+    const restored = await client.query(`
+      WITH removal AS (
+        DELETE FROM album_removal_undo
+        WHERE album_id = $1 AND token_digest = $2 AND expires_at > clock_timestamp()
+        RETURNING collection_id, album_id, status, notes, added_at
+      )
+      INSERT INTO collections (id, album_id, status, notes, added_at)
+      SELECT collection_id, album_id, status, notes, added_at FROM removal
+      WHERE NOT EXISTS (
+        SELECT 1 FROM collections
+        JOIN albums ON albums.id = collections.album_id
+        JOIN artists ON artists.id = albums.artist_id
+        WHERE lower(artists.name) = lower($3) AND lower(albums.title) = lower($4)
+      )
+      ON CONFLICT DO NOTHING
+    `, [id, digest, original.artist_name, original.title]);
+    if (!restored.rowCount) throw new AppError(expiredRemovalUndo, 409);
+
+    const { rows: [album] } = await client.query<AlbumWithArtist>(savedAlbumQuery, [id]);
+    await client.query('COMMIT');
+    res.set('Cache-Control', 'no-store').json({ album });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 });
 
 export const updateAlbumNotes = asyncHandler(async (req: Request, res: Response) => {

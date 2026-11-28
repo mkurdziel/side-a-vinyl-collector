@@ -3,7 +3,7 @@ import { act, create } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Album, DiscogsAlbum, SearchResult } from '../src/services/api';
 
-const { getAlbum, getAlbums, getPressingDetails, search, searchCatalogNumber, addAlbum, updateStatus, updatePressing, deleteAlbum } = vi.hoisted(() => ({
+const { getAlbum, getAlbums, getPressingDetails, search, searchCatalogNumber, addAlbum, updateStatus, updatePressing, deleteAlbum, undoAlbumRemoval } = vi.hoisted(() => ({
   getAlbum: vi.fn(),
   getAlbums: vi.fn(),
   getPressingDetails: vi.fn(),
@@ -13,10 +13,12 @@ const { getAlbum, getAlbums, getPressingDetails, search, searchCatalogNumber, ad
   updateStatus: vi.fn(),
   updatePressing: vi.fn(),
   deleteAlbum: vi.fn(),
+  undoAlbumRemoval: vi.fn(),
 }));
 vi.mock('../src/services/api', async importOriginal => ({
   ...await importOriginal<typeof import('../src/services/api')>(),
-  default: { getAlbum, getAlbums, getPressingDetails, search, searchCatalogNumber, addAlbum, updateStatus, updatePressing, deleteAlbum, checkDiscogsConfig: async () => ({ configured: true }) },
+  default: { getAlbum, getAlbums, getPressingDetails, search, searchCatalogNumber, addAlbum, updateStatus, updatePressing,
+    deleteAlbum, undoAlbumRemoval, checkDiscogsConfig: async () => ({ configured: true }) },
   getCoverArtUrl: (id: number) => `/api/cover-art/${id}`,
 }));
 vi.mock('react-hot-toast', () => ({
@@ -146,12 +148,12 @@ describe('library and catalog search', () => {
     await chooseScope('catalog');
     expect(button('Open Blue Train by John Coltrane, Wishlist, saved record 1')).toBeDefined();
     expect(button('Add to Wishlist · Giant Steps by John Coltrane')).toBeUndefined();
-    expect(renderer.root.findAllByProps({ id: 'catalog-save-shelf' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ 'aria-label': 'Save to · Giant Steps' })).toHaveLength(0);
     expect(button('Wishlist')).toBeUndefined();
     expect(search).toHaveBeenCalledTimes(2);
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Coltrane');
     await act(async () => discovery.resolve({ local: [], discogs: [catalog] }));
-    const saveDefault = renderer.root.findByProps({ id: 'catalog-save-shelf' });
+    const saveDefault = renderer.root.findByProps({ 'aria-label': 'Save to · Giant Steps' });
     expect(saveDefault.props.value).toBe('collection');
     expect(button('Add to Collection · Giant Steps by John Coltrane')).toBeDefined();
     expect(button('Add to Wishlist · Giant Steps by John Coltrane')).toBeUndefined();
@@ -182,7 +184,7 @@ describe('library and catalog search', () => {
     expect(button('Back to Collection')).toBeDefined();
   });
 
-  it('keeps a catalog save bound to its original shelf when the default changes', async () => {
+  it('keeps an in-flight catalog save tied to the item’s chosen shelf', async () => {
     const add = Promise.withResolvers<{ album: Album }>();
     search.mockResolvedValue({ local: [], discogs: [catalog] });
     addAlbum.mockReturnValueOnce(add.promise);
@@ -191,7 +193,7 @@ describe('library and catalog search', () => {
     await editSearch('steps');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
 
-    const destination = renderer.root.findByProps({ id: 'catalog-save-shelf' });
+    const destination = renderer.root.findByProps({ 'aria-label': 'Save to · Giant Steps' });
     await act(async () => destination.props.onChange({ target: { value: 'wishlist' } }));
     const addButton = button('Add to Wishlist · Giant Steps by John Coltrane');
     await act(async () => addButton.props.onClick());
@@ -225,7 +227,7 @@ describe('library and catalog search', () => {
     await chooseScope('catalog');
     await editSearch('steps');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
-    await act(async () => renderer.root.findByProps({ id: 'catalog-save-shelf' }).props.onChange({ target: { value: 'wishlist' } }));
+    await act(async () => renderer.root.findByProps({ 'aria-label': 'Save to · Giant Steps' }).props.onChange({ target: { value: 'wishlist' } }));
     await act(async () => button('Add to Wishlist · Giant Steps by John Coltrane').props.onClick());
 
     await editSearch('Coltrane');
@@ -317,6 +319,32 @@ describe('library and catalog search', () => {
     expect(renderer.root.findByProps({ name: 'artist' }).props.defaultValue).toBe('Unknown Artist');
   });
 
+  it('keeps removal undo available and restores the same saved record after a delay', async () => {
+    const record = { ...saved, status: 'collection' as const, discogs_id: 22, notes: 'First pressing notes' };
+    let present = true;
+    getAlbums.mockImplementation(async () => ({ albums: present ? [record] : [] }));
+    deleteAlbum.mockImplementation(async () => {
+      present = false;
+      return { message: 'Album removed', undoToken: 'undo-removal', expiresAt: new Date(Date.now() + 600_000).toISOString() };
+    });
+    undoAlbumRemoval.mockImplementation(async () => {
+      present = true;
+      return { album: record };
+    });
+    await renderLibrary();
+    await act(async () => button('Open Blue Train by John Coltrane, Collection, Discogs release 22').props.onClick({ currentTarget: {} }));
+    await act(async () => button('Remove from Collection — Blue Train').props.onClick());
+    await act(async () => button('Remove album').props.onClick());
+    expect(button('Open Blue Train by John Coltrane, Collection, Discogs release 22')).toBeUndefined();
+    await act(async () => { await vi.advanceTimersByTimeAsync(7000); });
+    const notice = renderer.root.findByProps({ 'aria-label': 'Latest album removal' });
+    expect(notice.findByProps({ role: 'status' }).children.join('')).toBe('“Blue Train” removed from Collection.');
+    await act(async () => button('Undo removal').props.onClick());
+    expect(undoAlbumRemoval).toHaveBeenCalledExactlyOnceWith(record.id, 'undo-removal');
+    expect(notice.findByProps({ role: 'status' }).children.join('')).toBe('“Blue Train” restored to Collection.');
+    expect(button('Open Blue Train by John Coltrane, Collection, Discogs release 22')).toBeDefined();
+  });
+
   it('uses the same name scope from Add as from the search controls', async () => {
     search.mockResolvedValue({ local: [], discogs: [] });
     await renderLibrary();
@@ -328,6 +356,25 @@ describe('library and catalog search', () => {
     expect(renderer.root.findByProps({ id: 'search-scope' }).props.value).toBe('wishlist');
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Blue Train');
     expect(search).toHaveBeenCalledExactlyOnceWith('Blue Train', expect.any(AbortSignal), 'saved', 'wishlist', 0, 'title');
+    await act(async () => button('Search online catalogs').props.onClick());
+    expect(renderer.root.findByProps({ id: 'search-scope' }).props.value).toBe('catalog');
+    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Blue Train');
+    expect(search).toHaveBeenLastCalledWith('Blue Train', expect.any(AbortSignal), 'catalog', undefined, 0, 'title');
+  });
+
+  it('continues a catalog-number miss in online name search while keeping the name draft', async () => {
+    search.mockResolvedValue({ local: [], discogs: [] });
+    searchCatalogNumber.mockResolvedValue({ local: [], discogs: [] });
+    await renderLibrary();
+    await editSearch('Blue Train');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    await act(async () => button('Catalog number').props.onClick());
+    await editSearch('ABC-404');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    await act(async () => button('Search by album or artist').props.onClick());
+    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Blue Train');
+    expect(renderer.root.findByProps({ id: 'search-scope' }).props.value).toBe('catalog');
+    expect(search).toHaveBeenLastCalledWith('Blue Train', expect.any(AbortSignal), 'catalog', undefined, 0, 'title');
   });
 
   it('prefills edited details for manual entry beside populated catalog results', async () => {

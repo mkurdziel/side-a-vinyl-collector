@@ -26,13 +26,26 @@ function catalogNumberKey(value: string) {
   return value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().match(/[\p{L}\p{N}]+/gu)?.join('') ?? '';
 }
 
+function listedCatalogNumbers(value?: string) {
+  return (value ?? '').split('·').map(part => part.trim()).filter(part => {
+    const key = catalogNumberKey(part);
+    return key && key !== 'none';
+  });
+}
+
+export function preferredCatalogNumber(value?: string, searchedNumber = '') {
+  const numbers = listedCatalogNumbers(value);
+  const searchedKey = catalogNumberKey(searchedNumber);
+  return numbers.find(number => catalogNumberKey(number) === searchedKey) ?? numbers[0];
+}
+
 export function sharedCatalogNumber(choices: readonly PressingCandidate[], searchedNumber?: string) {
   const entered = searchedNumber?.trim() ?? '';
   const enteredKey = catalogNumberKey(entered);
   const numbers = new Map<string, { number: string; releases: Set<number> }>();
 
   for (const choice of choices) {
-    const parts = choice.pressing?.catalogNumber?.split('·') ?? [];
+    const parts = listedCatalogNumbers(choice.pressing?.catalogNumber);
     if (enteredKey && choice.catalogNumberMatch === 'exact') parts.push(entered);
     for (const part of parts) {
       const key = catalogNumberKey(part);
