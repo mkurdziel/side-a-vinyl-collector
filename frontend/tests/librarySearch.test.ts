@@ -108,7 +108,7 @@ describe('library and catalog search', () => {
     const shortTitle = { ...saved, id: 20, title: 'O', artist_name: 'Unknown Fixture Artist' };
     search.mockResolvedValue({ local: [shortTitle], discogs: [] });
     await renderLibrary();
-    await act(async () => button('Include catalogs').props.onClick());
+    await act(async () => button('Search catalogs too').props.onClick());
     await editSearch('O');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
     expect(search).not.toHaveBeenCalled();
@@ -121,7 +121,7 @@ describe('library and catalog search', () => {
     await act(async () => renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }));
     expect(search).toHaveBeenCalledExactlyOnceWith('O', expect.any(AbortSignal), 'saved', undefined, 0, 'title');
     expect(button('Open O by Unknown Fixture Artist, Wishlist, saved record 20')).toBeDefined();
-    expect(button('Include catalogs')).toBeUndefined();
+    expect(button('Search catalogs too')).toBeUndefined();
     expect(renderer.root.findByProps({ className: 'rh-lookup-source' }).children.join('')).toBe('Both shelves · Exact name');
     expect(renderer.root.findByProps({ id: 'search-scope' }).props.value).toBe('catalog');
     expect(readSearchSession()?.drafts.name).toMatchObject({ query: 'O', scope: 'catalog', exactName: true });
@@ -144,7 +144,12 @@ describe('library and catalog search', () => {
 
   it('keeps lookup controls in reading order as a long catalog number is typed and submitted', async () => {
     searchCatalogNumber.mockResolvedValue({ local: [], discogs: [] });
-    await renderLibrary();
+    const focusCatalogResults = vi.fn();
+    await act(async () => {
+      renderer = create(createElement(App), { createNodeMock: element => (
+        element.props.id === 'catalog-results-title' ? { focus: focusCatalogResults } : null
+      ) });
+    });
     await act(async () => button('Catalog number').props.onClick());
 
     const form = renderer.root.findByType('form');
@@ -159,8 +164,11 @@ describe('library and catalog search', () => {
     expect(tabOrder()).toEqual(lookupControls);
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('4006381333931');
     expect(button('Look up in Discogs').props.type).toBe('submit');
+    expect(focusCatalogResults).not.toHaveBeenCalled();
     await act(async () => form.props.onSubmit({ preventDefault: () => {} }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(16); });
     expect(searchCatalogNumber).toHaveBeenCalledExactlyOnceWith('4006381333931', expect.any(AbortSignal), 0);
+    expect(focusCatalogResults).toHaveBeenCalledOnce();
 
     await act(async () => button('Clear search').props.onClick());
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('');
@@ -310,8 +318,10 @@ describe('library and catalog search', () => {
     expect(search).toHaveBeenCalledExactlyOnceWith('Coltrane', expect.any(AbortSignal), 'saved', undefined, 0, 'title');
     expect(button('Open Blue Train by John Coltrane, Wishlist, saved record 1')).toBeDefined();
 
-    await act(async () => button('Include catalogs').props.onClick());
+    expect(renderer.root.findAllByType('button').filter(node => node.children.join('') === 'Search catalogs too')).toHaveLength(1);
+    await act(async () => button('Search catalogs too').props.onClick());
     expect(button('Open Blue Train by John Coltrane, Wishlist, saved record 1')).toBeDefined();
+    expect(button('Search catalogs too')).toBeUndefined();
     expect(button('Add to Wishlist · Giant Steps by John Coltrane')).toBeUndefined();
     expect(renderer.root.findAllByProps({ 'aria-label': 'Save new matches to' })).toHaveLength(0);
     expect(button('Wishlist')).toBeUndefined();
@@ -325,6 +335,9 @@ describe('library and catalog search', () => {
     await act(async () => saveDefault.props.onChange({ target: { value: 'wishlist' } }));
     expect(button('Add to Wishlist · Giant Steps by John Coltrane')).toBeDefined();
     expect(saveDefault.props.value).toBe('wishlist');
+    await chooseScope('saved');
+    await act(async () => button('Search catalogs too').props.onClick());
+    expect(renderer.root.findByProps({ 'aria-label': 'Save new matches to' }).props.value).toBe('wishlist');
 
     await act(async () => button('Back to Collection').props.onClick());
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('');
@@ -348,6 +361,36 @@ describe('library and catalog search', () => {
     expect(search).toHaveBeenLastCalledWith('Coltrane', expect.any(AbortSignal), 'saved', 'wishlist', 0, 'title');
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Coltrane');
     expect(button('Back to Collection')).toBeDefined();
+  });
+
+  it('widens an empty scoped search once and resumes without changing its shelf or save destination', async () => {
+    const discovery = Promise.withResolvers<SearchResult>();
+    search.mockImplementation((_query, _signal, scope) => scope === 'catalog' ? discovery.promise : Promise.resolve({ local: [], discogs: [] }));
+    await renderLibrary();
+    await chooseScope('wishlist');
+    await editSearch('Coltrane');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(JSON.stringify(renderer.toJSON())).toContain('No saved albums match');
+    expect(renderer.root.findAllByType('button').filter(node => node.children.join('') === 'Search catalogs too')).toHaveLength(1);
+
+    await act(async () => button('Search catalogs too').props.onClick());
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(search).toHaveBeenLastCalledWith('Coltrane', expect.any(AbortSignal), 'catalog', undefined, 0, 'title');
+    expect(JSON.stringify(renderer.toJSON())).toContain('No saved albums match');
+    expect(button('Search catalogs too')).toBeUndefined();
+    const statuses = renderer.root.findAllByProps({ role: 'status' });
+    expect(statuses.filter(node => node.children.join('') === 'Searching online catalogs…')).toHaveLength(1);
+    await act(async () => discovery.resolve({ local: [], discogs: [catalog] }));
+    expect(renderer.root.findByProps({ 'aria-label': 'Save new matches to' }).props.value).toBe('collection');
+    expect(readSearchSession()?.drafts.name).toMatchObject({ query: 'Coltrane', scope: 'wishlist-catalog', destination: 'collection' });
+
+    await act(async () => renderer.unmount());
+    search.mockClear();
+    await renderLibrary();
+    expect(search).toHaveBeenCalledWith('Coltrane', expect.any(AbortSignal), 'saved', 'wishlist', 0, 'title');
+    expect(search).toHaveBeenCalledWith('Coltrane', expect.any(AbortSignal), 'catalog', undefined, 0, 'title');
+    expect(button('Search options, Name search, Wishlist and catalogs')).toBeDefined();
+    expect(renderer.root.findByProps({ 'aria-label': 'Save new matches to' }).props.value).toBe('collection');
   });
 
   it('keeps an in-flight catalog save tied to the item’s chosen shelf', async () => {
@@ -530,7 +573,7 @@ describe('library and catalog search', () => {
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Blue Train');
     expect(search).toHaveBeenCalledWith('Blue Train', expect.any(AbortSignal), 'saved', undefined, 0, 'title');
     expect(search).toHaveBeenLastCalledWith('Blue Train', expect.any(AbortSignal), 'catalog', undefined, 0, 'title');
-    expect(button('Include catalogs')).toBeUndefined();
+    expect(button('Search catalogs too')).toBeUndefined();
     expect(button('Return to Collection')).toBeDefined();
 
     await act(async () => button('Clear search').props.onClick());

@@ -25,12 +25,18 @@ export type ImportReviewWorkingContext = {
   releaseId?: number;
 };
 
+export type ImportClearReceipt = {
+  choices: ImportReviewChoice[];
+  destination: Shelf;
+};
+
 export type ImportReviewDraft = {
   choices: ImportReviewChoice[];
   notices: ImportReviewNotice[];
   destination: Shelf;
   lastPage: number;
   working?: ImportReviewWorkingContext;
+  cleared?: ImportClearReceipt;
 };
 
 export const entryFor = ({ discogsId, artist, album, year, coverImageUrl, pressing }: ImportAlbum, destination: Shelf): ImportEntry => ({
@@ -56,6 +62,19 @@ function isReviewChoice(value: unknown): value is ImportReviewChoice {
     (source === 'chosen' || source === 'bulk');
 }
 
+function readReviewChoices(value: unknown): Map<string, ImportReviewChoice> {
+  const choices = Array.isArray(value) ? value.filter(isReviewChoice) : [];
+  return new Map(choices.map(choice => [importTitleKey(choice.artist, choice.album), choice]));
+}
+
+function readClearReceipt(value: unknown): ImportClearReceipt | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const { choices, destination } = value as Partial<ImportClearReceipt>;
+  const validated = [...readReviewChoices(choices).values()];
+  if (!isShelf(destination) || !validated.length) return undefined;
+  return { choices: validated, destination };
+}
+
 function isReviewNotice(value: unknown): value is ImportReviewNotice {
   if (!value || typeof value !== 'object') return false;
   const notice = value as ImportReviewNotice;
@@ -75,16 +94,16 @@ export function readImportReview(): ImportReviewDraft | null {
   try {
     const raw = globalThis.sessionStorage.getItem(reviewKey);
     if (!raw) return null;
-    const { choices, notices, destination, lastPage, working } = JSON.parse(raw) as ImportReviewDraft;
+    const { choices, notices, destination, lastPage, working, cleared } = JSON.parse(raw) as ImportReviewDraft;
     if (!isShelf(destination) || !Number.isSafeInteger(lastPage) || lastPage < 1 || !Array.isArray(choices)) return null;
-    const unique = new Map<string, ImportReviewChoice>();
-    for (const choice of choices.filter(isReviewChoice)) unique.set(importTitleKey(choice.artist, choice.album), choice);
+    const unique = readReviewChoices(choices);
     const pending = new Map<string, ImportReviewNotice>();
     for (const notice of Array.isArray(notices) ? notices.filter(isReviewNotice) : []) {
       const title = importTitleKey(notice.choice.artist, notice.choice.album);
       if (!unique.has(title)) pending.set(title, notice);
     }
-    return { choices: [...unique.values()], notices: [...pending.values()], destination, lastPage, working: readWorkingContext(working) };
+    return { choices: [...unique.values()], notices: [...pending.values()], destination, lastPage, working: readWorkingContext(working),
+      cleared: unique.size ? undefined : readClearReceipt(cleared) };
   } catch {
     return null;
   }

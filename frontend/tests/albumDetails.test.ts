@@ -172,8 +172,10 @@ describe('pressing comparison evidence', () => {
     await act(async () => select.props.onChange({ target: { value: '3' } }));
     expect(lookupSignal.aborted).toBe(false);
     expect(oldSavedSignal.aborted).toBe(true);
-    await act(async () => button('Compare listings').props.onClick());
-    expect(releaseStatuses()).toEqual(['Catalog listing: Checking Discogs…', 'Saved copy: No pressing linked']);
+    expect(button('Compare listings')).toBeUndefined();
+    await act(async () => button('Inspect listing evidence').props.onClick());
+    expect(textOf(renderer!.root.findByType('thead'))).toBe('EvidenceCatalog listing 410');
+    expect(evidenceTable()).toBeUndefined();
 
     await act(async () => renderer!.unmount());
     renderer = undefined;
@@ -319,9 +321,9 @@ describe('pressing comparison evidence', () => {
     await act(async () => pending.reject(new Error('Offline')));
     expect(textOf(renderer!.root.findByProps({ role: 'alert' }))).toContain('Couldn’t update this saved pressing');
     await act(async () => button('Retry saving pressing').props.onClick());
-    expect(values('Release year')).toEqual(['2017', '2017']);
     expect(onSavePressing).toHaveBeenCalledTimes(2);
-    expect(values('Discogs release ID')).toEqual(['430', '430']);
+    expect(evidenceTable()).toBeUndefined();
+    expect(textOf(renderer!.root.findByType('thead'))).toContain('Saved pressing selected 430');
     expect(textOf(renderer!.root)).toContain('Pressing updated. Saved in Collection · Discogs release 430');
     expect(renderer!.root.findByType('time').props.dateTime).toBe(expiresAt);
     expect(textOf(renderer!.root.findByType('time').parent!)).toContain('here or in Recent library changes.');
@@ -393,7 +395,7 @@ describe('pressing comparison evidence', () => {
       renderer!.update(render(440));
       pending.reject(new Error('Saved pressing changed'));
     });
-    expect(textOf(renderer!.root)).toContain('The saved pressing changed. Open Compare listings to check the update before confirming again.');
+    expect(textOf(renderer!.root)).toContain('The saved pressing changed. Open the listing evidence before confirming again.');
     await act(async () => button('Compare listings').props.onClick());
     expect(values('Discogs release ID')).toEqual(['410', '440']);
     expect(button('Retry saving pressing')).toBeUndefined();
@@ -510,7 +512,9 @@ describe('saving a new catalog pressing', () => {
     await act(async () => submit());
     expect(onSave).not.toHaveBeenCalled();
 
-    await act(async () => button('Compare listings').props.onClick());
+    expect(button('Compare listings')).toBeUndefined();
+    await act(async () => button('Inspect listing evidence').props.onClick());
+    expect(textOf(renderer!.root.findByType('thead'))).toBe('EvidenceCatalog listing 410');
     await act(async () => button('Check runout marks').props.onClick());
     await act(async () => button('Retry runout markings').props.onClick());
     expect(getPressingDetails.mock.calls.map(([id]) => id)).toEqual([410, 410]);
