@@ -147,7 +147,7 @@ class DiscogsService {
   }
 
   async getRelease(releaseId: number, { reportUnavailable = false } = {}): Promise<DiscogsAlbum | null> {
-    const cacheKey = `release:v2:${releaseId}`;
+    const cacheKey = `release:v3:${releaseId}`;
     const cached = await this.getCached<DiscogsAlbum>(cacheKey);
     if (cached) return cached;
 
@@ -157,7 +157,7 @@ class DiscogsService {
         return response.data;
       });
 
-      const album = this.parseDiscogsRelease(result);
+      const album = this.parseDiscogsRelease(result, true);
       album.pressing = this.parsePressingDetails(result);
       await this.setCache(cacheKey, album);
       return album;
@@ -313,7 +313,7 @@ class DiscogsService {
     }
   }
 
-  private parseDiscogsRelease(release: any): DiscogsAlbum {
+  private parseDiscogsRelease(release: any, fullRelease = false): DiscogsAlbum {
     // Extract artist and album from title
     // Discogs search results format: "Artist Name - Album Title"
     // Release details have separate artist and title fields
@@ -322,7 +322,7 @@ class DiscogsService {
 
     if (release.title) {
       // Check if title contains " - " separator (search results format)
-      const separator = release.title.indexOf(' - ');
+      const separator = fullRelease ? -1 : release.title.indexOf(' - ');
       if (separator > 0) {
         artist = release.title.substring(0, separator).trim();
         album = release.title.substring(separator + 3).trim();
@@ -332,7 +332,11 @@ class DiscogsService {
     }
 
     // Override with explicit artist/artists field if available (release details)
-    if (release.artist) {
+    if (fullRelease && Array.isArray(release.artists) && release.artists.length > 1) {
+      artist = release.artists_sort || release.artists
+        .map((credit: { name?: string; join?: string } | null) => [credit?.name, credit?.join].filter(Boolean).join(' '))
+        .join(' ');
+    } else if (release.artist) {
       artist = release.artist;
     } else if (release.artists && release.artists[0]?.name) {
       artist = release.artists[0].name;

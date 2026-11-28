@@ -18,6 +18,7 @@ interface SaveDestinationActionsProps {
   savedHere?: boolean;
   titleMatches?: SavedTitleMatch[];
   lookup?: LookupPressing;
+  lookupChoices?: LookupPressing[];
   onSearch?: () => void;
   searchLabel?: string;
   openingSaved?: boolean;
@@ -26,6 +27,8 @@ interface SaveDestinationActionsProps {
   onSelect: (action: DestinationAction) => void;
   onOpenSaved?: OpenSavedAlbum;
   onReviewPressings?: (opener: HTMLButtonElement) => void;
+  reviewFirst?: boolean;
+  onSavePressing?: (copy: SavedTitleMatch, releaseId: number) => Promise<SavedTitleMatch>;
 }
 
 interface DestinationChoice {
@@ -34,8 +37,8 @@ interface DestinationChoice {
 }
 
 export function SaveDestinationActions({
-  albumTitle, catalogLabel, preferred, existingStatus, existingMatch, existingAlbumId, savedHere, titleMatches, lookup, onSearch, searchLabel,
-  openingSaved, pending, disabled, onSelect, onOpenSaved, onReviewPressings,
+  albumTitle, catalogLabel, preferred, existingStatus, existingMatch, existingAlbumId, savedHere, titleMatches, lookup, lookupChoices, onSearch, searchLabel,
+  openingSaved, pending, disabled, onSelect, onOpenSaved, onReviewPressings, reviewFirst, onSavePressing,
 }: SaveDestinationActionsProps) {
   const [comparing, setComparing] = useState(false);
   const statusId = useId();
@@ -43,15 +46,16 @@ export function SaveDestinationActions({
   const addButton = useRef<HTMLButtonElement>(null);
   const blocked = !!pending || !!disabled || !!openingSaved;
   const titleOnly = existingStatus && !isExactSavedMatch(existingMatch);
-  const matches = titleMatches?.length ? titleMatches : !titleOnly || existingAlbumId == null ? [] : [{
+  const matches = titleMatches?.length ? titleMatches : !existingStatus || existingAlbumId == null ? [] : [{
     id: existingAlbumId, title: albumTitle, artist_name: lookup?.artist ?? '', status: existingStatus,
+    discogs_id: existingMatch === 'release' ? lookup?.releaseId : undefined,
   }];
   const savedId = existingAlbumId ?? (matches.length === 1 ? matches[0].id : undefined);
   const savedShelfNames = [...new Set(matches.map(copy => shelfNames[copy.status]))];
   const matchedShelves = savedShelfNames.length ? savedShelfNames.join(' and ') : existingStatus && shelfNames[existingStatus];
   const savedPressing = matches.length === 1 ? savedPressingLabel(matches[0]) : undefined;
   const comparison = comparing && onOpenSaved && (
-    <PressingComparison title={albumTitle} lookup={lookup} matches={matches}
+    <PressingComparison title={albumTitle} lookup={lookup} lookupChoices={lookupChoices} matches={matches} onSavePressing={onSavePressing}
       returnFocusTo={compareButton} fallbackFocusTo={addButton} onClose={() => setComparing(false)} onOpenSaved={onOpenSaved}
       searchLabel={searchLabel} onSearch={onSearch && (() => { setComparing(false); onSearch(); })} />
   );
@@ -60,12 +64,14 @@ export function SaveDestinationActions({
     const destination = pending && pending !== 'move' ? pending : preferred;
     const name = shelfNames[destination];
     const canOpen = !!onOpenSaved && savedId != null;
-    const canCompare = titleOnly && !!onOpenSaved && matches.length > 0;
-    const compareFirst = canCompare && (!savedHere || !canOpen);
+    const canCompare = (titleOnly || !!lookupChoices?.some(choice => choice.releaseId !== lookup?.releaseId)) && !!onOpenSaved && matches.length > 0;
+    const compareFirst = canCompare && ((titleOnly && !savedHere) || !canOpen);
+    const reviewIsPrimary = !existingStatus && !!onReviewPressings && !!reviewFirst;
     const canMove = existingStatus === 'wishlist' && existingAlbumId != null && isExactSavedMatch(existingMatch);
-    const opensDialog = !!existingStatus && (canOpen || canCompare);
+    const opensDialog = reviewIsPrimary || (!!existingStatus && (canOpen || canCompare));
     const savedRecordLabel = titleOnly && matches.length === 1 ? savedCopyLabel(matches[0]) : catalogLabel;
-    const primaryLabel = !existingStatus ? (pending === destination ? `Adding to ${name}…` : `Add to ${name}`)
+    const primaryLabel = !existingStatus ? (pending === destination ? `Adding to ${name}…`
+      : reviewIsPrimary ? 'Review and save pressing' : onReviewPressings ? `Add album to ${name}` : `Add to ${name}`)
       : compareFirst ? 'Compare pressings' : openingSaved ? 'Opening album…' : canOpen ? 'Open saved album' : 'Saved album';
     const savedLabel = titleOnly && !savedHere ? `Title already in ${matchedShelves}`
       : `${existingMatch === 'release' ? 'This pressing' : 'Album'} saved in ${matchedShelves}`;
@@ -78,9 +84,14 @@ export function SaveDestinationActions({
           {existingStatus && <>{savedLabel}{titleOnly && savedPressing && ` · ${savedEdition}`}</>}
         </p>
         {titleOnly && !savedHere && <p className="rh-album-level-hint">One saved entry per artist and title.</p>}
-        {!existingStatus && onReviewPressings && <p className="rh-album-level-hint">Add the album, or check a pressing first.</p>}
+        {!existingStatus && onReviewPressings && <p className="rh-album-level-hint">
+          {reviewIsPrimary ? 'Check the sleeve or label before saving.' : 'Adding the album leaves its pressing unconfirmed.'}
+        </p>}
         {/* The Add control becomes the saved-record action on the same DOM node. */}
-        <button type="button" data-catalog-primary ref={compareFirst ? compareButton : addButton}
+        <button type="button" data-catalog-primary ref={element => {
+          addButton.current = element;
+          if (compareFirst) compareButton.current = element;
+        }}
           className={existingStatus ? 'rh-lookup-link text-left' : 'min-h-11 rounded-lg border border-gray-300 bg-gray-100 px-2 py-1.5 text-xs font-semibold text-gray-900 hover:bg-gray-50'}
           aria-label={compareFirst ? `Compare pressings for ${catalogLabel}` : `${primaryLabel} · ${canOpen ? savedRecordLabel : catalogLabel}`}
           aria-describedby={existingStatus ? statusId : undefined}
@@ -88,13 +99,17 @@ export function SaveDestinationActions({
           aria-haspopup={opensDialog ? 'dialog' : undefined}
           onClick={event => {
             if (blocked) return;
-            if (!existingStatus) onSelect(destination);
+            if (reviewIsPrimary) onReviewPressings(event.currentTarget);
+            else if (!existingStatus) onSelect(destination);
             else if (compareFirst) compare();
             else if (canOpen) void onOpenSaved(savedId, event.currentTarget);
           }}>
           {primaryLabel}
         </button>
-        {!existingStatus && onReviewPressings && <button type="button" className="rh-lookup-link text-left"
+        {reviewIsPrimary && <button type="button" className="rh-lookup-link text-left" aria-disabled={blocked}
+          aria-label={`Save album without pressing to ${name} · ${catalogLabel}`}
+          onClick={() => { if (!blocked) onSelect(destination); }}>Save album without pressing</button>}
+        {!existingStatus && onReviewPressings && !reviewIsPrimary && <button type="button" className="rh-lookup-link text-left"
           aria-disabled={blocked} aria-haspopup="dialog" aria-label={`Check pressings for ${catalogLabel}`}
           onClick={event => { if (!blocked) onReviewPressings(event.currentTarget); }}>Check pressings</button>}
         {canCompare && !compareFirst && <button ref={compareButton} type="button" className="rh-lookup-link text-left"

@@ -3,7 +3,7 @@ import { act, create } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Album, DiscogsAlbum, SearchResult } from '../src/services/api';
 
-const { getAlbum, getAlbums, getPressingDetails, search, searchCatalogNumber, addAlbum, updateStatus, deleteAlbum } = vi.hoisted(() => ({
+const { getAlbum, getAlbums, getPressingDetails, search, searchCatalogNumber, addAlbum, updateStatus, updatePressing, deleteAlbum } = vi.hoisted(() => ({
   getAlbum: vi.fn(),
   getAlbums: vi.fn(),
   getPressingDetails: vi.fn(),
@@ -11,11 +11,12 @@ const { getAlbum, getAlbums, getPressingDetails, search, searchCatalogNumber, ad
   searchCatalogNumber: vi.fn(),
   addAlbum: vi.fn(),
   updateStatus: vi.fn(),
+  updatePressing: vi.fn(),
   deleteAlbum: vi.fn(),
 }));
 vi.mock('../src/services/api', async importOriginal => ({
   ...await importOriginal<typeof import('../src/services/api')>(),
-  default: { getAlbum, getAlbums, getPressingDetails, search, searchCatalogNumber, addAlbum, updateStatus, deleteAlbum, checkDiscogsConfig: async () => ({ configured: true }) },
+  default: { getAlbum, getAlbums, getPressingDetails, search, searchCatalogNumber, addAlbum, updateStatus, updatePressing, deleteAlbum, checkDiscogsConfig: async () => ({ configured: true }) },
   getCoverArtUrl: (id: number) => `/api/cover-art/${id}`,
 }));
 vi.mock('react-hot-toast', () => ({
@@ -56,7 +57,7 @@ async function editSearch(value: string) {
   });
 }
 
-async function chooseScope(value: 'saved' | 'collection' | 'wishlist' | 'catalog' | 'catalog-number') {
+async function chooseScope(value: 'saved' | 'collection' | 'wishlist' | 'catalog') {
   await act(async () => renderer.root.findByProps({ id: 'search-scope' }).props.onChange({ target: { value } }));
 }
 
@@ -529,14 +530,16 @@ describe('library and catalog search', () => {
     searchCatalogNumber.mockResolvedValue({ local: [], discogs: [{ ...first, pressingChoices: [first, second], catalogNumberMatch: 'exact' }] });
     addAlbum.mockResolvedValue({ album: { ...saved, title: catalog.album, status: 'collection', discogs_id: 102 } });
     await renderLibrary();
-    await chooseScope('catalog-number');
+    await act(async () => button('Add Album').props.onClick());
+    await act(async () => renderer.root.findByType(AddMenu).props.onCatalogNumberClick());
     await editSearch('ABC-123');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
     expect(search).not.toHaveBeenCalled();
     expect(searchCatalogNumber).toHaveBeenCalledExactlyOnceWith('ABC-123', expect.any(AbortSignal), 0);
     expect(JSON.stringify(renderer.toJSON())).toContain('Catalog number matches');
 
-    await act(async () => button('Check pressings for Giant Steps by John Coltrane, Discogs release 101')
+    expect(button('Save album without pressing to Collection · Giant Steps by John Coltrane, Discogs release 101')).toBeDefined();
+    await act(async () => button('Review and save pressing · Giant Steps by John Coltrane, Discogs release 101')
       .props.onClick({ currentTarget: { closest: () => null } }));
     const picker = renderer.root.findByType(CatalogPressingPicker);
     expect(addAlbum).not.toHaveBeenCalled();
@@ -554,11 +557,36 @@ describe('library and catalog search', () => {
     await chooseScope('catalog');
     await editSearch('Giant Steps');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
-    await act(async () => button('Add to Collection · Giant Steps by John Coltrane, 2019, Discogs release 101').props.onClick());
+    await act(async () => button('Add album to Collection · Giant Steps by John Coltrane, 2019, Discogs release 101').props.onClick());
     expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       status: 'collection', catalogListing: { source: 'discogs', kind: 'master', id: 60 },
     }));
     expect(addAlbum.mock.lastCall?.[0].discogsId).toBeUndefined();
     expect(addAlbum.mock.lastCall?.[0].year).toBeUndefined();
+  });
+
+  it('keeps the saved result and comparison open after confirming an alternate pressing', async () => {
+    const copy = { ...saved, title: catalog.album, notes: 'Keep these notes' };
+    const first = { ...catalog, discogsListing: 'release' as const, pressing: { catalogNumber: '100', format: 'Vinyl' } };
+    const alternate = { ...first, id: 102, discogsId: 102, pressing: { catalogNumber: '102', format: 'Vinyl' } };
+    search.mockImplementation(async (_query, _signal, kind) => kind === 'saved'
+      ? { local: [copy], discogs: [], nextOffset: 20 }
+      : { local: [], discogs: [{ ...first, pressingChoices: [first, alternate], inWishlist: true, existingMatch: 'title', titleMatches: [copy] }] });
+    updatePressing.mockResolvedValue({ album: { ...copy, discogs_id: 102 } });
+    await renderLibrary();
+    await chooseScope('catalog');
+    await editSearch('Giant Steps');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    await act(async () => button('Compare pressings for Giant Steps by John Coltrane, Discogs release 101').props.onClick());
+    const dialog = renderer.root.findByType(PressingComparison);
+    await act(async () => dialog.findByType('select').props.onChange({ target: { value: '102' } }));
+    await act(async () => button('Use this pressing').props.onClick());
+    expect(updatePressing).not.toHaveBeenCalled();
+    await act(async () => button('Confirm pressing').props.onClick());
+    expect(updatePressing).toHaveBeenCalledExactlyOnceWith(copy.id, 102, null);
+    expect(JSON.stringify(renderer.toJSON())).toContain('Pressing updated. ');
+    expect(button('Open Giant Steps by John Coltrane, Wishlist, Discogs release 102')).toBeDefined();
+    expect(button('Load more saved albums')).toBeDefined();
+    expect(search).toHaveBeenCalledTimes(2);
   });
 });

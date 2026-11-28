@@ -15,6 +15,7 @@ export interface PressingDetails {
   label?: string;
   catalogNumber?: string;
   country?: string;
+  year?: number;
 }
 
 export type CatalogNumberMatch = 'exact' | 'unverified';

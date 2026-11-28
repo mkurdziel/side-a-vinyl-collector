@@ -9,11 +9,12 @@ interface AlbumDetailModalProps {
   onClose: () => void;
   shelfActions?: ReactNode;
   onRefresh: (updatedAlbum?: Album) => void;
+  onFindPressing?: (album: Album) => void;
   backToMatches?: boolean;
   returnFocusTo?: RefObject<HTMLElement | null>;
 }
 
-export const AlbumDetailModal = ({ album, onClose, onRefresh, shelfActions, backToMatches, returnFocusTo }: AlbumDetailModalProps) => {
+export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, shelfActions, backToMatches, returnFocusTo }: AlbumDetailModalProps) => {
   const [refetching, setRefetching] = useState(false);
   const [currentAlbum, setCurrentAlbum] = useState<Album>(album);
   const [receivedAlbum, setReceivedAlbum] = useState(album);
@@ -125,7 +126,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, shelfActions, back
               <p className="mt-1 text-base text-gray-600">{currentAlbum.artist_name}</p>
               <p className="mt-2 text-sm font-medium text-gray-700">
                 {currentAlbum.status === 'wishlist' ? 'Wishlist' : 'Collection'}
-                {currentAlbum.year ? ` · ${currentAlbum.year}` : ''}
+                {currentAlbum.year ? ` · Album year ${currentAlbum.year}` : ''}
               </p>
             </div>
           </div>
@@ -144,6 +145,8 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, shelfActions, back
                   </a>
                 ) : null}
               </dd>
+              {onFindPressing && <dd><button type="button" className="rh-lookup-link text-left"
+                onClick={() => onFindPressing(currentAlbum)}>{source?.kind === 'pressing' ? 'Review other pressings' : 'Find a pressing'}</button></dd>}
             </div>
             <div className="min-w-0 [overflow-wrap:anywhere]">
               <dt className="text-sm font-medium text-gray-700">Cover image source</dt>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import Quagga, { type QuaggaJSConfigObject, type QuaggaJSResultObject } from '@ericblade/quagga2';
+import type { QuaggaJSConfigObject, QuaggaJSResultObject } from '@ericblade/quagga2';
 
 // Quagga owns one camera globally. Wait for asynchronous camera release before
 // opening another lens, retrying, or mounting a new scanner.
@@ -20,6 +20,7 @@ export const useBarcodeScanner = (onDetected: (barcode: string) => void, isActiv
   useEffect(() => {
     if (!isActive || !scannerRef.current) return;
     let cancelled = false;
+    let cameraScanner: typeof import('@ericblade/quagga2')['default'] | undefined;
 
     const config: QuaggaJSConfigObject = {
       inputStream: {
@@ -60,6 +61,9 @@ export const useBarcodeScanner = (onDetected: (barcode: string) => void, isActiv
     const initialization = cameraRelease.then(async () => {
       if (cancelled) return;
       setError(null);
+      const { default: Quagga } = await import('@ericblade/quagga2');
+      if (cancelled) return;
+      cameraScanner = Quagga;
       await new Promise<void>((resolve, reject) => {
         Quagga.init(config, err => err ? reject(err) : resolve());
       });
@@ -77,8 +81,8 @@ export const useBarcodeScanner = (onDetected: (barcode: string) => void, isActiv
 
     return () => {
       cancelled = true;
-      Quagga.offDetected(handleDetected);
-      cameraRelease = initialization.then(() => Quagga.stop()).catch(() => {
+      cameraScanner?.offDetected(handleDetected);
+      cameraRelease = initialization.then(() => cameraScanner?.stop()).catch(() => {
         console.warn('Unable to release barcode camera.');
       });
     };

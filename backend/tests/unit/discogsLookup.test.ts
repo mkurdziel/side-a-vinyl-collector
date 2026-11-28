@@ -64,6 +64,23 @@ function pressingDetails() {
 }
 
 describe('Discogs pressing lookup', () => {
+  it('includes the actual release year in the pressing evidence', async () => {
+    get.mockResolvedValue({ data: { id: 11, title: 'Dummy', year: 2017, artists: [{ name: 'Portishead' }] } });
+    await expect(pressingDetails()).resolves.toMatchObject({ status: 200, body: { pressing: { year: 2017 } } });
+  });
+  it('keeps the complete album title in a full release response', async () => {
+    get.mockResolvedValueOnce({ data: { id: 11, title: 'Side A - Side B', artists: [{ name: 'Artist (2)' }] } });
+
+    await expect(discogs.getRelease(11)).resolves.toMatchObject({ artist: 'Artist (2)', album: 'Side A - Side B' });
+    expect(getCached).toHaveBeenCalledExactlyOnceWith('discogs:release:v3:11');
+  });
+
+  it('keeps the full artist credit for a collaborative release', async () => {
+    get.mockResolvedValueOnce({ data: { id: 11, title: 'Album', artists: [{ name: 'First', join: '&' }, { name: 'Second' }] } });
+
+    await expect(discogs.getRelease(11)).resolves.toMatchObject({ artist: 'First & Second' });
+  });
+
   it('reports a retryable provider failure while other release callers keep their fallback', async () => {
     get.mockRejectedValue({ isAxiosError: true, code: 'ERR_BAD_RESPONSE', response: { status: 503 } });
 

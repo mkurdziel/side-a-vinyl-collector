@@ -359,6 +359,8 @@ summary:focus-visible,
 
 .rh-catalog-source {
   display: inline-flex;
+  grid-area: 3 / 2;
+  justify-self: start;
   align-items: center;
   min-height: 44px;
   color: var(--rh-info);
@@ -825,6 +827,7 @@ html:has(.rh-dialog[open]) .rh-page-toaster { display: none; }
     grid-template-columns: 64px minmax(0, 1fr);
   }
   .rh-catalog-actions { grid-column: 1 / -1; }
+  .rh-catalog-source { grid-column: 1 / -1; }
   .rh-catalog-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
   .rh-catalog-destination { display: grid; min-width: 0; gap: 2px; font-size: 0.75rem; }
   .rh-catalog-bar-sticky { top: 0; }
