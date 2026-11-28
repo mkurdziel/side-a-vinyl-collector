@@ -34,6 +34,7 @@ export const search = asyncHandler(async (req: Request, res: Response) => {
 
   const query = q.trim();
   const byCatalogNumber = by === 'catalog-number';
+  const exactSavedName = scope === 'saved' && [...query].length === 1;
   if (byCatalogNumber && !catalogNameKey(query)) {
     throw new AppError('Enter a catalog number', 400);
   }
@@ -60,11 +61,12 @@ export const search = asyncHandler(async (req: Request, res: Response) => {
     JOIN albums ON collections.album_id = albums.id
     JOIN artists ON albums.artist_id = artists.id
     WHERE ($2::text IS NULL OR collections.status = $2) AND (
-      artists.name ILIKE '%' || $1 || '%'
-      OR albums.title ILIKE '%' || $1 || '%'
-      OR (artists.name || ' ' || albums.title) ILIKE '%' || $1 || '%'
-      OR similarity(artists.name, $1) > 0.3
-      OR similarity(albums.title, $1) > 0.3
+      CASE WHEN $6::boolean THEN lower(artists.name) = lower($1) OR lower(albums.title) = lower($1)
+      ELSE artists.name ILIKE '%' || $1 || '%'
+        OR albums.title ILIKE '%' || $1 || '%'
+        OR (artists.name || ' ' || albums.title) ILIKE '%' || $1 || '%'
+        OR similarity(artists.name, $1) > 0.3
+        OR similarity(albums.title, $1) > 0.3 END
     )
     ORDER BY
       CASE WHEN $5 = 'title' THEN lower(albums.title) END,
@@ -72,7 +74,7 @@ export const search = asyncHandler(async (req: Request, res: Response) => {
       CASE WHEN $5 = 'date' THEN collections.added_at END DESC NULLS LAST,
       match_score DESC, albums.id
     LIMIT $3 OFFSET $4
-  `, [query, shelf ?? null, savedPageSize + Number(paged), offset, sort ?? null])).rows;
+  `, [query, shelf ?? null, savedPageSize + Number(paged), offset, sort ?? null, exactSavedName])).rows;
 
   if (scope === 'saved') {
     return res.json({

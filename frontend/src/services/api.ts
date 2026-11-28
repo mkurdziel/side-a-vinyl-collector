@@ -98,6 +98,23 @@ export interface DiscogsAlbum {
   fromProvider?: string;
 }
 
+export interface BarcodeAlbumMatch {
+  artist: string;
+  album: string;
+  year?: number;
+  coverImageUrl?: string;
+  discogsId: number;
+  masterId?: number;
+  pressing?: PressingDetails;
+  pressingChoices?: DiscogsAlbum[];
+  catalogListing?: CatalogListing | null;
+  source?: 'local' | 'discogs';
+  existingStatus?: Album['status'] | null;
+  existingAlbumId?: number | null;
+  existingMatch?: SavedMatch | null;
+  titleMatches?: SavedTitleMatch[];
+}
+
 export interface SearchCoverArtResult {
   source: 'MusicBrainz' | 'Discogs';
   url: string;
@@ -265,25 +282,10 @@ class ApiService {
     return { blob: await response.blob(), filename };
   }
 
-  async scanBarcode(barcode: string): Promise<{
-    artist: string;
-    album: string;
-    year?: number;
-    coverImageUrl?: string;
-    discogsId: number;
-    masterId?: number;
-    pressing?: PressingDetails;
-    pressingChoices?: DiscogsAlbum[];
-    catalogListing?: CatalogListing | null;
-    otherAlbumMatches?: boolean;
-    existingStatus?: 'collection' | 'wishlist' | null;
-    existingAlbumId?: number | null;
-    existingMatch?: SavedMatch | null;
-    titleMatches?: SavedTitleMatch[];
-  }> {
+  async scanBarcode(barcode: string, catalogOnly = false): Promise<BarcodeAlbumMatch | { matches: BarcodeAlbumMatch[] }> {
     return this.request('/api/barcode/scan', {
       method: 'POST',
-      body: JSON.stringify({ barcode }),
+      body: JSON.stringify(catalogOnly ? { barcode, catalogOnly } : { barcode }),
     });
   }
 
@@ -318,8 +320,8 @@ class ApiService {
     return this.request('/api/discogs/config');
   }
 
-  async importDiscogsCollection(page = 1): Promise<DiscogsCollectionPage> {
-    return this.request(`/api/discogs/import?page=${page}`);
+  async importDiscogsCollection(page = 1, signal?: AbortSignal): Promise<DiscogsCollectionPage> {
+    return this.request(`/api/discogs/import?page=${page}`, { signal, cache: 'no-store' });
   }
 
   async searchCoverArt(id: number, query?: SearchCoverArtQuery): Promise<{ results: SearchCoverArtResult[] }> {

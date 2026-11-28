@@ -64,16 +64,16 @@
   gap: 4px 8px;
 }
 
+.rh-pressing-chooser-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0 2px;
+}
+
 .rh-pressing-compare {
   flex: 0 0 auto;
   line-height: 1.25;
-}
-
-.rh-pressing-pin-count {
-  display: block;
-  color: var(--rh-ink-2);
-  font-size: 0.75rem;
-  font-weight: 500;
 }
 
 .rh-pressing-example {

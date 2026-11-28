@@ -128,12 +128,21 @@ function firstAlternative(first: PressingCandidate, choices: readonly PressingCa
 function exampleCue(example: PressingCandidate, reference?: PressingCandidate, searchedNumber?: string) {
   if (!reference) return 'Check the number and label on your copy.';
   const facts = comparisonRows(reference, example, searchedNumber);
-  const differs = (label: string) => facts.some(fact => fact.label === label && fact.differs);
-  if (differs(pressingFieldLabels.catalogNumber)) return 'Check the sleeve or label number.';
-  if (differs(pressingFieldLabels.label)) return 'Check the label name on your copy.';
-  if (differs('Mix')) return 'Look for mono or stereo on the sleeve or label.';
+  const visibleDifferences = [
+    [pressingFieldLabels.catalogNumber, 'Check the sleeve or label.'],
+    [pressingFieldLabels.label, 'Check the center label.'],
+    ['Mix', 'Check the sleeve or label.'],
+    ['Format', 'Check your media.'],
+    ['Size', 'Check the record size.'],
+    ['Speed', 'Check the center label.'],
+    ['Record type', 'Check the sleeve.'],
+  ];
+  for (const [label, check] of visibleDifferences) {
+    const fact = facts.find(fact => fact.label === label && fact.differs);
+    if (fact) return `${fact.values.map(value => concisePressingValue(value, 20)).join(' / ')}. ${check}`;
+  }
   if (facts.some(fact => fact.label === pressingFieldLabels.catalogNumber && fact.values.every(Boolean))) {
-    return 'Same number. Check etched or stamped runout marks.';
+    return 'Same number. Check the marks just inside the last track.';
   }
   return 'Check the number and label on your copy.';
 }
@@ -385,15 +394,16 @@ export function PressingCandidates({
   const candidatesId = useId();
   const comparisonId = useId();
   const runoutToolsId = useId();
-  const pinCountId = useId();
   const mediumId = useId();
   const shortlistId = useId();
   const pinHintId = useId();
   const shortlistHeading = useRef<HTMLHeadingElement>(null);
+  const shortlistJump = useRef<HTMLButtonElement>(null);
   const compareToggle = useRef<HTMLButtonElement>(null);
   const candidateList = useRef<HTMLUListElement>(null);
   const { checkingRunouts, comparing: showComparison, page: requestedPage, medium, pins: pinnedIds, update } = preparation;
   const [focusRequest, setFocusRequest] = useState<{ releaseId: number }>();
+  const focusShortlist = useRef(false);
   const [loadLocally] = useState(createPressingDetailsLoader);
   const [evidence, setEvidence] = useState<Partial<Record<number, EvidenceResult>>>({});
   const reportEvidence = useRef(onReadEvidence);
@@ -450,6 +460,20 @@ export function PressingCandidates({
     candidateList.current?.querySelector<HTMLInputElement>(`input[value="${focusRequest.releaseId}"]`)?.focus();
   }, [focusRequest]);
 
+  useLayoutEffect(() => {
+    if (!showComparison || !focusShortlist.current) return;
+    focusShortlist.current = false;
+    shortlistHeading.current?.focus();
+  }, [showComparison]);
+
+  const jumpToShortlist = () => {
+    if (showComparison) shortlistHeading.current?.focus();
+    else {
+      focusShortlist.current = true;
+      update({ comparing: true });
+    }
+  };
+
   const goToPage = (next: number) => {
     update({ page: next });
     const firstChoice = available[next * pageSize];
@@ -496,13 +520,14 @@ export function PressingCandidates({
       <div>
         <div className="rh-pressing-chooser-heading">
           <p id={headingId} className="text-sm font-semibold">Choose a pressing</p>
-          <button type="button" ref={compareToggle} className="rh-lookup-link rh-pressing-compare"
-            aria-label="Compare evidence" aria-describedby={pinned.length ? pinCountId : undefined}
-            aria-expanded={showComparison} aria-controls={`${runoutToolsId} ${comparisonId} ${candidatesId}`}
-            onClick={() => update({ comparing: !showComparison })}>
-            <span>Compare evidence</span>
-            {pinned.length > 0 && <span id={pinCountId} className="rh-pressing-pin-count">{pinned.length} pinned</span>}
-          </button>
+          <div className="rh-pressing-chooser-actions">
+            <button type="button" ref={compareToggle} className="rh-lookup-link rh-pressing-compare"
+              aria-expanded={showComparison} aria-controls={`${runoutToolsId} ${comparisonId} ${candidatesId}`}
+              onClick={() => update({ comparing: !showComparison })}>Compare evidence</button>
+            {pinned.length > 0 && <button type="button" ref={shortlistJump} className="rh-lookup-link rh-pressing-compare"
+              aria-label={`Go to ${pinned.length} pinned ${pinned.length === 1 ? 'pressing' : 'pressings'}`}
+              onClick={jumpToShortlist}>{pinned.length} pinned <span aria-hidden="true">↓</span></button>}
+          </div>
         </div>
         {example && unique.length > 1 && <div className="rh-pressing-example">
           <p className="text-xs text-gray-600">
@@ -601,11 +626,14 @@ export function PressingCandidates({
       </div>
       {showComparison && pinned.length > 0 && (
         <section aria-labelledby={shortlistId} className="min-w-0 space-y-2 border-y border-gray-200 py-2">
-          <div>
-            <h3 id={shortlistId} ref={shortlistHeading} tabIndex={-1} className="text-sm font-semibold">Pinned pressings</h3>
-            <p id={pinHintId} className="text-sm text-gray-600" role="status">
-              {pinned.length < pinLimit ? 'Pin one more pressing to compare across pages.' : 'Two pressings pinned. Unpin one to compare another.'}
-            </p>
+          <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-2">
+            <div className="min-w-0 flex-1">
+              <h3 id={shortlistId} ref={shortlistHeading} tabIndex={-1} className="text-sm font-semibold">Pinned pressings</h3>
+              <p id={pinHintId} className="text-sm text-gray-600" role="status">
+                {pinned.length < pinLimit ? 'Pin one more pressing to compare across pages.' : 'Two pressings pinned. Unpin one to compare another.'}
+              </p>
+            </div>
+            <button type="button" className="rh-lookup-link" onClick={() => shortlistJump.current?.focus()}>Back to pressing choices</button>
           </div>
           <ul className="grid min-w-0 gap-2 @min-[30rem]:grid-cols-2">
             {pinned.map(choice => {

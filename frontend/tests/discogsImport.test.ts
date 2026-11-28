@@ -47,6 +47,7 @@ beforeEach(() => {
   vi.stubGlobal('sessionStorage', {
     getItem: (key: string) => session.get(key) ?? null,
     setItem: (key: string, value: string) => session.set(key, value),
+    removeItem: (key: string) => session.delete(key),
   });
   vi.resetAllMocks();
   importDiscogsCollection.mockResolvedValue({ albums, count: albums.length, page: 1, totalPages: 1 });
@@ -221,6 +222,116 @@ describe('Discogs import', () => {
       expect.any(AbortSignal),
     );
     expect(content()).toContain('Another pressing of this album is in the import review.');
+  });
+
+  it('reopens a two-page Wishlist review, retries a failed refresh, and waits to import the exact choices', async () => {
+    const firstPage = { albums: [albums[0]], page: 1, totalPages: 2, nextPage: 2 };
+    const secondPage = { albums: albums.slice(1), page: 2, totalPages: 2 };
+    importDiscogsCollection.mockResolvedValueOnce(firstPage).mockResolvedValueOnce(secondPage)
+      .mockResolvedValueOnce(firstPage).mockRejectedValueOnce(new ApiError('Unavailable', 503))
+      .mockResolvedValueOnce(firstPage).mockResolvedValueOnce(secondPage);
+    await loadCollection();
+    const select = (title: string) => renderer.root.findByProps({ 'aria-label': `Select ${title} by Portishead` })
+      .props.onChange({ currentTarget: { checked: true } });
+    await act(async () => {
+      renderer.root.findByType('select').props.onChange({ target: { value: 'wishlist' } });
+      select('Dummy');
+    });
+    await act(async () => findButton('Load more Discogs records').props.onClick());
+    await act(async () => select('Roseland NYC Live'));
+    expect(content()).toContain('2 selected for Wishlist');
+
+    await act(async () => renderer.unmount());
+    await act(async () => { renderer = create(createElement(DiscogsImporter, { ...importerProps, open: false })); });
+    expect(content()).toContain('Discogs review · 2 selected for Wishlist');
+    expect(findButton('Open Discogs review')).toBeTruthy();
+    await act(async () => renderer.update(createElement(DiscogsImporter, importerProps)));
+    await act(async () => findButton('Resume review').props.onClick());
+    expect(content()).toContain('Could not refresh your review. Your choices are kept. Try again.');
+    expect(content()).toContain('Saved review · 2 selected for Wishlist');
+    expect(addAlbum).not.toHaveBeenCalled();
+    await act(async () => findButton('Retry review').props.onClick());
+
+    expect(importDiscogsCollection.mock.calls.map(([page]) => page)).toEqual([1, 2, 1, 2, 1, 2]);
+    expect(getAlbums.mock.calls.map(([shelf, , cache]) => [shelf, cache])).toEqual([
+      ['collection', 'no-store'], ['wishlist', 'no-store'], ['collection', 'no-store'], ['wishlist', 'no-store'],
+    ]);
+    expect(content()).toContain('2 of 2 Discogs pages loaded');
+    expect(renderer.root.findByType('select').props.value).toBe('wishlist');
+    expect(renderer.root.findByProps({ 'aria-label': 'Select Third by Portishead' }).props.checked).toBe(false);
+    expect(addAlbum).not.toHaveBeenCalled();
+    await act(async () => findButton('Import 2 records to Wishlist').props.onClick());
+    expect(addAlbum.mock.calls.map(([album]) => [album.discogsId, album.status])).toEqual([[1, 'wishlist'], [3, 'wishlist']]);
+    expect(sessionStorage.getItem('side-a:discogs-import-review:v1')).toBeNull();
+  });
+
+  it('flags a title saved elsewhere and a missing release when resuming, then discards the review cleanly', async () => {
+    importDiscogsCollection.mockResolvedValueOnce({ albums, page: 1, totalPages: 1 })
+      .mockResolvedValueOnce({ albums: albums.slice(2), page: 1, totalPages: 1 });
+    getAlbums.mockImplementation(async shelf => ({ albums: shelf === 'wishlist'
+      ? [{ discogs_id: 7, title: 'Dummy', artist_name: 'Portishead', status: 'wishlist' }] : [] }));
+    await loadCollection();
+    await act(async () => findButton('Select all (3)').props.onClick());
+    await act(async () => renderer.unmount());
+    await act(async () => { renderer = create(createElement(DiscogsImporter, importerProps)); });
+    await act(async () => findButton('Resume review').props.onClick());
+
+    expect(content()).toContain('2 selections need your attention.');
+    const notes = renderer.root.findAllByType('li').map(node => node.children.join('')).join('\n');
+    expect(notes).toContain('Dummy by Portishead · Discogs 1. Already in Wishlist.');
+    expect(notes).toContain('Third by Portishead · Discogs 2. Unavailable on the refreshed pages.');
+    expect(findButton('Import 1 record to Collection').props.disabled).toBe(false);
+    await act(async () => findButton('Discard review').props.onClick());
+    expect(findButton('Load Discogs collection')).toBeTruthy();
+    expect(sessionStorage.getItem('side-a:discogs-import-review:v1')).toBeNull();
+    expect(addAlbum).not.toHaveBeenCalled();
+  });
+
+  it('clears only bulk choices when a later page exposes competing pressings and groups each title', async () => {
+    const alternateDummy = { ...albums[0], id: 4, discogsId: 4, pressing: { catalogNumber: 'ALT 04' } };
+    const alternateThird = { ...albums[1], id: 5, discogsId: 5, pressing: { catalogNumber: 'ALT 05' } };
+    importDiscogsCollection.mockResolvedValueOnce({ albums: albums.slice(0, 2), page: 1, totalPages: 2, nextPage: 2 })
+      .mockResolvedValueOnce({ albums: [alternateDummy, alternateThird], page: 2, totalPages: 2 });
+    await loadCollection();
+    const checkbox = (title: string, release?: number) => renderer.root.findByProps({
+      'aria-label': `Select ${title} by Portishead${release ? ` · Discogs release ${release}` : ''}`,
+    });
+    await act(async () => checkbox('Third').props.onChange({ currentTarget: { checked: true } }));
+    await act(async () => findButton('Select all loaded (2)').props.onClick());
+    expect(checkbox('Dummy').props.checked).toBe(true);
+    await act(async () => findButton('Load more Discogs records').props.onClick());
+
+    expect(checkbox('Dummy', 1).props.checked).toBe(false);
+    expect(checkbox('Dummy', 4).props.checked).toBe(false);
+    expect(checkbox('Third', 2).props.checked).toBe(true);
+    expect(checkbox('Third', 5).props.checked).toBe(false);
+    expect(content()).toContain('1 selection needs your attention.');
+    expect(renderer.root.findByProps({ 'aria-label': 'Pressings of Dummy by Portishead' }).findAllByType('article')).toHaveLength(2);
+    expect(addAlbum).not.toHaveBeenCalled();
+  });
+
+  it('rechecks selection provenance when a resumed source page now has an alternate pressing', async () => {
+    const alternateDummy = { ...albums[0], id: 4, discogsId: 4 };
+    const alternateThird = { ...albums[1], id: 5, discogsId: 5 };
+    const firstPage = { albums: albums.slice(0, 2), page: 1, totalPages: 2, nextPage: 2 };
+    importDiscogsCollection.mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce({ albums: albums.slice(2), page: 2, totalPages: 2 })
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce({ albums: [albums[2], alternateDummy, alternateThird], page: 2, totalPages: 2 });
+    await loadCollection();
+    await act(async () => renderer.root.findByProps({ 'aria-label': 'Select Third by Portishead' })
+      .props.onChange({ currentTarget: { checked: true } }));
+    await act(async () => findButton('Select all loaded (2)').props.onClick());
+    await act(async () => findButton('Load more Discogs records').props.onClick());
+    await act(async () => renderer.unmount());
+    await act(async () => { renderer = create(createElement(DiscogsImporter, importerProps)); });
+    await act(async () => findButton('Resume review').props.onClick());
+
+    expect(renderer.root.findByProps({ 'aria-label': 'Select Dummy by Portishead · Discogs release 1' }).props.checked).toBe(false);
+    expect(renderer.root.findByProps({ 'aria-label': 'Select Third by Portishead · Discogs release 2' }).props.checked).toBe(true);
+    expect(content()).toContain('1 selection needs your attention.');
+    expect(findButton('Import 1 record to Collection').props.disabled).toBe(false);
+    expect(addAlbum).not.toHaveBeenCalled();
   });
 
   it('keeps confirmed receipts and reconciles a lost response on both shelves before an explicit resume', async () => {

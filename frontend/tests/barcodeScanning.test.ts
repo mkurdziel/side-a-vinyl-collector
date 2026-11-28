@@ -322,6 +322,82 @@ describe('barcode lookup requests', () => {
     expect(JSON.stringify(renderer!.toJSON())).toContain('Discogs release 19');
   });
 
+  it('requires an album choice and then offers only that album’s pressings', async () => {
+    const first = { artist: 'Portishead', album: 'Dummy', discogsId: 17 };
+    const second = { artist: 'The Breeders', album: 'Last Splash', discogsId: 29 };
+    const pressing = (id: number, country: string) => ({
+      ...second, id, discogsId: id, discogsListing: 'release',
+      pressing: { catalogNumber: 'LS-123', country },
+    });
+    scanBarcode.mockResolvedValue({ matches: [first, { ...second, pressingChoices: [pressing(29, 'US'), pressing(30, 'UK')] }] });
+    addAlbum.mockResolvedValue({ album: { id: 41, discogs_id: 30 } });
+    await mount(createElement(BarcodeScanner, props));
+    await act(async () => renderer!.root.findByType('input').props.onChange({ target: { value: '0602537340436' } }));
+    await act(async () => renderer!.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() }));
+
+    const choose = async (index: number) => {
+      const list = renderer!.root.findByProps({ 'aria-label': 'Matching albums' });
+      await act(async () => list.findAllByType('button')[index].props.onClick());
+    };
+    expect(focused).toHaveBeenLastCalledWith('barcode-choices-title');
+    expect(renderer!.root.findAllByType('button').some(button => /save|add to collection/i.test(button.props['aria-label'] ?? ''))).toBe(false);
+    expect(addAlbum).not.toHaveBeenCalled();
+    await choose(0);
+    expect(renderer!.root.findByProps({ 'aria-label': 'Save without pressing to Collection · Dummy' })).toBeDefined();
+    const back = renderer!.root.findAllByType('button').find(button => button.children.join('') === 'Back to barcode matches')!;
+    await act(async () => back.props.onClick());
+    expect(scanBarcode).toHaveBeenCalledOnce();
+    await choose(1);
+    expect(focused).toHaveBeenLastCalledWith('Last Splash');
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Choose a pressing to add · Last Splash · Collection' })
+      .props.onClick({ currentTarget: { isConnected: true } }));
+
+    const picker = renderer!.root.findByType('form');
+    expect(picker.findAllByProps({ type: 'radio' }).map(choice => [choice.props.value, choice.props.checked]))
+      .toEqual([[29, false], [30, false]]);
+    await act(async () => picker.findByProps({ type: 'radio', value: 30 }).props.onChange());
+    await act(async () => picker.props.onSubmit({ preventDefault: vi.fn() }));
+    expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      artist: 'The Breeders', album: 'Last Splash', discogsId: 30, barcode: '0602537340436', status: 'collection',
+    }));
+  });
+
+  it('keeps the local barcode result available when checking for more Discogs matches', async () => {
+    const saved = { artist: 'Portishead', album: 'Dummy', source: 'local', existingStatus: 'collection',
+      existingMatch: 'barcode', existingAlbumId: 23 };
+    const other = { artist: 'The Breeders', album: 'Last Splash', discogsId: 29 };
+    scanBarcode.mockResolvedValueOnce(saved).mockRejectedValueOnce(new ApiError('Discogs is busy', 503)).mockResolvedValueOnce(other);
+    await mount(createElement(BarcodeScanner, props));
+    await act(async () => renderer!.root.findByType('input').props.onChange({ target: { value: '0602537340436' } }));
+    await act(async () => renderer!.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() }));
+    const click = async (label: string) => act(async () => renderer!.root.findAllByType('button')
+      .find(button => button.children.join('') === label)!.props.onClick());
+    await click('Check Discogs for this barcode');
+    expect(scanBarcode).toHaveBeenLastCalledWith('0602537340436', true);
+    expect(renderer!.root.findByProps({ role: 'alert' }).children).toContain('Could not check Discogs. Retry or continue with the saved match.');
+    expect(renderer!.root.findByProps({ 'aria-label': 'Open saved album — Dummy' })).toBeDefined();
+    await click('Retry Discogs lookup');
+    expect(renderer!.root.findByProps({ 'aria-label': 'Matching albums' }).findAllByType('button')).toHaveLength(1);
+    await click('Back to saved match');
+    expect(renderer!.root.findByProps({ 'aria-label': 'Open saved album — Dummy' })).toBeDefined();
+    expect(addAlbum).not.toHaveBeenCalled();
+  });
+
+  it('returns to the same digits when the collector edits an ambiguous barcode', async () => {
+    scanBarcode.mockResolvedValue({ matches: [
+      { artist: 'Portishead', album: 'Dummy', discogsId: 17 },
+      { artist: 'The Breeders', album: 'Last Splash', discogsId: 29 },
+    ] });
+    await mount(createElement(BarcodeScanner, props));
+    await act(async () => renderer!.root.findByType('input').props.onChange({ target: { value: '0602537340436' } }));
+    await act(async () => renderer!.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() }));
+    const edit = renderer!.root.findAllByType('button').find(button => button.children.join('') === 'Edit barcode')!;
+    await act(async () => edit.props.onClick());
+    expect(renderer!.root.findByType('input').props.value).toBe('0602537340436');
+    expect(focused).toHaveBeenLastCalledWith('manual-barcode');
+    expect(scanBarcode).toHaveBeenCalledOnce();
+  });
+
   it('moves and undoes a wishlisted barcode match inside the open scanner', async () => {
     scanBarcode.mockResolvedValue({
       artist: 'Portishead', album: 'Dummy', existingStatus: 'wishlist', existingAlbumId: 19, existingMatch: 'release',

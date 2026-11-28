@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import pool from '../config/database';
 import discogsService from '../services/discogs';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
-import type { SavedTitleMatch } from '../services/catalogMembership';
+import { annotateCatalogMembership, type SavedTitleMatch } from '../services/catalogMembership';
 
 // Helper to check if an album exists in collections and return its status
 async function getExistingAlbumStatus(albumId: number): Promise<{ status: string; albumId: number } | null> {
@@ -56,48 +56,54 @@ async function findExistingAlbum(artist: string, title: string, discogsId?: numb
 }
 
 export const scanBarcode = asyncHandler(async (req: Request, res: Response) => {
-  const { barcode } = req.body;
+  const { barcode, catalogOnly } = req.body;
 
   if (!barcode) {
     throw new AppError('Barcode is required', 400);
   }
 
-  // Check if barcode exists in local database
-  const localResult = await pool.query(`
-    SELECT
-      albums.*,
-      artists.name as artist_name
-    FROM barcodes
-    JOIN albums ON barcodes.album_id = albums.id
-    JOIN artists ON albums.artist_id = artists.id
-    WHERE barcodes.barcode = $1
-  `, [barcode]);
+  if (catalogOnly !== true) {
+    const localResult = await pool.query(`
+      SELECT albums.*, artists.name as artist_name
+      FROM barcodes
+      JOIN albums ON barcodes.album_id = albums.id
+      JOIN artists ON albums.artist_id = artists.id
+      WHERE barcodes.barcode = $1
+    `, [barcode]);
 
-  if (localResult.rows.length > 0) {
-    const album = localResult.rows[0];
-    const existing = await getExistingAlbumStatus(album.id);
-    return res.json({
-      artist: album.artist_name,
-      album: album.title,
-      year: album.year,
-      coverImageUrl: album.cover_image_url,
-      discogsId: album.discogs_id,
-      catalogListing: album.catalog_listing,
-      source: 'local',
-      existingStatus: existing?.status || null,
-      existingAlbumId: existing?.albumId || null,
-      existingMatch: existing ? 'barcode' : null,
-    });
+    if (localResult.rows.length > 0) {
+      const album = localResult.rows[0];
+      const existing = await getExistingAlbumStatus(album.id);
+      return res.json({
+        artist: album.artist_name,
+        album: album.title,
+        year: album.year,
+        coverImageUrl: album.cover_image_url,
+        discogsId: album.discogs_id,
+        catalogListing: album.catalog_listing,
+        source: 'local',
+        existingStatus: existing?.status || null,
+        existingAlbumId: existing?.albumId || null,
+        existingMatch: existing ? 'barcode' : null,
+      });
+    }
   }
 
-  // Search Discogs
-  const discogsAlbum = await discogsService.searchByBarcode(barcode);
-
+  const matches = await discogsService.searchByBarcode(barcode);
+  const [discogsAlbum] = matches;
   if (!discogsAlbum) {
     throw new AppError('No album found for this barcode', 404);
   }
 
-  // Check if this Discogs album already exists in our collection/wishlist
+  if (matches.length > 1) {
+    const annotated = await annotateCatalogMembership(matches);
+    return res.json({ matches: annotated.map(({ inCollection, inWishlist, ...match }) => ({
+      ...match,
+      source: 'discogs',
+      existingStatus: inCollection ? 'collection' : inWishlist ? 'wishlist' : null,
+    })) });
+  }
+
   const existing = await findExistingAlbum(discogsAlbum.artist, discogsAlbum.album, discogsAlbum.discogsId);
 
   res.json({
@@ -109,7 +115,6 @@ export const scanBarcode = asyncHandler(async (req: Request, res: Response) => {
     masterId: discogsAlbum.masterId,
     pressing: discogsAlbum.pressing,
     pressingChoices: discogsAlbum.pressingChoices,
-    otherAlbumMatches: discogsAlbum.otherAlbumMatches,
     source: 'discogs',
     existingStatus: existing?.status || null,
     existingAlbumId: existing?.albumId || null,

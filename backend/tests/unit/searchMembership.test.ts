@@ -60,7 +60,7 @@ describe('search result membership', () => {
       search(req, { json: resolve } as unknown as Response, reject);
     });
 
-    expect(query).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('collections.status = $2'), ['Coltrane', 'wishlist', 20, 0, null]);
+    expect(query).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('collections.status = $2'), ['Coltrane', 'wishlist', 20, 0, null, false]);
     expect(result).toEqual({ local: [savedAlbum], discogs: [], errors: [] });
     expect(searchByQuery).not.toHaveBeenCalled();
   });
@@ -71,7 +71,7 @@ describe('search result membership', () => {
       const req = { query: { q: 'Coltrane', scope: 'saved', offset: '20', sort: 'artist' } } as unknown as Request;
       search(req, { json: resolve } as unknown as Response, reject);
     });
-    expect(query).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('LIMIT $3 OFFSET $4'), ['Coltrane', null, 21, 20, 'artist']);
+    expect(query).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('LIMIT $3 OFFSET $4'), ['Coltrane', null, 21, 20, 'artist', false]);
     expect(result.local).toHaveLength(20);
     expect(result.nextOffset).toBe(40);
     expect(searchByQuery).not.toHaveBeenCalled();

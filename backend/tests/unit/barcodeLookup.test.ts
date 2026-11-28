@@ -14,10 +14,10 @@ vi.mock('../../src/config/redis', () => ({
 import { scanBarcode } from '../../src/controllers/barcodeController';
 import { errorHandler } from '../../src/middleware/errorHandler';
 
-function lookup() {
+function lookup(catalogOnly?: boolean) {
   return new Promise<{ status: number; body: unknown }>((resolve) => {
     let status = 200;
-    const req = { body: { barcode: '0602537340436' } } as Request;
+    const req = { body: { barcode: '0602537340436', catalogOnly } } as Request;
     const res = {
       status(code: number) { status = code; return this; },
       json(body: unknown) { resolve({ status, body }); },
@@ -71,19 +71,48 @@ describe('barcode lookup failures', () => {
 });
 
 describe('barcode match evidence', () => {
-  it('returns pressing evidence for the same album without treating other titles as candidates', async () => {
+  it('returns each album with its own pressing evidence without choosing an identity', async () => {
     get.mockResolvedValueOnce({ data: { results: [
       { id: 91, title: 'Artist - Fixture', master_id: 900, catno: 'A-123', country: 'US' },
       { id: 92, title: 'Artist - Fixture', master_id: 900, catno: 'A-123', country: 'UK' },
       { id: 93, title: 'Artist - Other album', master_id: 901, catno: 'B-456' },
-      { id: 94, title: 'Artist - Fixture', master_id: 901, catno: 'C-789' },
+      { id: 94, title: 'Artist - Fixture', master_id: 902, catno: 'C-789' },
+      { id: 92, title: 'Artist - Fixture', master_id: 900, catno: 'A-123', country: 'UK' },
     ] } });
-    await expect(lookup()).resolves.toMatchObject({
-      status: 200, body: { discogsId: 91, masterId: 900, otherAlbumMatches: true, pressingChoices: [
-        { discogsId: 91, discogsListing: 'release', pressing: { catalogNumber: 'A-123', country: 'US' } },
-        { discogsId: 92, discogsListing: 'release', pressing: { catalogNumber: 'A-123', country: 'UK' } },
+    query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [
+      { id: 44, status: 'collection', title: 'Other album', artist_name: 'Artist', discogs_id: 93 },
+    ] });
+    const response = await lookup();
+    expect(response.body).not.toHaveProperty('discogsId');
+    expect(response).toMatchObject({
+      status: 200, body: { matches: [
+        { album: 'Fixture', discogsId: 91, masterId: 900, pressingChoices: [
+          { discogsId: 91, discogsListing: 'release', pressing: { catalogNumber: 'A-123', country: 'US' } },
+          { discogsId: 92, discogsListing: 'release', pressing: { catalogNumber: 'A-123', country: 'UK' } },
+        ] },
+        { album: 'Fixture', discogsId: 94, masterId: 902, pressingChoices: [{ discogsId: 94 }] },
+        { album: 'Other album', discogsId: 93, existingMatch: 'release', existingStatus: 'collection', existingAlbumId: 44,
+          pressingChoices: [{ discogsId: 93 }] },
       ] },
     });
+  });
+
+  it('keeps a single identity fast when some pressings have no master reference', async () => {
+    get.mockResolvedValueOnce({ data: { results: [
+      { id: 91, title: 'Artist - Fixture' },
+      { id: 92, title: 'Artist - Fixture', master_id: 900 },
+    ] } });
+    await expect(lookup()).resolves.toMatchObject({
+      status: 200, body: { album: 'Fixture', discogsId: 91, masterId: 900,
+        pressingChoices: [{ discogsId: 91 }, { discogsId: 92 }] },
+    });
+  });
+
+  it('can check Discogs after a local barcode result without changing the saved mapping', async () => {
+    get.mockResolvedValueOnce({ data: { results: [{ id: 93, title: 'Artist - Other album' }] } });
+    await expect(lookup(true)).resolves.toMatchObject({ status: 200, body: { album: 'Other album', discogsId: 93 } });
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls.map(([sql]) => sql).join()).not.toContain('barcodes');
   });
 
   it('distinguishes saved barcode mappings from catalog release IDs', async () => {

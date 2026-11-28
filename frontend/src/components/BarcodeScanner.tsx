@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import api, { ApiError, isExactSavedMatch, type Album, type DiscogsAlbum } from '../services/api';
+import api, { ApiError, isExactSavedMatch, type Album, type BarcodeAlbumMatch, type DiscogsAlbum } from '../services/api';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 import { ModalDialog } from './ModalDialog';
 import { SaveDestinationActions, type DestinationAction } from './SaveDestinationActions';
@@ -9,12 +9,14 @@ import type { OpenSavedAlbum, SavePressing, UndoPressing } from './PressingCompa
 import { LookupRecovery } from './LookupRecovery';
 import type { ManualAlbumDraft } from './ManualAlbumDialog';
 
-type BarcodeMatch = Awaited<ReturnType<typeof api.scanBarcode>> & { barcode: string };
+type BarcodeMatch = BarcodeAlbumMatch & { barcode: string };
 type Shelf = Album['status'];
 type LookupFailure = 'invalid' | 'missing' | 'unavailable';
+type BarcodeChoices = { barcode: string; matches: BarcodeAlbumMatch[]; savedMatch?: BarcodeMatch };
 type Lookup = { status: 'scanning' | 'looking-up' }
   | { status: 'failed'; reason: LookupFailure; barcode: string }
-  | { status: 'found'; match: BarcodeMatch }
+  | { status: 'choosing'; choices: BarcodeChoices; returnIndex?: number }
+  | { status: 'found'; match: BarcodeMatch; selection?: { choices: BarcodeChoices; index: number }; catalogLookup?: 'checking' | 'missing' | 'unavailable' }
   | { status: 'saved'; match: BarcodeMatch; destination: Shelf; album?: Album; movedId?: number; restored?: boolean };
 
 const lookupMessages: Record<LookupFailure, string> = {
@@ -59,6 +61,8 @@ export const BarcodeScanner = ({
   const manualInput = useRef<HTMLInputElement>(null);
   const scannerTitle = useRef<HTMLHeadingElement>(null);
   const resultTitle = useRef<HTMLHeadingElement>(null);
+  const choicesTitle = useRef<HTMLHeadingElement>(null);
+  const returnChoice = useRef<HTMLButtonElement>(null);
   const reviewOpener = useRef<HTMLButtonElement>(null);
   const openSavedButton = useRef<HTMLButtonElement>(null);
   const lastInput = useRef<'camera' | 'manual'>('manual');
@@ -75,10 +79,15 @@ export const BarcodeScanner = ({
   const foundDuplicate = duplicateId !== undefined && lookupShelfEdits?.[duplicateId] !== null ? duplicateId : undefined;
   const scanning = lookup.status === 'scanning';
   const lookingUp = lookup.status === 'looking-up';
+  const choosing = lookup.status === 'choosing';
+  const savedMatch = choosing ? lookup.choices.savedMatch : undefined;
+  const selection = lookup.status === 'found' ? lookup.selection : undefined;
+  const checkingCatalog = lookup.status === 'found' && lookup.catalogLookup === 'checking';
   const failure = lookup.status === 'failed' && manualBarcode.trim() === lookup.barcode ? lookup.reason : undefined;
 
   useLayoutEffect(() => {
-    if (lookup.status === 'found') resultTitle.current?.focus();
+    if (lookup.status === 'found' && !lookup.catalogLookup) resultTitle.current?.focus();
+    if (lookup.status === 'choosing') (returnChoice.current ?? choicesTitle.current)?.focus();
     if (lookup.status === 'scanning' && focusNextScan.current) {
       focusNextScan.current = false;
       if (lastInput.current === 'manual') manualInput.current?.focus();
@@ -91,7 +100,7 @@ export const BarcodeScanner = ({
       (openSavedButton.current ?? resultTitle.current)?.focus();
   }, [foundDuplicate, lookup, pressingReview]);
 
-  const lookUp = async (barcode: string, source: 'camera' | 'manual' = 'camera') => {
+  const lookUp = async (barcode: string, source: 'camera' | 'manual' = 'camera', savedMatch?: BarcodeMatch) => {
     if (lookupInProgress.current || (source === 'camera' && completedBarcode.current === barcode)) return;
     lastInput.current = source;
     if (source === 'manual') setCameraEnabled(false);
@@ -105,23 +114,43 @@ export const BarcodeScanner = ({
     }
 
     lookupInProgress.current = true;
-    setLookup({ status: 'looking-up' });
+    setLookup(savedMatch ? { status: 'found', match: savedMatch, catalogLookup: 'checking' } : { status: 'looking-up' });
 
     try {
-      const result = await api.scanBarcode(barcode);
-      setLookup({ status: 'found', match: { ...result, barcode } });
+      const result = savedMatch ? await api.scanBarcode(barcode, true) : await api.scanBarcode(barcode);
+      if ('matches' in result || savedMatch) {
+        const matches = 'matches' in result ? result.matches : [result];
+        setLookup({ status: 'choosing', choices: { barcode, matches, savedMatch } });
+      } else {
+        setLookup({ status: 'found', match: { ...result, barcode } });
+      }
     } catch (error) {
       let reason: LookupFailure = 'unavailable';
       if (error instanceof ApiError && error.status === 404) reason = 'missing';
       if (error instanceof ApiError && error.status === 400) reason = 'invalid';
-      setLookup({ status: 'failed', reason, barcode });
+      setLookup(savedMatch
+        ? { status: 'found', match: savedMatch, catalogLookup: reason === 'missing' ? 'missing' : 'unavailable' }
+        : { status: 'failed', reason, barcode });
     } finally {
       lookupInProgress.current = false;
     }
   };
 
+  const chooseMatch = (choices: BarcodeChoices, index: number) => {
+    setDuplicateId(undefined);
+    setSaveIssue(undefined);
+    setLookup({ status: 'found', match: { ...choices.matches[index], barcode: choices.barcode }, selection: { choices, index } });
+  };
+
+  const editBarcode = () => {
+    lastInput.current = 'manual';
+    focusNextScan.current = true;
+    setCameraEnabled(false);
+    setLookup({ status: 'scanning' });
+  };
+
   const saveMatch = async (action: DestinationAction, confirmed?: DiscogsAlbum) => {
-    if (!scannedResult || saveInProgress.current || foundDuplicate !== undefined) return false;
+    if (!scannedResult || lookupInProgress.current || saveInProgress.current || foundDuplicate !== undefined) return false;
     const { existingStatus, existingAlbumId, existingMatch } = scannedResult;
     const moveId = action === 'move' && existingStatus === 'wishlist' && isExactSavedMatch(existingMatch) ? existingAlbumId : undefined;
     const adding = action !== 'move' && !existingStatus;
@@ -141,7 +170,7 @@ export const BarcodeScanner = ({
         const { album } = await api.addAlbum({
           artist: scannedResult.artist,
           album: scannedResult.album,
-          coverImageUrl: scannedResult.coverImageUrl,
+          coverImageUrl: confirmed?.coverImageUrl ?? scannedResult.coverImageUrl,
           ...reference,
           applyCatalogReference: true,
           barcode: scannedResult.barcode,
@@ -229,10 +258,10 @@ export const BarcodeScanner = ({
   return (
     <ModalDialog labelledBy="barcode-title" onClose={close}>
       <div className="rh-dialog-panel max-w-lg flex flex-col">
-        <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-white sticky top-0 z-20">
-          <div className="flex items-center gap-2">
+        <header className="rh-dialog-header flex shrink-0 items-center justify-between gap-2 border-b border-gray-200 px-4 py-2 sm:px-6 sm:py-3">
+          <div className="flex min-w-0 items-center gap-2">
             <div className="p-1.5 bg-purple-100 rounded-lg">
-              <svg className="w-5 h-5 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg aria-hidden="true" className="w-5 h-5 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
               </svg>
             </div>
@@ -248,12 +277,12 @@ export const BarcodeScanner = ({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
-        </div>
+        </header>
 
-        <div className="p-4 overflow-y-auto">
-          {onBack && <button type="button" className="rh-lookup-link mb-2" disabled={!!saving || undoing}
+        <div className="min-h-0 overflow-y-auto p-4 sm:p-6">
+          {onBack && !choosing && <button type="button" className="rh-lookup-link mb-2" disabled={!!saving || undoing}
             onClick={() => { if (!saveInProgress.current) onBack(); }}>Back to add methods</button>}
-          {!scannedResult && lookup.status !== 'saved' && (
+          {!scannedResult && lookup.status !== 'saved' && !choosing && (
             <>
               <form className="mb-2" noValidate onSubmit={event => {
                 event.preventDefault();
@@ -370,7 +399,48 @@ export const BarcodeScanner = ({
             </>
           )}
 
-          {scannedResult && (
+          {lookup.status === 'choosing' && (
+            <section className="space-y-2" aria-labelledby="barcode-choices-title">
+              <div>
+                <h3 ref={choicesTitle} id="barcode-choices-title" tabIndex={-1} className="text-lg font-semibold">
+                  Choose the album on your sleeve
+                </h3>
+                <p className="text-sm text-gray-600">
+                  Barcode <bdi className="tabular-nums">{lookup.choices.barcode}</bdi>
+                  {' · '}{lookup.choices.matches.length} {lookup.choices.matches.length === 1 ? 'album match' : 'album matches'}
+                </p>
+              </div>
+              <ul className="divide-y divide-gray-200 border-y border-gray-200" aria-label="Matching albums">
+                {lookup.choices.matches.map((match, index, options) => {
+                  const sameName = options.some((other, otherIndex) => otherIndex !== index &&
+                    match.artist.toLowerCase() === other.artist.toLowerCase() && match.album.toLowerCase() === other.album.toLowerCase());
+                  const reference = sameName && (match.masterId ? `Discogs album ${match.masterId}` : `Discogs release ${match.discogsId}`);
+                  return (
+                    <li key={match.discogsId}>
+                      <button type="button" ref={lookup.returnIndex === index ? returnChoice : undefined}
+                        className="flex min-h-16 w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-gray-100 focus-visible:bg-gray-100"
+                        onClick={() => chooseMatch(lookup.choices, index)}>
+                        {match.coverImageUrl && <img src={match.coverImageUrl} alt="" loading="lazy" className="size-10 shrink-0 rounded-sm object-cover" />}
+                        <span className="min-w-0 [overflow-wrap:anywhere]">
+                          <span className="block text-sm leading-snug font-semibold">{match.album}</span>
+                          <span className="block text-xs leading-snug text-gray-600">
+                            {[match.artist, match.year, reference].filter(Boolean).join(' · ')}
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+              <div className="flex flex-wrap items-start gap-x-2">
+                {savedMatch && <button type="button" className="rh-lookup-link"
+                  onClick={() => setLookup({ status: 'found', match: savedMatch })}>Back to saved match</button>}
+                <button type="button" className="rh-lookup-link" onClick={editBarcode}>Edit barcode</button>
+                <button type="button" className="rh-lookup-link" onClick={() => onSearchByName()}>Search by name</button>
+              </div>
+            </section>
+          )}
+          {scannedResult && lookup.status === 'found' && (
             <div className="space-y-3">
               <div className="rh-lookup-record">
                 {scannedResult.coverImageUrl && (
@@ -387,9 +457,10 @@ export const BarcodeScanner = ({
                   <p className="mt-1 text-xs tabular-nums text-gray-600">Barcode {scannedResult.barcode}</p>
                 </div>
               </div>
-              {scannedResult.otherAlbumMatches && <p className="text-sm text-gray-600">
-                Discogs also found other albums for this barcode. Check the artist and title before saving.
-              </p>}
+              {selection && <button type="button" className="rh-lookup-link" disabled={!!saving || opening}
+                onClick={() => setLookup({ status: 'choosing', choices: selection.choices, returnIndex: selection.index })}>
+                Back to barcode matches
+              </button>}
               <div className="grid gap-2">
                 {saving && <p role="status" className="text-sm text-gray-600">Saving this album…</p>}
                 {saveIssue && <p role="alert" className="text-sm text-red-600">{saveIssue}</p>}
@@ -397,7 +468,9 @@ export const BarcodeScanner = ({
                   <div className="grid gap-1">
                     <p role="alert" className="text-sm">This album is already saved.</p>
                     <button ref={openSavedButton} type="button" className="rh-primary-action px-3 text-sm font-semibold"
-                      aria-busy={opening} aria-disabled={opening} onClick={event => void openSaved(foundDuplicate, event.currentTarget)}>
+                      aria-busy={opening} aria-disabled={opening || checkingCatalog} onClick={event => {
+                        if (!checkingCatalog) void openSaved(foundDuplicate, event.currentTarget);
+                      }}>
                       Open saved album
                     </button>
                   </div>
@@ -427,12 +500,28 @@ export const BarcodeScanner = ({
                   onUndoPressing={onUndoPressing}
                   onSavedCopyRemoved={onSavedCopyRemoved}
                   pending={saving}
+                  disabled={checkingCatalog}
                   onSelect={action => void saveMatch(action)}
                 />}
+                {scannedResult.source === 'local' && (
+                  <div>
+                    <button type="button" className="rh-lookup-link" aria-disabled={checkingCatalog || opening || !!saving}
+                      onClick={() => {
+                        if (!opening && !saveInProgress.current) void lookUp(scannedResult.barcode, 'manual', scannedResult);
+                      }}>
+                      {lookup.catalogLookup === 'unavailable' ? 'Retry Discogs lookup' : 'Check Discogs for this barcode'}
+                    </button>
+                    {checkingCatalog && <p className="text-sm text-gray-600" role="status">Checking Discogs for other matches…</p>}
+                    {lookup.catalogLookup === 'missing' && <p className="text-sm text-gray-600" role="status">Discogs has no matches for this barcode.</p>}
+                    {lookup.catalogLookup === 'unavailable' && <p className="text-sm text-red-600" role="alert">
+                      Could not check Discogs. Retry or continue with the saved match.
+                    </p>}
+                  </div>
+                )}
                 <div className="flex flex-wrap items-start justify-between gap-x-2">
                   {!titleOnly && <LookupRecovery draft={{ artist: scannedResult.artist, album: scannedResult.album }}
-                    disabled={!!saving} onSearchByName={onSearchByName} onManual={onManual} />}
-                  <button type="button" onClick={handleScanAnother} disabled={!!saving} className="rh-lookup-link">
+                    disabled={!!saving || checkingCatalog} onSearchByName={onSearchByName} onManual={onManual} />}
+                  <button type="button" onClick={handleScanAnother} disabled={!!saving || checkingCatalog} className="rh-lookup-link">
                     Scan a different barcode
                   </button>
                 </div>
