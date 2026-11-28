@@ -317,8 +317,8 @@ describe('barcode lookup requests', () => {
     await act(async () => quagga.onDetected.mock.calls[0]![0](result));
     expect(renderer!.root.findAllByProps({ 'aria-label': 'Move Dummy to Collection' })).toHaveLength(0);
     expect(renderer!.root.findAllByType('summary').filter(node => node.children.includes('None of these'))).toHaveLength(0);
-    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Compare pressings for Dummy' }).props.onClick());
-    expect(JSON.stringify(renderer!.toJSON())).toContain('Where to check your record');
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Review pressings for Dummy' }).props.onClick());
+    expect(JSON.stringify(renderer!.toJSON())).toContain('one entry per artist and title');
     const open = renderer!.root.findByProps({ 'aria-label': 'Open saved album · Dummy by Portishead, Wishlist, Discogs release 20' });
     const opener = { isConnected: true };
     props.onOpenSaved.mockResolvedValueOnce('opened');
@@ -335,7 +335,7 @@ describe('barcode lookup requests', () => {
     await mount(createElement(BarcodeScanner, { ...props, onSavePressing }));
     await act(async () => renderer!.root.findByType('input').props.onChange({ target: { value: '0602537340436' } }));
     await act(async () => renderer!.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() }));
-    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Compare pressings for Dummy' }).props.onClick());
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Review pressings for Dummy' }).props.onClick());
     const click = async (label: string) => act(async () => renderer!.root.findAllByType('button')
       .find(button => button.children.join('') === label)!.props.onClick());
     await click('Use this pressing');

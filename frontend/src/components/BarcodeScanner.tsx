@@ -122,7 +122,6 @@ export const BarcodeScanner = ({
         await api.addAlbum({
           artist: scannedResult.artist,
           album: scannedResult.album,
-          year: scannedResult.year,
           coverImageUrl: scannedResult.coverImageUrl,
           discogsId: scannedResult.discogsId,
           barcode: scannedResult.barcode,

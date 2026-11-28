@@ -133,7 +133,6 @@ export const ImageUploader = ({ onClose, onBack, onSuccess, onSearchByName, onMa
         await api.addAlbum({
           artist: match.artist,
           album: match.album,
-          year: match.year,
           coverImageUrl: match.coverImageUrl,
           discogsId: match.discogsId,
           status: action,

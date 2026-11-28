@@ -79,7 +79,7 @@ function catalogKey(album: DiscogsAlbum) {
 
 function lookupPressing(album: DiscogsAlbum): LookupPressing {
   const source = catalogSource(album);
-  return { artist: album.artist, year: album.year, source, pressing: album.pressing,
+  return { artist: album.artist, year: album.year, source, pressing: album.pressing, catalogNumberMatch: album.catalogNumberMatch,
     releaseId: source?.kind === 'pressing' ? album.discogsId : undefined };
 }
 
@@ -133,12 +133,15 @@ function AlbumCover({ src }: { src?: string }) {
   );
 }
 
-function AlbumMeta({ title, artist, year, shelf, resultId }: { title: string; artist: string; year?: number; shelf?: Shelf; resultId?: string }) {
+function AlbumMeta({ title, artist, year, shelf, resultId, artworkUnverified }: {
+  title: string; artist: string; year?: number; shelf?: Shelf; resultId?: string; artworkUnverified: boolean;
+}) {
   return (
     <div className="rh-album-meta p-3">
       <h3 id={resultId} tabIndex={resultId ? -1 : undefined} className={`${shelf ? 'rh-result-heading' : 'line-clamp-2'} text-sm text-gray-900`} title={title}>{title}</h3>
       <p className={`mt-0.5 ${shelf ? '' : 'truncate'} text-xs`} title={artist}>{artist}</p>
       {(year || shelf) && <p className="rh-album-year text-xs">{[year, shelf && shelfLabel[shelf]].filter(Boolean).join(' · ')}</p>}
+      {artworkUnverified && <p className="rh-artwork-status">Unverified artwork</p>}
     </div>
   );
 }
@@ -240,7 +243,7 @@ function App() {
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [manualEntry, setManualEntry] = useState<{ draft: ManualAlbumDraft; shelf: Shelf }>();
   const [detectedDraft, setDetectedDraft] = useState<ManualAlbumDraft>();
-  const [pressingReview, setPressingReview] = useState<{ album: DiscogsAlbum; destination: Shelf }>();
+  const [pressingReview, setPressingReview] = useState<{ album: DiscogsAlbum; destination: Shelf; searchedNumber?: string }>();
   const [albumReview, setAlbumReview] = useState<AlbumReview>();
   const [recentCatalogSaves, setRecentCatalogSaves] = useState<Set<number>>(() => new Set());
   const [showBarcodeScanner, setShowBarcodeScanner] = useState(false);
@@ -703,7 +706,7 @@ function App() {
       const { album: saved } = await api.addAlbum({
         artist: album.artist,
         album: album.album,
-        year: confirmed?.year ?? (album.discogsListing === 'release' ? undefined : album.year),
+        year: catalogSource(album)?.kind === 'album' ? album.year : undefined,
         coverImageUrl: confirmed?.coverImageUrl ?? album.coverImageUrl,
         ...(confirmed ? catalogSaveReference(confirmed) : catalogAlbumReference(album)),
         status: destination,
@@ -720,10 +723,11 @@ function App() {
     setSaveErrors(current => ({ ...current, [key]: undefined }));
     pressingReviewOpener.current = opener;
     pressingReviewFallback.current = opener.closest('article')?.querySelector('[data-catalog-primary]') ?? searchInput.current;
-    setPressingReview({ album, destination: saveShelf });
+    setPressingReview({ album, destination: saveShelf,
+      searchedNumber: latestScope.current === 'catalog-number' || album.catalogNumberMatch === 'exact' ? latestQuery.current.trim() : undefined });
   };
 
-  const saveReviewedPressing = async (release: DiscogsAlbum) => {
+  const saveReviewedAlbum = async (release?: DiscogsAlbum) => {
     if (!pressingReview || !await handleCatalogAdd(pressingReview.album, pressingReview.destination, release)) return false;
     window.requestAnimationFrame(() => {
       const target = pressingReviewFallback.current;
@@ -969,17 +973,9 @@ function App() {
           <article key={album.id} className={searchActive ? 'rh-saved-result' : 'rh-album-card relative flex flex-col rounded-xl border border-gray-200'}>
             <div className="rh-album-cover relative flex aspect-square items-center justify-center overflow-hidden">
               <AlbumCover key={src} src={src} />
-              {!album.cover_art_fetched && (
-                <span className="absolute left-2 top-2 z-10 rounded-full bg-yellow-400 p-1 text-yellow-900" title="Unverified artwork">
-                  <svg aria-hidden="true" className="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                  </svg>
-                  <span className="sr-only">Unverified artwork</span>
-                </span>
-              )}
             </div>
             <AlbumMeta title={album.title} artist={album.artist_name} year={album.year} shelf={searchActive ? album.status : undefined}
-              resultId={searchActive ? savedResultTarget(album.id) : undefined} />
+              resultId={searchActive ? savedResultTarget(album.id) : undefined} artworkUnverified={!album.cover_art_fetched} />
             <button
               type="button"
               className={searchActive ? 'rh-lookup-link rh-saved-open' : 'absolute inset-0 z-10 cursor-pointer rounded-[inherit]'}
@@ -996,11 +992,11 @@ function App() {
                 onMove={moveAlbum} onRemove={startRemoval} onOpenIssue={openSaveIssue} />
             </div>
             {searchActive && canCompare && <button type="button" className="rh-lookup-link rh-saved-compare"
-              aria-label={`Compare pressings for your saved ${album.title}`} aria-haspopup="dialog" disabled={!!pending}
+              aria-label={`Review pressings for your saved ${album.title}`} aria-haspopup="dialog" disabled={!!pending}
               onClick={event => {
                 albumReviewOpener.current = event.currentTarget;
                 setAlbumReview({ album, status: 'ready', choices: availablePressings });
-              }}>Compare pressings</button>}
+              }}>Review pressings</button>}
           </article>
         );
       })}
@@ -1105,6 +1101,12 @@ function App() {
               runSearch(searchQuery);
             }}
           >
+            <div className="rh-search-options">
+              <div className="rh-search-modes" role="group" aria-label="Search by">
+                <button type="button" aria-pressed={!numberSearch} onClick={() => changeLookupMethod('name')}>Album or artist</button>
+                <button type="button" aria-pressed={numberSearch} onClick={() => changeLookupMethod('catalog-number')}>Catalog number</button>
+              </div>
+            </div>
             <label htmlFor="album-search" className="sr-only">{numberSearch ? 'Search catalog number' : 'Search by album or artist'}</label>
             <div className="rh-query-controls flex min-w-0 gap-1.5 sm:gap-2">
               <div className="rh-search relative min-w-0 flex-1">
@@ -1115,7 +1117,7 @@ function App() {
                   enterKeyHint="search"
                   aria-keyshortcuts="Alt+Shift+F"
                   className={`w-full border px-2 py-2 sm:px-3 ${searchQuery ? 'pr-11 sm:pr-12' : ''}`}
-                  placeholder={numberSearch ? 'Number on the sleeve or label' : 'Album or artist'}
+                  placeholder={numberSearch ? 'Number on the sleeve or label' : 'Album title or artist name'}
                   value={searchQuery}
                   onChange={event => changeSearch(event.target.value)}
                 />
@@ -1143,12 +1145,7 @@ function App() {
                 <span className="hidden sm:inline">Search</span>
               </button>
             </div>
-            {numberSearch ? (
-              <div className="rh-search-scope flex flex-wrap items-center gap-1">
-                <span className="text-sm font-medium">Discogs catalog number</span>
-                <button type="button" className="rh-lookup-link" onClick={() => changeLookupMethod('name')}>Search by name</button>
-              </div>
-            ) : <div className="rh-search-scope flex flex-wrap items-center gap-2">
+            {!numberSearch && <div className="rh-search-scope flex items-center gap-2">
               <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">Search in</label>
               <select
                 id="search-scope"
@@ -1161,7 +1158,6 @@ function App() {
                 <option value="wishlist">Wishlist only</option>
                 <option value="catalog">Saved and catalogs</option>
               </select>
-              <button type="button" className="rh-lookup-link" onClick={() => changeLookupMethod('catalog-number')}>Catalog number</button>
             </div>}
               <button
                 type="button"
@@ -1357,12 +1353,14 @@ function App() {
                             titleMatches={album.titleMatches}
                             lookup={lookupPressing(album)}
                             lookupChoices={album.pressingChoices?.map(lookupPressing)}
+                            searchedNumber={numberSearch || album.catalogNumberMatch === 'exact' ? searchQuery.trim() : undefined}
                             onSavePressing={confirmSavedPressing}
                             onUndoPressing={undoSavedPressing}
                             onSavedCopyRemoved={pressingCopyRemoved}
                             onReviewPressings={hasPressings ? opener => openPressingReview(album, opener) : undefined}
                             reviewFirst={numberSearch || album.catalogNumberMatch === 'exact'}
                             onSearch={focusSearch}
+                            searchLabel={numberSearch ? 'Edit catalog number' : 'Edit album search'}
                             pending={pending === 'remove' ? undefined : pending}
                             disabled={pending === 'remove' || !!saveErrors[saveKey]?.stale}
                             openingSaved={loadingAlbumId !== undefined && (loadingAlbumId === albumId ||
@@ -1466,12 +1464,13 @@ function App() {
 
       {pressingReview && (
         <CatalogPressingPicker album={pressingReview.album} destination={pressingReview.destination}
+          searchedNumber={pressingReview.searchedNumber}
           opener={pressingReviewOpener} fallback={pressingReviewFallback} issue={pressingReviewIssue?.message} duplicate={pressingReviewDuplicate !== undefined}
           onOpenDuplicate={pressingReviewDuplicate === undefined ? undefined : () => void openSavedAlbum(pressingReviewDuplicate, {
             closeLookup: () => setPressingReview(undefined), issueKey: catalogKey(pressingReview.album),
           })}
           onClose={() => setPressingReview(undefined)}
-          onSave={saveReviewedPressing} />
+          onSave={saveReviewedAlbum} onSaveWithoutPressing={() => saveReviewedAlbum()} />
       )}
 
       {showSettings && <SettingsModal restoreBlocked={discogsImporting} onClose={() => setShowSettings(false)} onRestore={() => {

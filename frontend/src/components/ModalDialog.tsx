@@ -4,12 +4,13 @@ import { Toaster } from 'react-hot-toast';
 interface ModalDialogProps {
   labelledBy: string;
   onClose: () => void;
+  onEscape?: () => void;
   children: ReactNode;
   returnFocusTo?: RefObject<HTMLElement | null>;
   fallbackFocusTo?: RefObject<HTMLElement | null>;
 }
 
-export function ModalDialog({ labelledBy, onClose, children, returnFocusTo, fallbackFocusTo }: ModalDialogProps) {
+export function ModalDialog({ labelledBy, onClose, onEscape = onClose, children, returnFocusTo, fallbackFocusTo }: ModalDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useLayoutEffect(() => {
@@ -35,7 +36,7 @@ export function ModalDialog({ labelledBy, onClose, children, returnFocusTo, fall
       onCancel={event => {
         event.preventDefault();
         event.stopPropagation();
-        onClose();
+        onEscape();
       }}
       onClick={event => {
         if (event.target === event.currentTarget) onClose();

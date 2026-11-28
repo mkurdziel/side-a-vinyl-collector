@@ -182,7 +182,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
               <p className="mt-1 text-base text-gray-600">{currentAlbum.artist_name}</p>
               <p className="mt-2 text-sm font-medium text-gray-700">
                 {currentAlbum.status === 'wishlist' ? 'Wishlist' : 'Collection'}
-                {currentAlbum.year ? ` · Album year ${currentAlbum.year}` : ''}
+                {currentAlbum.year ? ` · Saved year ${currentAlbum.year}` : ''}
               </p>
             </div>
           </div>
@@ -195,7 +195,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
             {(onFindPressing || source?.url) && (
               <div className="-ml-2 flex flex-wrap items-center gap-x-2">
                 {onFindPressing && <button type="button" aria-haspopup="dialog" className="rh-lookup-link text-left"
-                  onClick={event => onFindPressing(currentAlbum, event.currentTarget)}>{pressingId ? 'Review other pressings' : 'Find a pressing'}</button>}
+                  onClick={event => onFindPressing(currentAlbum, event.currentTarget)}>Review pressings</button>}
                 {source?.url && (
                   <a className="rh-comparison-source" href={source.url} target="_blank" rel="noreferrer">
                     {pressingId ? `Discogs release ${pressingId}` : `${source.label} · ${source.type}`}

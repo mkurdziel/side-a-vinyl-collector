@@ -105,14 +105,14 @@ describe('album image uploads', () => {
     });
     props.onOpenSaved.mockResolvedValueOnce('opened');
     await upload({ name: 'cover.jpg', type: 'image/jpeg', size: 1024 });
-    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Compare pressings for Dummy' }).props.onClick());
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Review pressings for Dummy' }).props.onClick());
     const opener = { isConnected: true };
     const copy = renderer!.root.findByProps({ 'aria-label': 'Open saved album · Dummy by Portishead, Wishlist, 1994, Discogs release 20' });
     await act(async () => copy.props.onClick({ currentTarget: opener }));
     expect(props.onOpenSaved).toHaveBeenCalledExactlyOnceWith(23, opener, true);
-    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Close pressing comparison' }).props.onClick());
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Close pressing review' }).props.onClick());
     expect(renderer!.root.findByProps({ alt: 'Uploaded cover' })).toBeDefined();
-    expect(renderer!.root.findByProps({ 'aria-label': 'Compare pressings for Dummy' })).toBeDefined();
+    expect(renderer!.root.findByProps({ 'aria-label': 'Review pressings for Dummy' })).toBeDefined();
     expect(props.onClose).not.toHaveBeenCalled();
   });
 
@@ -124,7 +124,7 @@ describe('album image uploads', () => {
       inWishlist: true, existingMatch: 'title', titleMatches: [copy],
     }] });
     await upload({ name: 'cover.jpg', type: 'image/jpeg', size: 1024 }, 'collection', onSavePressing);
-    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Compare pressings for Dummy' }).props.onClick());
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Review pressings for Dummy' }).props.onClick());
     const click = async (label: string) => act(async () => renderer!.root.findAllByType('button')
       .find(button => button.children.join('') === label)!.props.onClick());
     await click('Use this pressing');

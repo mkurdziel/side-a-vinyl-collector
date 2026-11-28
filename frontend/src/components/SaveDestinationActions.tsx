@@ -19,6 +19,7 @@ interface SaveDestinationActionsProps {
   titleMatches?: SavedTitleMatch[];
   lookup?: LookupPressing;
   lookupChoices?: LookupPressing[];
+  searchedNumber?: string;
   onSearch?: () => void;
   searchLabel?: string;
   openingSaved?: boolean;
@@ -39,7 +40,7 @@ interface DestinationChoice {
 }
 
 export function SaveDestinationActions({
-  albumTitle, catalogLabel, preferred, existingStatus, existingMatch, existingAlbumId, savedHere, titleMatches, lookup, lookupChoices, onSearch, searchLabel,
+  albumTitle, catalogLabel, preferred, existingStatus, existingMatch, existingAlbumId, savedHere, titleMatches, lookup, lookupChoices, searchedNumber, onSearch, searchLabel,
   openingSaved, pending, disabled, onSelect, onOpenSaved, onReviewPressings, reviewFirst, onSavePressing, onUndoPressing, onSavedCopyRemoved,
 }: SaveDestinationActionsProps) {
   const [comparing, setComparing] = useState(false);
@@ -56,8 +57,10 @@ export function SaveDestinationActions({
   const savedShelfNames = [...new Set(matches.map(copy => shelfNames[copy.status]))];
   const matchedShelves = savedShelfNames.length ? savedShelfNames.join(' and ') : existingStatus && shelfNames[existingStatus];
   const savedPressing = matches.length === 1 ? savedPressingLabel(matches[0]) : undefined;
+  const reviewLabel = `Review pressings for ${catalogLabel ?? albumTitle}`;
   const comparison = comparing && onOpenSaved && (
     <PressingComparison title={albumTitle} lookup={lookup} lookupChoices={lookupChoices} matches={matches} onSavePressing={onSavePressing}
+      searchedNumber={searchedNumber}
       onUndoPressing={onUndoPressing} onSavedCopyRemoved={onSavedCopyRemoved}
       returnFocusTo={compareButton} fallbackFocusTo={addButton} onClose={() => setComparing(false)} onOpenSaved={onOpenSaved}
       searchLabel={searchLabel} onSearch={onSearch && (() => { setComparing(false); onSearch(); })} />
@@ -74,8 +77,8 @@ export function SaveDestinationActions({
     const opensDialog = reviewIsPrimary || (!!existingStatus && (canOpen || canCompare));
     const savedRecordLabel = titleOnly && matches.length === 1 ? savedCopyLabel(matches[0]) : catalogLabel;
     const primaryLabel = !existingStatus ? (pending === destination ? `Adding to ${name}…`
-      : reviewIsPrimary ? 'Review and save pressing' : onReviewPressings ? `Add album to ${name}` : `Add to ${name}`)
-      : compareFirst ? 'Compare pressings' : openingSaved ? 'Opening album…' : canOpen ? 'Open saved album' : 'Saved album';
+      : reviewIsPrimary ? 'Review pressings' : onReviewPressings ? `Add album to ${name}` : `Add to ${name}`)
+      : compareFirst ? 'Review pressings' : openingSaved ? 'Opening album…' : canOpen ? 'Open saved album' : 'Saved album';
     const savedLabel = titleOnly && !savedHere ? `Title already in ${matchedShelves}`
       : `${existingMatch === 'release' ? 'This pressing' : 'Album'} saved in ${matchedShelves}`;
     const savedEdition = matches.length === 1 && matches[0].discogs_id
@@ -96,7 +99,7 @@ export function SaveDestinationActions({
           if (compareFirst) compareButton.current = element;
         }}
           className={existingStatus ? 'rh-lookup-link text-left' : 'min-h-11 rounded-lg border border-gray-300 bg-gray-100 px-2 py-1.5 text-xs font-semibold text-gray-900 hover:bg-gray-50'}
-          aria-label={compareFirst ? `Compare pressings for ${catalogLabel}` : `${primaryLabel} · ${canOpen ? savedRecordLabel : catalogLabel}`}
+          aria-label={compareFirst || reviewIsPrimary ? reviewLabel : `${primaryLabel} · ${canOpen ? savedRecordLabel : catalogLabel}`}
           aria-describedby={existingStatus ? statusId : undefined}
           aria-disabled={blocked || (!!existingStatus && !opensDialog)} aria-busy={!!pending || !!openingSaved}
           aria-haspopup={opensDialog ? 'dialog' : undefined}
@@ -113,11 +116,11 @@ export function SaveDestinationActions({
           aria-label={`Save album without pressing to ${name} · ${catalogLabel}`}
           onClick={() => { if (!blocked) onSelect(destination); }}>Save album without pressing</button>}
         {!existingStatus && onReviewPressings && !reviewIsPrimary && <button type="button" className="rh-lookup-link text-left"
-          aria-disabled={blocked} aria-haspopup="dialog" aria-label={`Check pressings for ${catalogLabel}`}
-          onClick={event => { if (!blocked) onReviewPressings(event.currentTarget); }}>Check pressings</button>}
+          aria-disabled={blocked} aria-haspopup="dialog" aria-label={reviewLabel}
+          onClick={event => { if (!blocked) onReviewPressings(event.currentTarget); }}>Review pressings</button>}
         {canCompare && !compareFirst && <button ref={compareButton} type="button" className="rh-lookup-link text-left"
-          aria-disabled={blocked} aria-haspopup="dialog" aria-label={`Compare pressings for ${catalogLabel}`}
-          onClick={() => { if (!blocked) compare(); }}>Compare pressings</button>}
+          aria-disabled={blocked} aria-haspopup="dialog" aria-label={reviewLabel}
+          onClick={() => { if (!blocked) compare(); }}>Review pressings</button>}
         {compareFirst && canOpen && <button type="button" className="rh-lookup-link text-left"
           aria-haspopup="dialog" aria-disabled={blocked} aria-label={`Open saved album · ${savedRecordLabel}`}
           onClick={event => { if (!blocked) void onOpenSaved(savedId, event.currentTarget); }}>{openingSaved ? 'Opening album…' : 'Open saved album'}</button>}
@@ -136,8 +139,8 @@ export function SaveDestinationActions({
           <p className="rh-saved-outcome">Saved in {matchedShelves}{savedPressing && ` · ${savedPressing}`}</p>
           {onOpenSaved && matches.length > 0 && (
             <button ref={compareButton} type="button" className="rh-lookup-link text-left" disabled={blocked}
-              aria-haspopup="dialog" aria-label={`Compare pressings for ${catalogLabel ?? albumTitle}`} onClick={() => setComparing(true)}>
-              Compare pressings
+              aria-haspopup="dialog" aria-label={reviewLabel} onClick={() => setComparing(true)}>
+              Review pressings
             </button>
           )}
         </div>
