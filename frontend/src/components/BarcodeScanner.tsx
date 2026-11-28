@@ -4,8 +4,8 @@ import api, { ApiError, isExactSavedMatch } from '../services/api';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 import { ModalDialog } from './ModalDialog';
 import { SaveDestinationActions, type DestinationAction } from './SaveDestinationActions';
-import { applyLookupShelfEdits, discogsReleaseSource, type LookupShelfEdits } from '../albumDisplay';
-import type { OpenSavedAlbum } from './PressingComparison';
+import { applyLookupPressingEdits, applyLookupShelfEdits, discogsReleaseSource, type LookupPressingEdits, type LookupShelfEdits } from '../albumDisplay';
+import type { OpenSavedAlbum, SavePressing, UndoPressing } from './PressingComparison';
 import { LookupRecovery } from './LookupRecovery';
 import type { ManualAlbumDraft } from './ManualAlbumDialog';
 
@@ -32,12 +32,17 @@ interface BarcodeScannerProps {
   onMoveSaved: (id: number, title: string) => Promise<boolean>;
   onUndoMove: (id: number) => Promise<boolean>;
   onOpenSaved: OpenSavedAlbum;
+  onSavePressing?: SavePressing;
+  onUndoPressing?: UndoPressing;
+  onSavedCopyRemoved?: (id: number) => void;
   lookupShelfEdits?: LookupShelfEdits;
+  lookupPressingEdits?: LookupPressingEdits;
   viewMode: 'collection' | 'wishlist';
 }
 
 export const BarcodeScanner = ({
-  onClose, onBack, onSuccess, onSearchByName, onManual, onMoveSaved, onUndoMove, onOpenSaved, lookupShelfEdits, viewMode,
+  onClose, onBack, onSuccess, onSearchByName, onManual, onMoveSaved, onUndoMove, onOpenSaved, onSavePressing,
+  onUndoPressing, onSavedCopyRemoved, lookupShelfEdits, lookupPressingEdits, viewMode,
 }: BarcodeScannerProps) => {
   const [lookup, setLookup] = useState<Lookup>({ status: 'scanning' });
   const [cameraEnabled, setCameraEnabled] = useState(false);
@@ -54,7 +59,8 @@ export const BarcodeScanner = ({
   const focusNextScan = useRef(false);
   const completedBarcode = useRef<string | undefined>(undefined);
   const [manualBarcode, setManualBarcode] = useState('');
-  const scannedResult = lookup.status === 'found' ? applyLookupShelfEdits(lookup.match, lookupShelfEdits) : null;
+  const scannedResult = lookup.status === 'found'
+    ? applyLookupShelfEdits(applyLookupPressingEdits(lookup.match, lookupPressingEdits), lookupShelfEdits) : null;
   const titleOnly = scannedResult?.existingStatus && !isExactSavedMatch(scannedResult.existingMatch);
   const foundDuplicate = duplicateId !== undefined && lookupShelfEdits?.[duplicateId] !== null ? duplicateId : undefined;
   const scanning = lookup.status === 'scanning';
@@ -367,6 +373,9 @@ export const BarcodeScanner = ({
                   onSearch={editMatchedSearch}
                   searchLabel="Search catalogs by name"
                   onOpenSaved={onOpenSaved}
+                  onSavePressing={discogsReleaseSource(scannedResult.discogsId) ? onSavePressing : undefined}
+                  onUndoPressing={onUndoPressing}
+                  onSavedCopyRemoved={onSavedCopyRemoved}
                   pending={saving}
                   onSelect={action => void saveMatch(action)}
                 />}

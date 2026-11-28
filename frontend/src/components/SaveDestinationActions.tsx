@@ -1,7 +1,7 @@
 import { useId, useRef, useState } from 'react';
 import { isExactSavedMatch, type SavedMatch, type SavedTitleMatch } from '../services/api';
 import { savedCopyLabel, savedPressingLabel } from '../albumDisplay';
-import { PressingComparison, type LookupPressing, type OpenSavedAlbum } from './PressingComparison';
+import { PressingComparison, type LookupPressing, type OpenSavedAlbum, type SavePressing, type UndoPressing } from './PressingComparison';
 
 type Shelf = 'collection' | 'wishlist';
 export type DestinationAction = Shelf | 'move';
@@ -28,7 +28,9 @@ interface SaveDestinationActionsProps {
   onOpenSaved?: OpenSavedAlbum;
   onReviewPressings?: (opener: HTMLButtonElement) => void;
   reviewFirst?: boolean;
-  onSavePressing?: (copy: SavedTitleMatch, releaseId: number) => Promise<SavedTitleMatch>;
+  onSavePressing?: SavePressing;
+  onUndoPressing?: UndoPressing;
+  onSavedCopyRemoved?: (id: number) => void;
 }
 
 interface DestinationChoice {
@@ -38,7 +40,7 @@ interface DestinationChoice {
 
 export function SaveDestinationActions({
   albumTitle, catalogLabel, preferred, existingStatus, existingMatch, existingAlbumId, savedHere, titleMatches, lookup, lookupChoices, onSearch, searchLabel,
-  openingSaved, pending, disabled, onSelect, onOpenSaved, onReviewPressings, reviewFirst, onSavePressing,
+  openingSaved, pending, disabled, onSelect, onOpenSaved, onReviewPressings, reviewFirst, onSavePressing, onUndoPressing, onSavedCopyRemoved,
 }: SaveDestinationActionsProps) {
   const [comparing, setComparing] = useState(false);
   const statusId = useId();
@@ -56,6 +58,7 @@ export function SaveDestinationActions({
   const savedPressing = matches.length === 1 ? savedPressingLabel(matches[0]) : undefined;
   const comparison = comparing && onOpenSaved && (
     <PressingComparison title={albumTitle} lookup={lookup} lookupChoices={lookupChoices} matches={matches} onSavePressing={onSavePressing}
+      onUndoPressing={onUndoPressing} onSavedCopyRemoved={onSavedCopyRemoved}
       returnFocusTo={compareButton} fallbackFocusTo={addButton} onClose={() => setComparing(false)} onOpenSaved={onOpenSaved}
       searchLabel={searchLabel} onSearch={onSearch && (() => { setComparing(false); onSearch(); })} />
   );

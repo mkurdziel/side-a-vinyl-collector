@@ -66,6 +66,7 @@ app.delete('/api/albums/:id', albumController.deleteAlbum);
 app.patch('/api/albums/:id/notes', albumController.updateAlbumNotes);
 app.patch('/api/albums/:id/status', albumController.updateAlbumStatus);
 app.patch('/api/albums/:id/pressing', albumController.updateAlbumPressing);
+app.post('/api/albums/:id/pressing/undo', albumController.undoAlbumPressing);
 
 // Search route
 app.get('/api/search', searchController.search);

@@ -15,6 +15,30 @@ const catalogNumbers = (values: unknown[]) => joinPressingValues(values.filter(
 const masterId = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 
+function boundedPressingText(value: unknown, limit: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text || undefined;
+}
+
+function matrixRunouts(identifiers: unknown): PressingDetails['matrixRunouts'] {
+  if (!Array.isArray(identifiers)) return undefined;
+  const entries: NonNullable<PressingDetails['matrixRunouts']> = [];
+  const seen = new Set<string>();
+  for (const identifier of identifiers) {
+    if (typeof identifier?.type !== 'string' || !/^matrix\s*\/\s*runout$/i.test(identifier.type.trim())) continue;
+    const value = boundedPressingText(identifier.value, 240);
+    const description = boundedPressingText(identifier.description, 120);
+    if (!value) continue;
+    const key = JSON.stringify([value, description]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    entries.push(description ? { value, description } : { value });
+    if (entries.length === 6) break;
+  }
+  return entries.length ? entries : undefined;
+}
+
 class DiscogsService {
   private client: AxiosInstance;
   private rateLimiter: RateLimiter;
@@ -147,7 +171,7 @@ class DiscogsService {
   }
 
   async getRelease(releaseId: number, { reportUnavailable = false } = {}): Promise<DiscogsAlbum | null> {
-    const cacheKey = `release:v3:${releaseId}`;
+    const cacheKey = `release:v4:${releaseId}`;
     const cached = await this.getCached<DiscogsAlbum>(cacheKey);
     if (cached) return cached;
 
@@ -373,14 +397,19 @@ class DiscogsService {
     return Object.values(pressing).some(Boolean) ? pressing : undefined;
   }
 
-  private parsePressingDetails(release: { labels?: unknown; formats?: unknown; country?: unknown }): PressingDetails {
+  private parsePressingDetails(release: { labels?: unknown; formats?: unknown; country?: unknown; identifiers?: unknown }): PressingDetails {
     const labels: Array<{ name?: unknown; catno?: unknown } | null> = Array.isArray(release.labels) ? release.labels : [];
-    const formats: Array<{ name?: unknown; descriptions?: unknown } | null> = Array.isArray(release.formats) ? release.formats : [];
+    const formats: Array<{ name?: unknown; descriptions?: unknown; text?: unknown } | null> = Array.isArray(release.formats) ? release.formats : [];
     return {
-      format: joinPressingValues(formats.map(format => joinPressingValues([format?.name, ...(Array.isArray(format?.descriptions) ? format.descriptions : [])]))),
+      format: joinPressingValues(formats.map(format => joinPressingValues([
+        format?.name,
+        ...(Array.isArray(format?.descriptions) ? format.descriptions : []),
+        boundedPressingText(format?.text, 120),
+      ]))),
       label: joinPressingValues(labels.map(label => label?.name)),
       catalogNumber: catalogNumbers(labels.map(label => label?.catno)),
-      country: typeof release.country === 'string' ? release.country : undefined,
+      country: joinPressingValues([release.country]),
+      matrixRunouts: matrixRunouts(release.identifiers),
     };
   }
 }

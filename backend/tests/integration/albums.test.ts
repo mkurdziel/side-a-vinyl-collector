@@ -32,6 +32,7 @@ describe('Album CRUD Operations', () => {
     app.patch('/api/albums/:id/notes', albumController.updateAlbumNotes);
     app.patch('/api/albums/:id/status', albumController.updateAlbumStatus);
     app.patch('/api/albums/:id/pressing', albumController.updateAlbumPressing);
+    app.post('/api/albums/:id/pressing/undo', albumController.undoAlbumPressing);
     app.use(errorHandler);
   });
 
@@ -282,6 +283,8 @@ describe('Album CRUD Operations', () => {
 
     const changePressing = (discogsId: number, expectedDiscogsId: number | null) => request(app)
       .patch(`/api/albums/${albumId}/pressing`).send({ discogsId, expectedDiscogsId });
+    const undoPressing = (undoToken?: string, id = albumId) => request(app)
+      .post(`/api/albums/${id}/pressing/undo`).send({ undoToken });
 
     it('confirms and corrects a pressing, changing only the Discogs reference', async () => {
       await testPool.query(`UPDATE albums SET cover_image_url = 'https://example.com/cover.jpg',
@@ -300,6 +303,70 @@ describe('Album CRUD Operations', () => {
       expect((await testPool.query('SELECT * FROM barcodes WHERE album_id = $1', [albumId])).rows).toEqual(mappingsBefore.rows);
       expect(mappingsBefore.rows).toHaveLength(1);
       expect(getRelease).toHaveBeenCalledWith(release.id, { reportUnavailable: true });
+    });
+
+    it('restores an unconfirmed pressing and its catalog listing, retaining later shelf and notes edits', async () => {
+      const confirmed = await changePressing(release.id, null).expect(200);
+      expect(confirmed.headers['cache-control']).toBe('no-store');
+      const { undoToken } = confirmed.body;
+      expect(undoToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      await request(app).patch(`/api/albums/${albumId}/status`).send({ status: 'collection', expectedStatus: 'wishlist' }).expect(200);
+      await request(app).patch(`/api/albums/${albumId}/notes`).send({ notes: 'Notes after the pressing change' }).expect(200);
+      const edited = await request(app).get(`/api/albums/${albumId}`).expect(200);
+
+      const restored = await undoPressing(undoToken).expect(200);
+      expect(restored.body.album).toEqual({ ...edited.body.album, discogs_id: null,
+        catalog_listing: { source: 'discogs', kind: 'master', id: 60 } });
+      expect((await testPool.query('SELECT barcode FROM barcodes WHERE album_id = $1', [albumId])).rows).toEqual([{ barcode }]);
+      expect(getRelease).toHaveBeenCalledTimes(1);
+      await undoPressing(undoToken).expect(409);
+    });
+
+    it('restores a previous release and rejects a superseded token even after that release is restored', async () => {
+      const confirmed = await changePressing(release.id, null).expect(200);
+      const corrected = await changePressing(otherPressing.id, release.id).expect(200);
+      await undoPressing(confirmed.body.undoToken).expect(409);
+      const restored = await undoPressing(corrected.body.undoToken).expect(200);
+      expect(restored.body.album).toEqual(confirmed.body.album);
+      await undoPressing(confirmed.body.undoToken).expect(409);
+    });
+
+    it('rejects missing, malformed, forged, cross-record and expired undo tokens', async () => {
+      const confirmed = await changePressing(release.id, null).expect(200);
+      const other = await request(app).post('/api/albums').send({ artist: 'Another artist', album: 'Another album' }).expect(201);
+      await undoPressing().expect(400);
+      await undoPressing('invalid').expect(400);
+      await undoPressing('w'.repeat(43)).expect(409);
+      await undoPressing(confirmed.body.undoToken, other.body.album.id).expect(409);
+      await testPool.query('UPDATE album_pressing_undo SET expires_at = clock_timestamp()');
+      await undoPressing(confirmed.body.undoToken).expect(409);
+      expect((await request(app).get(`/api/albums/${albumId}`).expect(200)).body.album).toEqual(confirmed.body.album);
+    });
+
+    it('lets only one concurrent call consume an undo token', async () => {
+      const { body } = await changePressing(release.id, null).expect(200);
+      const responses = await Promise.all([undoPressing(body.undoToken), undoPressing(body.undoToken)]);
+      expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
+      expect((await request(app).get(`/api/albums/${albumId}`).expect(200)).body.album.discogs_id).toBeNull();
+    });
+
+    it('rejects undo if the previous release is now associated with another album', async () => {
+      await changePressing(release.id, null).expect(200);
+      const { body } = await changePressing(otherPressing.id, release.id).expect(200);
+      await request(app).post('/api/albums').send({ artist: 'Another artist', album: 'Another album', discogsId: release.id }).expect(201);
+      const attempted = await undoPressing(body.undoToken).expect(409);
+      expect(attempted.body.error).toContain('linked to another album');
+      expect((await request(app).get(`/api/albums/${albumId}`).expect(200)).body.album).toEqual(body.album);
+    });
+
+    it('invalidates undo when the album is removed, even if it is saved again', async () => {
+      const { body } = await changePressing(release.id, null).expect(200);
+      await request(app).delete(`/api/albums/${albumId}`).expect(200);
+      await undoPressing(body.undoToken).expect(404);
+      const readded = await request(app).post('/api/albums').send({ artist: 'bjork', album: 'Debut - Live' }).expect(201);
+      expect(readded.body.album.id).toBe(albumId);
+      await undoPressing(body.undoToken).expect(409);
+      expect((await request(app).get(`/api/albums/${albumId}`).expect(200)).body.album.discogs_id).toBe(release.id);
     });
 
     it.each([{ artist: 'Another artist' }, { album: 'Another album' }])('rejects a different release identity %j', async mismatch => {

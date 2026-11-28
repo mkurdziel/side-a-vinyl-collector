@@ -13,6 +13,7 @@ vi.mock('../src/services/api', async importOriginal => ({
   default: { analyzeImage, addAlbum },
 }));
 import { ImageUploader } from '../src/components/ImageUploader';
+import type { SavePressing } from '../src/components/PressingComparison';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let renderer: ReturnType<typeof create> | undefined;
@@ -39,9 +40,9 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function upload(file: { name: string; type: string; size: number }, viewMode: 'collection' | 'wishlist' = 'collection') {
+async function upload(file: { name: string; type: string; size: number }, viewMode: 'collection' | 'wishlist' = 'collection', onSavePressing?: SavePressing) {
   await act(async () => {
-    renderer = create(createElement(ImageUploader, { ...props, viewMode }), {
+    renderer = create(createElement(ImageUploader, { ...props, viewMode, onSavePressing }), {
       createNodeMock: node => ({ focus: () => focused(node.props.children) }),
     });
   });
@@ -113,6 +114,24 @@ describe('album image uploads', () => {
     expect(renderer!.root.findByProps({ alt: 'Uploaded cover' })).toBeDefined();
     expect(renderer!.root.findByProps({ 'aria-label': 'Compare pressings for Dummy' })).toBeDefined();
     expect(props.onClose).not.toHaveBeenCalled();
+  });
+
+  it('confirms a specific photo candidate while keeping the photo and saved record context', async () => {
+    const copy = { id: 23, title: 'Dummy', artist_name: 'Portishead', status: 'wishlist' as const, discogs_id: null };
+    const onSavePressing = vi.fn().mockResolvedValue({ album: { ...copy, discogs_id: 1 }, undoToken: 'undo-photo' });
+    analyzeImage.mockResolvedValueOnce({ extractedText: { artist: 'Portishead', album: 'Dummy' }, discogsMatches: [{
+      id: 1, discogsId: 1, artist: 'Portishead', album: 'Dummy', source: 'discogs', discogsListing: 'release',
+      inWishlist: true, existingMatch: 'title', titleMatches: [copy],
+    }] });
+    await upload({ name: 'cover.jpg', type: 'image/jpeg', size: 1024 }, 'collection', onSavePressing);
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Compare pressings for Dummy' }).props.onClick());
+    const click = async (label: string) => act(async () => renderer!.root.findAllByType('button')
+      .find(button => button.children.join('') === label)!.props.onClick());
+    await click('Use this pressing');
+    await click('Confirm pressing');
+    expect(onSavePressing).toHaveBeenCalledExactlyOnceWith(copy, 1);
+    expect(renderer!.root.findByProps({ alt: 'Uploaded cover' })).toBeDefined();
+    expect(props.onSearchByName).not.toHaveBeenCalled();
   });
 
   it('labels confidence once and prefills name search when no albums match', async () => {

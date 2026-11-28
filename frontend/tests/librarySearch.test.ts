@@ -27,6 +27,7 @@ vi.mock('../src/components/SettingsModal', () => ({ SettingsModal: () => null })
 
 import App from '../src/App';
 import { AddMenu } from '../src/components/AddMenu';
+import { AlbumDetailModal } from '../src/components/AlbumDetailModal';
 import { ImageUploader } from '../src/components/ImageUploader';
 import { CatalogPressingPicker } from '../src/components/CatalogPressingPicker';
 import { PressingComparison } from '../src/components/PressingComparison';
@@ -145,12 +146,13 @@ describe('library and catalog search', () => {
     await chooseScope('catalog');
     expect(button('Open Blue Train by John Coltrane, Wishlist, saved record 1')).toBeDefined();
     expect(button('Add to Wishlist · Giant Steps by John Coltrane')).toBeUndefined();
-    const saveDefault = renderer.root.findByProps({ id: 'catalog-save-shelf' });
+    expect(renderer.root.findAllByProps({ id: 'catalog-save-shelf' })).toHaveLength(0);
     expect(button('Wishlist')).toBeUndefined();
     expect(search).toHaveBeenCalledTimes(2);
-    expect(saveDefault.props.value).toBe('collection');
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Coltrane');
     await act(async () => discovery.resolve({ local: [], discogs: [catalog] }));
+    const saveDefault = renderer.root.findByProps({ id: 'catalog-save-shelf' });
+    expect(saveDefault.props.value).toBe('collection');
     expect(button('Add to Collection · Giant Steps by John Coltrane')).toBeDefined();
     expect(button('Add to Wishlist · Giant Steps by John Coltrane')).toBeUndefined();
     await act(async () => saveDefault.props.onChange({ target: { value: 'wishlist' } }));
@@ -549,6 +551,52 @@ describe('library and catalog search', () => {
     expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ discogsId: 102, status: 'collection' }));
   });
 
+  it('restores each lookup method with its own query, results and scope', async () => {
+    search.mockImplementation(async (_query, _signal, kind) => kind === 'saved'
+      ? { local: [saved], discogs: [] }
+      : { local: [], discogs: [catalog] });
+    searchCatalogNumber.mockResolvedValue({ local: [], discogs: [{ ...catalog, discogsListing: 'release', pressing: { catalogNumber: 'ABC-123' } }] });
+    await renderLibrary();
+    await chooseScope('catalog');
+    await editSearch('Coltrane');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    await act(async () => button('Catalog number').props.onClick());
+    await editSearch('ABC-123');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+
+    await act(async () => button('Search by name').props.onClick());
+    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Coltrane');
+    expect(renderer.root.findByProps({ id: 'search-scope' }).props.value).toBe('catalog');
+    expect(button('Open Blue Train by John Coltrane, Wishlist, saved record 1')).toBeDefined();
+    expect(search).toHaveBeenCalledTimes(2);
+
+    await act(async () => button('Catalog number').props.onClick());
+    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('ABC-123');
+    expect(JSON.stringify(renderer.toJSON())).toContain('ABC-123');
+    expect(searchCatalogNumber).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens a saved-album review with matching pressings and returns to the same album', async () => {
+    getAlbums.mockResolvedValue({ albums: [saved] });
+    search.mockResolvedValue({ local: [], discogs: [
+      { ...catalog, album: saved.title, discogsListing: 'release', pressing: { catalogNumber: 'BLP 1577' } },
+      { ...catalog, id: 104, discogsId: 104, discogsListing: 'release' },
+    ] });
+    await renderLibrary();
+    await act(async () => button('Open Blue Train by John Coltrane, Wishlist, saved record 1').props.onClick({ currentTarget: {} }));
+    await act(async () => button('Find a pressing').props.onClick({ currentTarget: {} }));
+
+    const review = renderer.root.findByType(PressingComparison);
+    expect(review.props.lookupChoices.map((choice: { releaseId: number }) => choice.releaseId)).toEqual([101]);
+    expect(review.props.matches).toEqual([saved]);
+    expect(search).toHaveBeenCalledExactlyOnceWith('John Coltrane Blue Train', expect.any(AbortSignal), 'catalog', undefined, 0);
+
+    await act(async () => button('Back to album').props.onClick());
+    expect(renderer.root.findAllByType(PressingComparison)).toHaveLength(0);
+    expect(renderer.root.findByType(AlbumDetailModal).props.album.id).toBe(saved.id);
+    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('');
+  });
+
   it('saves a catalog match as an album unless the collector chose a pressing', async () => {
     search.mockImplementation(async (_query, _signal, kind) => ({ local: [], discogs: kind === 'catalog'
       ? [{ ...catalog, discogsListing: 'release', masterId: 60, year: 2019 }] : [] }));
@@ -572,7 +620,7 @@ describe('library and catalog search', () => {
     search.mockImplementation(async (_query, _signal, kind) => kind === 'saved'
       ? { local: [copy], discogs: [], nextOffset: 20 }
       : { local: [], discogs: [{ ...first, pressingChoices: [first, alternate], inWishlist: true, existingMatch: 'title', titleMatches: [copy] }] });
-    updatePressing.mockResolvedValue({ album: { ...copy, discogs_id: 102 } });
+    updatePressing.mockResolvedValue({ album: { ...copy, discogs_id: 102 }, undoToken: 'undo-pressing-102' });
     await renderLibrary();
     await chooseScope('catalog');
     await editSearch('Giant Steps');

@@ -68,11 +68,37 @@ describe('Discogs pressing lookup', () => {
     get.mockResolvedValue({ data: { id: 11, title: 'Dummy', year: 2017, artists: [{ name: 'Portishead' }] } });
     await expect(pressingDetails()).resolves.toMatchObject({ status: 200, body: { pressing: { year: 2017 } } });
   });
+
+  it('includes full-release evidence and keeps only the first six distinct matrix or runout inscriptions', async () => {
+    const runout = { type: 'Matrix / Runout', value: ' ABC-123 A1 ', description: ' Side A, etched ' };
+    get.mockResolvedValueOnce({ data: {
+      id: 11, title: 'Dummy', year: 2017, artists: [{ name: 'Portishead' }], country: ' UK ',
+      labels: [{ name: 'Go! Beat', catno: 'ABC 123' }, { name: 'Go! Beat', catno: 'none' }],
+      formats: [{ name: 'Vinyl', descriptions: ['LP', 'Stereo', 'Repress'], text: 'Blue' }],
+      identifiers: [
+        { type: 'Barcode', value: '0987654321' }, null, { type: 'Matrix / Runout', value: ' ' },
+        runout, runout, { type: 'matrix/runout', value: 'ABC-123 B1' },
+        { ...runout, value: 'x'.repeat(400), description: 'y'.repeat(200) },
+        ...[2, 3, 4, 5].map(variant => ({ ...runout, value: `ABC-123 A${variant}` })),
+      ],
+    } });
+
+    await expect(pressingDetails()).resolves.toEqual({ status: 200, body: { pressing: {
+      year: 2017, catalogNumber: 'ABC 123', label: 'Go! Beat', country: 'UK', format: 'Vinyl · LP · Stereo · Repress · Blue',
+      matrixRunouts: [
+        { value: 'ABC-123 A1', description: 'Side A, etched' },
+        { value: 'ABC-123 B1' },
+        { value: `${'x'.repeat(239)}…`, description: `${'y'.repeat(119)}…` },
+        ...[2, 3, 4].map(variant => ({ value: `ABC-123 A${variant}`, description: 'Side A, etched' })),
+      ],
+    } } });
+  });
+
   it('keeps the complete album title in a full release response', async () => {
     get.mockResolvedValueOnce({ data: { id: 11, title: 'Side A - Side B', artists: [{ name: 'Artist (2)' }] } });
 
     await expect(discogs.getRelease(11)).resolves.toMatchObject({ artist: 'Artist (2)', album: 'Side A - Side B' });
-    expect(getCached).toHaveBeenCalledExactlyOnceWith('discogs:release:v3:11');
+    expect(getCached).toHaveBeenCalledExactlyOnceWith('discogs:release:v4:11');
   });
 
   it('keeps the full artist credit for a collaborative release', async () => {

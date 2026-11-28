@@ -3,8 +3,8 @@ import { toast } from 'react-hot-toast';
 import api, { ApiError, isExactSavedMatch, type DiscogsAlbum } from '../services/api';
 import { ModalDialog } from './ModalDialog';
 import { SaveDestinationActions, type DestinationAction } from './SaveDestinationActions';
-import { applyLookupShelfEdits, catalogSource, type LookupShelfEdits } from '../albumDisplay';
-import type { OpenSavedAlbum } from './PressingComparison';
+import { applyLookupPressingEdits, applyLookupShelfEdits, catalogSource, type LookupPressingEdits, type LookupShelfEdits } from '../albumDisplay';
+import type { OpenSavedAlbum, SavePressing, UndoPressing } from './PressingComparison';
 import { LookupRecovery } from './LookupRecovery';
 import type { ManualAlbumDraft } from './ManualAlbumDialog';
 
@@ -16,11 +16,16 @@ interface ImageUploaderProps {
   onManual: (draft?: ManualAlbumDraft) => void;
   onMoveSaved: (id: number, title: string) => Promise<boolean>;
   onOpenSaved: OpenSavedAlbum;
+  onSavePressing?: SavePressing;
+  onUndoPressing?: UndoPressing;
+  onSavedCopyRemoved?: (id: number) => void;
   lookupShelfEdits?: LookupShelfEdits;
+  lookupPressingEdits?: LookupPressingEdits;
   viewMode: 'collection' | 'wishlist';
 }
 
-export const ImageUploader = ({ onClose, onBack, onSuccess, onSearchByName, onManual, onMoveSaved, onOpenSaved, lookupShelfEdits, viewMode }: ImageUploaderProps) => {
+export const ImageUploader = ({ onClose, onBack, onSuccess, onSearchByName, onManual, onMoveSaved, onOpenSaved, onSavePressing,
+  onUndoPressing, onSavedCopyRemoved, lookupShelfEdits, lookupPressingEdits, viewMode }: ImageUploaderProps) => {
   const [analyzing, setAnalyzing] = useState(false);
   const [matches, setMatches] = useState<DiscogsAlbum[]>([]);
   const [imagePreview, setImagePreview] = useState<string>('');
@@ -33,9 +38,9 @@ export const ImageUploader = ({ onClose, onBack, onSuccess, onSearchByName, onMa
   const outcomeHeading = useRef<HTMLHeadingElement>(null);
   const focusUpload = useRef(false);
   const draft = extractedInfo ? { artist: extractedInfo.artist, album: extractedInfo.album } : undefined;
-  const results = matches.map(match => applyLookupShelfEdits({
+  const results = matches.map(match => applyLookupShelfEdits(applyLookupPressingEdits({
     ...match, existingStatus: match.inCollection ? 'collection' as const : match.inWishlist ? 'wishlist' as const : undefined,
-  }, lookupShelfEdits));
+  }, lookupPressingEdits), lookupShelfEdits));
   const allTitleOnly = results.every(match => match.existingStatus && !isExactSavedMatch(match.existingMatch));
 
   useLayoutEffect(() => {
@@ -272,10 +277,13 @@ export const ImageUploader = ({ onClose, onBack, onSuccess, onSearchByName, onMa
                           existingAlbumId={match.existingAlbumId}
                           titleMatches={match.titleMatches}
                           lookup={{ artist: match.artist, year: match.year, source: catalogSource(match),
-                            releaseId: match.discogsListing === 'release' ? match.discogsId : undefined }}
+                            pressing: match.pressing, releaseId: catalogSource(match)?.kind === 'pressing' ? match.discogsId : undefined }}
                           onSearch={() => onSearchByName(`${match.artist} ${match.album}`, { artist: match.artist, album: match.album })}
                           searchLabel="Search catalogs by name"
                           onOpenSaved={onOpenSaved}
+                          onSavePressing={catalogSource(match)?.kind === 'pressing' ? onSavePressing : undefined}
+                          onUndoPressing={onUndoPressing}
+                          onSavedCopyRemoved={onSavedCopyRemoved}
                           pending={saving?.id === match.discogsId ? saving.action : undefined}
                           disabled={!!saving}
                           onSelect={action => void saveMatch({

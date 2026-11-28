@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Toaster, toast } from 'react-hot-toast';
 import api, { ApiError, type Album, type DiscogsAlbum, type SavedTitleMatch, type SearchResult, getCoverArtUrl, isExactSavedMatch } from './services/api';
 import { applyLookupShelfEdits, catalogAlbumReference, catalogRecordLabel, catalogSaveReference, catalogSource, listingEvidence, savedCopyLabel, type LookupShelfEdits } from './albumDisplay';
-import type { LookupPressing, OpenSavedAlbum, SavedAlbumOutcome } from './components/PressingComparison';
+import { PressingComparison, type LookupPressing, type OpenSavedAlbum, type SavePressing, type SavedAlbumOutcome, type UndoPressing } from './components/PressingComparison';
 import { AddMenu } from './components/AddMenu';
 import { BarcodeScanner } from './components/BarcodeScanner';
 import { ImageUploader } from './components/ImageUploader';
@@ -30,6 +30,24 @@ type SaveAction = DestinationAction | 'remove';
 type ShelfMove = { albumId: number; title: string; from: Shelf; to: Shelf };
 type SaveIssue = { message: string; albumId?: number; stale?: boolean };
 type LoadedPage = { target: string; message: string; trigger?: HTMLButtonElement };
+type LookupMode = 'name' | 'catalog-number';
+type LookupDraft = {
+  query: string;
+  scope: SearchScope;
+  saved: SearchState;
+  catalog: SearchState;
+  destination: Shelf;
+  detected?: ManualAlbumDraft;
+  sort: SortBy;
+  savedLoading: boolean;
+  catalogLoading: boolean;
+  pages: Partial<Record<ResultKind, 'pending' | 'error'>>;
+  libraryVersion: number;
+};
+type AlbumReview = { album: Album; status: 'pending' | 'error' | 'ready'; choices: LookupPressing[]; removed?: boolean };
+
+const lookupMode = (scope: SearchScope): LookupMode => scope === 'catalog-number' ? 'catalog-number' : 'name';
+const catalogIdentity = (value: string) => value.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
 const shelves: Shelf[] = ['collection', 'wishlist'];
 const resultKinds: ResultKind[] = ['saved', 'catalog'];
@@ -63,6 +81,21 @@ function lookupPressing(album: DiscogsAlbum): LookupPressing {
   const source = catalogSource(album);
   return { artist: album.artist, year: album.year, source, pressing: album.pressing,
     releaseId: source?.kind === 'pressing' ? album.discogsId : undefined };
+}
+
+function savedPressingChoices(album: Album, matches: DiscogsAlbum[]) {
+  const title = catalogIdentity(album.title);
+  const artist = catalogIdentity(album.artist_name);
+  const choices = new Map<number, LookupPressing>();
+  for (const match of matches) {
+    if (match.existingAlbumId !== album.id && !match.titleMatches?.some(copy => copy.id === album.id) &&
+        (catalogIdentity(match.album) !== title || catalogIdentity(match.artist) !== artist)) continue;
+    for (const candidate of [match, ...match.pressingChoices ?? []]) {
+      const pressing = lookupPressing(candidate);
+      if (pressing.releaseId && !choices.has(pressing.releaseId)) choices.set(pressing.releaseId, pressing);
+    }
+  }
+  return [...choices.values()];
 }
 
 const savedAlbumKey = (id: number) => `saved:${id}`;
@@ -208,6 +241,7 @@ function App() {
   const [manualEntry, setManualEntry] = useState<{ draft: ManualAlbumDraft; shelf: Shelf }>();
   const [detectedDraft, setDetectedDraft] = useState<ManualAlbumDraft>();
   const [pressingReview, setPressingReview] = useState<{ album: DiscogsAlbum; destination: Shelf }>();
+  const [albumReview, setAlbumReview] = useState<AlbumReview>();
   const [recentCatalogSaves, setRecentCatalogSaves] = useState<Set<number>>(() => new Set());
   const [showBarcodeScanner, setShowBarcodeScanner] = useState(false);
   const [showImageUploader, setShowImageUploader] = useState(false);
@@ -218,6 +252,7 @@ function App() {
   const [restoredDetailShelf, setRestoredDetailShelf] = useState<Shelf>();
   const restoredDetailNotice = useRef<HTMLParagraphElement>(null);
   const [lookupShelfEdits, setLookupShelfEdits] = useState<LookupShelfEdits>({});
+  const [lookupPressingEdits, setLookupPressingEdits] = useState<Partial<Record<number, SavedTitleMatch>>>({});
   const albumDetailOpener = useRef<HTMLButtonElement | null>(null);
   const [albumToRemove, setAlbumToRemove] = useState<Album | null>(null);
   const [lastShelfMove, setLastShelfMove] = useState<ShelfMove | null>(null);
@@ -237,6 +272,10 @@ function App() {
   const openingSavedAlbum = useRef(false);
   const searchRequests = useRef<Partial<Record<ResultKind, SearchRequest>>>({});
   const pageRequests = useRef<Partial<Record<ResultKind, AbortController>>>({});
+  const albumReviewRequest = useRef<AbortController>(null);
+  const albumReviewOpener = useRef<HTMLButtonElement>(null);
+  const lookupDrafts = useRef<Partial<Record<LookupMode, LookupDraft>>>({});
+  const libraryVersion = useRef(0);
   const latestQuery = useRef('');
   const latestScope = useRef<SearchScope>('saved');
   const searchSort = useRef(sortBy);
@@ -285,6 +324,7 @@ function App() {
   useEffect(() => () => {
     for (const request of Object.values(searchRequests.current)) cancelSearch(request);
     for (const request of Object.values(pageRequests.current)) request.abort();
+    albumReviewRequest.current?.abort();
   }, []);
 
   useLayoutEffect(() => {
@@ -309,7 +349,10 @@ function App() {
     return () => window.removeEventListener?.('keydown', shortcut);
   }, []);
 
-  const refreshShelf = () => setShelfRequest(request => ({ ...request, revision: request.revision + 1 }));
+  const refreshShelf = () => {
+    libraryVersion.current += 1;
+    setShelfRequest(request => ({ ...request, revision: request.revision + 1 }));
+  };
 
   const searchResults = (query: string, signal: AbortSignal, kind: ResultKind, scope: SearchScope, offset: number, sort: SortBy) => (
     scope === 'catalog-number' && kind === 'catalog'
@@ -445,7 +488,46 @@ function App() {
     window.requestAnimationFrame(() => searchInput.current?.focus());
   };
 
+  const changeLookupMethod = (method: LookupMode, nameScope?: SearchScope) => {
+    const previous = lookupMode(latestScope.current);
+    if (method === previous) {
+      if (nameScope) changeScope(nameScope);
+      focusSearch();
+      return;
+    }
+    lookupDrafts.current[previous] = {
+      scope: latestScope.current, query: latestQuery.current, saved: searchState, catalog: catalogState,
+      destination: saveShelf, detected: detectedDraft, sort: searchSort.current, savedLoading, catalogLoading,
+      pages: loadingMore, libraryVersion: libraryVersion.current,
+    };
+    runSearch(''); // Cancel requests for the method being parked, including pagination.
+    const draft = lookupDrafts.current[method];
+    const scope = nameScope ?? draft?.scope ?? (method === 'name' ? 'saved' : 'catalog-number');
+    const query = draft?.query ?? '';
+    latestScope.current = scope;
+    latestQuery.current = query;
+    setSearchScope(scope);
+    setSearchQuery(query);
+    setSaveShelf(draft?.destination ?? viewMode);
+    setDetectedDraft(draft?.detected);
+    setSaveErrors({});
+    if (draft && draft.libraryVersion === libraryVersion.current && draft.scope === scope && draft.sort === searchSort.current) {
+      setSearchState(draft.saved);
+      setCatalogState(draft.catalog);
+      for (const kind of resultKinds) {
+        const wasLoading = kind === 'saved' ? draft.savedLoading : draft.catalogLoading;
+        const previousState = kind === 'saved' ? draft.saved : draft.catalog;
+        if (wasLoading) runSearch(query, { only: kind, keepResults: previousState.status === 'ready' });
+        else if (draft.pages[kind] === 'error') setLoadingMore(current => ({ ...current, [kind]: 'error' }));
+      }
+    } else if (query.trim().length >= 2) {
+      runSearch(query);
+    }
+    focusSearch();
+  };
+
   const openNameSearch = (query?: string, draft?: ManualAlbumDraft, destination?: Shelf) => {
+    if (latestScope.current === 'catalog-number') changeLookupMethod('name', 'catalog');
     if (query) {
       if (!searchesCatalog(latestScope.current) || destination) setSaveShelf(destination ?? viewMode);
       latestScope.current = 'catalog';
@@ -456,12 +538,6 @@ function App() {
       changeScope('catalog', destination);
       setDetectedDraft(undefined);
     }
-    focusSearch();
-  };
-
-  const changeLookupMethod = (method: 'catalog' | 'catalog-number') => {
-    changeSearch('');
-    changeScope(method);
     focusSearch();
   };
 
@@ -515,9 +591,12 @@ function App() {
   };
 
   const reflectSavedPressing = (album: Album) => {
+    libraryVersion.current += 1;
+    if (showBarcodeScanner || showImageUploader) setLookupPressingEdits(current => ({ ...current, [album.id]: album }));
     const replace = (current: Album) => current.id === album.id ? { ...current, discogs_id: album.discogs_id, catalog_listing: album.catalog_listing } : current;
     setShelfResult(current => current?.status === 'ready' ? { ...current, albums: current.albums.map(replace) } : current);
     setSelectedAlbum(current => current && replace(current));
+    setAlbumReview(current => current?.album.id === album.id ? { ...current, album: replace(current.album) } : current);
     setSearchState(current => current.status === 'ready' ? {
       ...current, results: { ...current.results, local: current.results.local.map(replace) },
     } : current);
@@ -540,17 +619,45 @@ function App() {
     } : current);
   };
 
-  const confirmSavedPressing = async (copy: SavedTitleMatch, releaseId: number) => {
+  const updateSavedPressing = async <T extends { album: Album }>(id: number, request: () => Promise<T>): Promise<T> => {
     try {
-      const { album } = await api.updatePressing(copy.id, releaseId, copy.discogs_id ?? null);
-      reflectSavedPressing(album);
-      return album;
+      const result = await request();
+      reflectSavedPressing(result.album);
+      return result;
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
-        const latest = await api.getAlbum(copy.id).catch(() => undefined);
+        const latest = await api.getAlbum(id).catch(() => undefined);
         if (latest) reflectSavedPressing(latest.album);
       }
       throw error;
+    }
+  };
+
+  const confirmSavedPressing: SavePressing = (copy, releaseId) =>
+    updateSavedPressing(copy.id, () => api.updatePressing(copy.id, releaseId, copy.discogs_id ?? null));
+
+  const undoSavedPressing: UndoPressing = async (copy, undoToken) =>
+    (await updateSavedPressing(copy.id, () => api.undoPressing(copy.id, undoToken))).album;
+
+  const closeAlbumReview = () => {
+    albumReviewRequest.current?.abort();
+    if (albumReview?.removed && selectedAlbum?.id === albumReview.album.id) setSelectedAlbum(null);
+    setAlbumReview(undefined);
+  };
+
+  const reviewSavedAlbum = async (album: Album, opener?: HTMLButtonElement) => {
+    if (opener) albumReviewOpener.current = opener;
+    albumReviewRequest.current?.abort();
+    const controller = new AbortController();
+    albumReviewRequest.current = controller;
+    setAlbumReview({ album, status: 'pending', choices: [] });
+    try {
+      const result = await api.search(`${album.artist_name} ${album.title}`, controller.signal, 'catalog', undefined, 0);
+      if (controller.signal.aborted) return;
+      const choices = savedPressingChoices(album, result.discogs);
+      setAlbumReview({ album, status: choices.length || !result.errors?.length ? 'ready' : 'error', choices });
+    } catch {
+      if (!controller.signal.aborted) setAlbumReview({ album, status: 'error', choices: [] });
     }
   };
 
@@ -708,6 +815,13 @@ function App() {
     } : current);
   };
 
+  const pressingCopyRemoved = (albumId: number) => {
+    forgetSavedCopy(albumId);
+    setAlbumReview(current => current?.album.id === albumId ? { ...current, removed: true } : current);
+    setLastShelfMove(current => current?.albumId === albumId ? null : current);
+    refreshShelf();
+  };
+
   const openSavedAlbum = async (albumId: number, {
     closeLookup, issueKey, opener, fromLookup, inlineError,
   }: {
@@ -816,6 +930,7 @@ function App() {
   const catalogResults = catalogState.status === 'ready' ? catalogState.results : null;
   const savedCount = results?.local.length ?? 0;
   const catalogCount = catalogResults?.discogs.length ?? 0;
+  const hasNewCatalogMatches = catalogResults?.discogs.some(album => !album.inCollection && !album.inWishlist);
   const queryLength = searchQuery.trim().length;
   const searchActive = queryLength >= 2;
   const catalogActive = searchesCatalog(searchScope);
@@ -848,6 +963,8 @@ function App() {
         const src = `${getCoverArtUrl(album.id)}${revision ? `?v=${encodeURIComponent(revision)}` : ''}`;
         const key = savedAlbumKey(album.id);
         const pending = pendingSaves[key];
+        const availablePressings = catalogResults?.discogs.length ? savedPressingChoices(album, catalogResults.discogs) : [];
+        const canCompare = availablePressings.some(pressing => pressing.releaseId !== album.discogs_id);
         return (
           <article key={album.id} className={searchActive ? 'rh-saved-result' : 'rh-album-card relative flex flex-col rounded-xl border border-gray-200'}>
             <div className="rh-album-cover relative flex aspect-square items-center justify-center overflow-hidden">
@@ -878,6 +995,12 @@ function App() {
                 loadingAlbumId={loadingAlbumId}
                 onMove={moveAlbum} onRemove={startRemoval} onOpenIssue={openSaveIssue} />
             </div>
+            {searchActive && canCompare && <button type="button" className="rh-lookup-link rh-saved-compare"
+              aria-label={`Compare pressings for your saved ${album.title}`} aria-haspopup="dialog" disabled={!!pending}
+              onClick={event => {
+                albumReviewOpener.current = event.currentTarget;
+                setAlbumReview({ album, status: 'ready', choices: availablePressings });
+              }}>Compare pressings</button>}
           </article>
         );
       })}
@@ -982,7 +1105,7 @@ function App() {
               runSearch(searchQuery);
             }}
           >
-            <label htmlFor="album-search" className="sr-only">{numberSearch ? 'Search catalog number' : 'Search albums'}</label>
+            <label htmlFor="album-search" className="sr-only">{numberSearch ? 'Search catalog number' : 'Search by album or artist'}</label>
             <div className="rh-query-controls flex min-w-0 gap-1.5 sm:gap-2">
               <div className="rh-search relative min-w-0 flex-1">
                 <input
@@ -1023,7 +1146,7 @@ function App() {
             {numberSearch ? (
               <div className="rh-search-scope flex flex-wrap items-center gap-1">
                 <span className="text-sm font-medium">Discogs catalog number</span>
-                <button type="button" className="rh-lookup-link" onClick={() => changeLookupMethod('catalog')}>Search by name</button>
+                <button type="button" className="rh-lookup-link" onClick={() => changeLookupMethod('name')}>Search by name</button>
               </div>
             ) : <div className="rh-search-scope flex flex-wrap items-center gap-2">
               <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">Search in</label>
@@ -1038,6 +1161,7 @@ function App() {
                 <option value="wishlist">Wishlist only</option>
                 <option value="catalog">Saved and catalogs</option>
               </select>
+              <button type="button" className="rh-lookup-link" onClick={() => changeLookupMethod('catalog-number')}>Catalog number</button>
             </div>}
               <button
                 type="button"
@@ -1112,8 +1236,6 @@ function App() {
               {searchScope === 'catalog' && <a href="#saved-results-title">Saved</a>}
               {catalogActive && <a href="#catalog-results-title">Catalogs</a>}
             </nav>}
-            {!searchActive && !numberSearch && <button type="button" className="rh-lookup-link"
-              onClick={() => changeLookupMethod('catalog-number')}>Look up a catalog number</button>}
             <details className="rh-search-tips">
               <summary aria-label="Search tips"><span className="hidden sm:inline">Search </span>Tips</summary>
               <div>
@@ -1154,6 +1276,7 @@ function App() {
               {results && savedCount === 0 && <>
                 <p role="status" className="text-sm text-gray-600 [overflow-wrap:anywhere]">No saved albums match “{searchQuery.trim()}”.</p>
                 {searchScope !== 'catalog' && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search catalogs too</button>}
+                {searchScope !== 'catalog' && <button type="button" className="rh-lookup-link" onClick={() => changeLookupMethod('catalog-number')}>Search by catalog number</button>}
               </>}
             </section>
         )}
@@ -1162,14 +1285,14 @@ function App() {
           <section aria-labelledby="catalog-results-title">
             <div className={`rh-catalog-bar${catalogCount > 0 ? ' rh-catalog-bar-sticky' : ''}`}>
               <h2 ref={catalogHeading} id="catalog-results-title" tabIndex={-1} className="rh-result-heading text-lg font-semibold">{numberSearch ? 'Discogs results' : 'Catalog albums'}</h2>
-              <label className="rh-catalog-destination text-sm text-gray-600">
+              {hasNewCatalogMatches && <label className="rh-catalog-destination text-sm text-gray-600">
                 Save new matches to
                 <select id="catalog-save-shelf" value={saveShelf}
                   onChange={event => setSaveShelf(event.target.value as Shelf)}
                   className="min-h-11 max-w-full rounded-lg border border-gray-300 px-2.5">
                   {shelves.map(shelf => <option key={shelf} value={shelf}>{shelfLabel[shelf]}</option>)}
                 </select>
-              </label>
+              </label>}
             </div>
             {catalogLoading && !catalogUnavailable && <p role="status" className="mb-3 text-sm text-gray-600">Searching catalogs…</p>}
             {catalogUnavailable && (
@@ -1186,11 +1309,14 @@ function App() {
                 {catalogResults && !catalogResults.errors?.length && (
                   <p role="status" className="mb-2 text-sm text-gray-600 [overflow-wrap:anywhere]">
                     {numberSearch ? `Discogs found no catalog number matching “${searchQuery.trim()}”. Check the number on the sleeve or try an album title.`
-                      : `No catalog albums match “${searchQuery.trim()}”. Try an album title, artist name, or catalog number.`}
+                      : `No catalog albums match “${searchQuery.trim()}”. Try the album title, artist name, or number on the sleeve.`}
                   </p>
                 )}
                 <div className="flex flex-wrap gap-2">
                   <button type="button" className="rh-lookup-link" onClick={() => searchInput.current?.focus()}>{numberSearch ? 'Edit catalog number' : 'Refine search'}</button>
+                  <button type="button" className="rh-lookup-link" onClick={() => changeLookupMethod(numberSearch ? 'name' : 'catalog-number')}>
+                    {numberSearch ? 'Search by album or artist' : 'Search by catalog number'}
+                  </button>
                   <button type="button" className={secondaryButton} onClick={openManualEntry}>Add album manually</button>
                 </div>
               </div>
@@ -1232,6 +1358,8 @@ function App() {
                             lookup={lookupPressing(album)}
                             lookupChoices={album.pressingChoices?.map(lookupPressing)}
                             onSavePressing={confirmSavedPressing}
+                            onUndoPressing={undoSavedPressing}
+                            onSavedCopyRemoved={pressingCopyRemoved}
                             onReviewPressings={hasPressings ? opener => openPressingReview(album, opener) : undefined}
                             reviewFirst={numberSearch || album.catalogNumberMatch === 'exact'}
                             onSearch={focusSearch}
@@ -1293,17 +1421,18 @@ function App() {
           onBarcodeClick={() => {
             setShowAddMenu(false);
             setLookupShelfEdits({});
+            setLookupPressingEdits({});
             setShowBarcodeScanner(true);
           }}
           onImageClick={() => {
             setShowAddMenu(false);
             setLookupShelfEdits({});
+            setLookupPressingEdits({});
             setShowImageUploader(true);
           }}
           onSearchClick={() => {
             setShowAddMenu(false);
-            if (numberSearch) changeLookupMethod('catalog');
-            else openNameSearch();
+            openNameSearch();
           }}
           onCatalogNumberClick={() => {
             setShowAddMenu(false);
@@ -1372,7 +1501,11 @@ function App() {
           onMoveSaved={moveLookupAlbum}
           onUndoMove={undoShelfMove}
           onOpenSaved={inspectSavedAlbum}
+          onSavePressing={confirmSavedPressing}
+          onUndoPressing={undoSavedPressing}
+          onSavedCopyRemoved={pressingCopyRemoved}
           lookupShelfEdits={lookupShelfEdits}
+          lookupPressingEdits={lookupPressingEdits}
           onSuccess={refreshLibrary}
           viewMode={viewMode}
         />
@@ -1395,7 +1528,11 @@ function App() {
           }}
           onMoveSaved={moveScannedAlbum}
           onOpenSaved={inspectSavedAlbum}
+          onSavePressing={confirmSavedPressing}
+          onUndoPressing={undoSavedPressing}
+          onSavedCopyRemoved={pressingCopyRemoved}
           lookupShelfEdits={lookupShelfEdits}
+          lookupPressingEdits={lookupPressingEdits}
           onSuccess={() => {
             refreshLibrary();
             setShowImageUploader(false);
@@ -1409,10 +1546,7 @@ function App() {
           album={selectedAlbum}
           returnFocusTo={albumDetailOpener}
           backToMatches={detailBackToMatches}
-          onFindPressing={album => {
-            setSelectedAlbum(null);
-            openNameSearch(`${album.artist_name} ${album.title}`, { artist: album.artist_name, album: album.title }, album.status);
-          }}
+          onFindPressing={(album, opener) => void reviewSavedAlbum(album, opener)}
           onClose={() => {
             if (!inFlightSaves.current.has(savedAlbumKey(selectedAlbum.id))) setSelectedAlbum(null);
           }}
@@ -1440,6 +1574,30 @@ function App() {
           </div>}
         />
       )}
+
+      {albumReview && <PressingComparison
+        title={albumReview.album.title}
+        matches={albumReview.removed ? [] : [selectedAlbum?.id === albumReview.album.id ? selectedAlbum : albumReview.album]}
+        lookup={albumReview.choices.find(choice => choice.releaseId !== albumReview.album.discogs_id) ?? albumReview.choices[0]}
+        lookupChoices={albumReview.choices}
+        lookupStatus={albumReview.status}
+        onRetryLookup={() => void reviewSavedAlbum(albumReview.album)}
+        onSavePressing={confirmSavedPressing}
+        onUndoPressing={undoSavedPressing}
+        onSavedCopyRemoved={pressingCopyRemoved}
+        onOpenSaved={selectedAlbum ? undefined : inspectSavedAlbum}
+        returnFocusTo={albumReviewOpener}
+        fallbackFocusTo={searchInput}
+        backLabel={selectedAlbum && !albumReview.removed ? 'Back to album' : 'Back to results'}
+        onClose={closeAlbumReview}
+        searchLabel="Search catalogs by name"
+        onSearch={() => {
+          closeAlbumReview();
+          setSelectedAlbum(null);
+          const album = albumReview.album;
+          openNameSearch(`${album.artist_name} ${album.title}`, { artist: album.artist_name, album: album.title }, album.status);
+        }}
+      />}
 
       {albumToRemove && (
         <ModalDialog labelledBy="album-removal-title" onClose={closeRemoval}>
