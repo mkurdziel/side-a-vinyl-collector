@@ -61,7 +61,7 @@ describe('Discogs import', () => {
     await act(async () => findButton('Select all (3)').props.onClick());
     await act(async () => findButton('Import 3 records to Collection').props.onClick());
 
-    expect(content()).toContain('1 imported · 1 already in your library · 1 failed');
+    expect(content()).toContain('1 imported to Collection · 1 already in your library · 1 failed to import to Collection');
     expect(content()).toContain('Imported to Collection');
     expect(content()).toContain('Import to Collection failed');
     expect(findButton('Retry import of Roseland NYC Live').props.disabled).toBe(false);
@@ -71,12 +71,12 @@ describe('Discogs import', () => {
     expect(renderer.toJSON()).toBeNull();
     await act(async () => renderer.update(createElement(DiscogsImporter, { ...importerProps, viewMode: 'wishlist' })));
 
-    expect(content()).toContain('1 imported · 1 already in your library · 1 failed');
-    expect(content()).toContain('New imports go to Wishlist.');
+    expect(content()).toContain('1 imported to Collection · 1 already in your library · 1 failed to import to Collection');
+    expect(renderer.root.findAllByType('select')).toHaveLength(0);
     await act(async () => findButton('Retry failed (1)').props.onClick());
     expect(addAlbum).toHaveBeenCalledTimes(4);
     expect(addAlbum).toHaveBeenLastCalledWith(expect.objectContaining({ discogsId: 3, status: 'collection' }));
-    expect(content()).toContain('2 imported · 1 already in your library');
+    expect(content()).toContain('2 imported to Collection · 1 already in your library');
     expect(content()).not.toContain('Import to Collection failed');
   });
 
@@ -106,7 +106,7 @@ describe('Discogs import', () => {
     expect(addAlbum.mock.calls.map(([album]) => [album.discogsId, album.status])).toEqual([
       [1, 'collection'], [2, 'collection'], [3, 'collection'],
     ]);
-    expect(content()).toContain('3 imported');
+    expect(content()).toContain('3 imported to Collection');
     expect(importerProps.onSuccess).toHaveBeenCalledOnce();
   });
 
@@ -131,8 +131,43 @@ describe('Discogs import', () => {
     await act(async () => renderer.root.findByProps({ 'aria-label': 'Select Third by Portishead' }).props.onChange({ currentTarget: { checked: true } }));
     await act(async () => findButton('Import 1 record to Collection').props.onClick());
     expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ discogsId: 2, status: 'collection' }));
-    expect(content()).toContain('1 imported');
+    expect(content()).toContain('1 imported to Collection');
     expect(renderer.root.findByProps({ 'aria-label': 'Select Dummy by Portishead' }).props.checked).toBe(false);
+  });
+
+  it('locks the chosen shelf during import and keeps results from later batches distinct', async () => {
+    const pending = Promise.withResolvers<object>();
+    addAlbum.mockReturnValueOnce(pending.promise);
+    await loadCollection();
+    const controls = () => renderer.root.findByType('select');
+    const choose = (shelf: string) => controls().props.onChange({ target: { value: shelf } });
+    const select = (title: string) => renderer.root.findByProps({ 'aria-label': `Select ${title} by Portishead` })
+      .props.onChange({ currentTarget: { checked: true } });
+
+    expect(controls().props.value).toBe('collection');
+    await act(async () => { choose('wishlist'); select('Dummy'); });
+    await act(async () => { void findButton('Import 1 record to Wishlist').props.onClick(); });
+    expect(controls().props.disabled).toBe(true);
+    await act(async () => choose('collection'));
+    expect(controls().props.value).toBe('wishlist');
+    expect(content()).toContain('Importing 1 of 1 to Wishlist…');
+    await act(async () => pending.resolve({}));
+    expect(controls().props.disabled).toBe(false);
+    expect(content()).toContain('1 imported to Wishlist');
+
+    await act(async () => { choose('collection'); select('Third'); });
+    await act(async () => findButton('Import 1 record to Collection').props.onClick());
+    expect(content()).toContain('1 imported to Collection · 1 imported to Wishlist');
+    expect(addAlbum.mock.calls.map(([album]) => [album.discogsId, album.status])).toEqual([[1, 'wishlist'], [2, 'collection']]);
+  });
+
+  it('keeps configuration help and lets a failed collection load be retried', async () => {
+    importDiscogsCollection.mockRejectedValueOnce(new ApiError('Invalid connection', 400));
+    await loadCollection();
+    expect(content()).toContain('Ask your server administrator to check the connection.');
+    await act(async () => findButton('Reload Discogs collection').props.onClick());
+    expect(content()).toContain('3 records available');
+    expect(addAlbum).not.toHaveBeenCalled();
   });
 
   it('gives server setup instructions only when configuration is missing', async () => {

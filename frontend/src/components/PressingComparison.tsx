@@ -46,7 +46,7 @@ const pressingFields = [
   ['catalogNumber', 'Catalog number'],
   ['label', 'Label'],
   ['format', 'Format'],
-  ['country', 'Country'],
+  ['country', 'Release country'],
   ['year', 'Release year'],
 ] as const;
 
@@ -396,7 +396,7 @@ export function PressingComparison({
   const lookupPressing = availableDetails(lookupDetails);
   const savedPressing = availableDetails(savedDetails);
   const lookupRecord = [title, catalogArtist].filter(Boolean).join(' by ');
-  const lookupColumn = candidates.length > 1 ? 'Selected pressing' : 'Catalog match';
+  const lookupColumn = candidate ? 'Selected pressing' : 'Catalog listing';
   const selectedShelf = selected?.status === 'collection' ? 'Collection' : 'Wishlist';
   const savedIdentityDiffers = selected && (selected.title !== title || selected.artist_name !== (catalogArtist ?? selected.artist_name));
   const action = openingId === selected?.id ? 'Opening saved copy…'
@@ -416,7 +416,7 @@ export function PressingComparison({
   const runoutKeys = (markings: MatrixRunout[]) => [...new Set(markings.map(marking => marking.value.trim().toLowerCase()))].sort().join('\n');
   const runoutsDiffer = lookupRunouts.length && savedRunouts.length && runoutKeys(lookupRunouts) !== runoutKeys(savedRunouts);
   const runoutRow = lookupRunouts.length || savedRunouts.length ? [{
-    label: 'Matrix / Runout',
+    label: 'Runout markings',
     lookupValue: lookupRunouts.length ? <RunoutMarkings markings={lookupRunouts} /> : undefined,
     savedValue: savedRunouts.length ? <RunoutMarkings markings={savedRunouts} /> : undefined,
     priority: runoutsDiffer ? 0 : 1,
@@ -437,10 +437,49 @@ export function PressingComparison({
         <dt className="text-xs text-gray-600">{label}</dt><dd className="font-medium">{savedValue}</dd>
       </div>)}
       {savedRunouts.length > 0 && <div className="col-span-full">
-        <dt className="mb-1 text-xs text-gray-600">Matrix / Runout</dt>
+        <dt className="mb-1 text-xs text-gray-600">Runout markings</dt>
         <dd><RunoutMarkings markings={savedRunouts} /></dd>
       </div>}
     </dl>}
+  </>;
+  const savedComparison = <>
+    {!candidate && savedRelease && candidates.length > 1 && (savedDetails?.status === 'failed' ? savedEvidenceSummary
+      : <details className="rh-pressing-secondary">
+        <summary>Saved pressing evidence</summary>
+        {savedEvidenceSummary}
+      </details>)}
+    {lookupRelease && <details className="rh-pressing-secondary">
+      <summary>Full pressing comparison
+        {(lookupDetails?.status === 'failed' || savedDetails?.status === 'failed') && ' · Details unavailable'}
+      </summary>
+      <table className="rh-pressing-table">
+        <caption className="sr-only">Catalog evidence for {lookupRecord}</caption>
+        <thead>
+          <tr>
+            <th scope="col">Evidence</th>
+            <th scope="col" aria-label={lookupColumn}>{lookupColumn}
+              <ReleaseDetailsStatus column={lookupColumn} releaseId={lookupRelease} details={lookupDetails} hasGaps={lookupHasGaps} onRetry={retryDetails} />
+            </th>
+            <th scope="col" aria-label="Saved copy">Saved copy
+              <ReleaseDetailsStatus column="Saved copy" releaseId={savedRelease} details={savedDetails}
+                hasRecord={!!selected} hasGaps={savedHasGaps} onRetry={retryDetails} />
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {evidence.map(({ label, lookupValue, savedValue, priority }) => (
+            <tr key={label} className={priority === 0 ? 'rh-evidence-priority' : undefined}>
+              <th scope="row">{label}{priority === 0 && <span className="rh-pressing-difference">Differs</span>}</th>
+              <td>{lookupValue || missingEvidence(lookupRelease, lookupDetails)}</td>
+              <td>{savedValue || missingEvidence(savedRelease, savedDetails)}</td>
+            </tr>
+          ))}
+          <tr>
+            <th scope="row">Discogs release ID</th><td>{lookupRelease}</td><td>{savedRelease ?? 'No pressing linked'}</td>
+          </tr>
+        </tbody>
+      </table>
+    </details>}
   </>;
   return (
     <ModalDialog labelledBy={headingId} onClose={close} onEscape={escape} returnFocusTo={returnFocusTo} fallbackFocusTo={fallbackFocusTo}>
@@ -523,45 +562,9 @@ export function PressingComparison({
                 selectedEvidenceState={lookupRelease && !lookupDetails ? 'pending' : lookupDetails?.status === 'failed' ? 'unavailable' : undefined}
                 disabled={busy || lookupPending} medium={medium} onMediumChange={value => { setMedium(value); setSaveSelection(undefined); }}
                 uncertainAction={offerKeepPressing ? (savedRelease ? 'If you’re unsure, keep the current pressing.' : 'If you’re unsure, leave the pressing unconfirmed.') : undefined}
-                loadDetails={loadPressingDetails} onReadEvidence={recordCandidateEvidence} />
+                loadDetails={loadPressingDetails} onReadEvidence={recordCandidateEvidence}
+                savedComparison={savedComparison} />
             </div>}
-            {!candidate && savedRelease && candidates.length > 1 && (savedDetails?.status === 'failed' ? savedEvidenceSummary
-              : <details className="rh-pressing-secondary">
-                <summary>Saved pressing evidence</summary>
-                {savedEvidenceSummary}
-              </details>)}
-            {lookupRelease && <details className="rh-pressing-secondary">
-              <summary>Full pressing comparison
-                {(lookupDetails?.status === 'failed' || savedDetails?.status === 'failed') && ' · Details unavailable'}
-              </summary>
-              <table className="rh-pressing-table">
-                <caption className="sr-only">Catalog evidence for {lookupRecord}</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Evidence</th>
-                    <th scope="col" aria-label={lookupColumn}>{lookupColumn}
-                      <ReleaseDetailsStatus column={lookupColumn} releaseId={lookupRelease} details={lookupDetails} hasGaps={lookupHasGaps} onRetry={retryDetails} />
-                    </th>
-                    <th scope="col" aria-label="Saved copy">Saved copy
-                      <ReleaseDetailsStatus column="Saved copy" releaseId={savedRelease} details={savedDetails}
-                        hasRecord={!!selected} hasGaps={savedHasGaps} onRetry={retryDetails} />
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {evidence.map(({ label, lookupValue, savedValue, priority }) => (
-                    <tr key={label} className={priority === 0 ? 'rh-evidence-priority' : undefined}>
-                      <th scope="row">{label}{priority === 0 && <span className="rh-pressing-difference">Differs</span>}</th>
-                      <td>{lookupValue || missingEvidence(lookupRelease, lookupDetails)}</td>
-                      <td>{savedValue || missingEvidence(savedRelease, savedDetails)}</td>
-                    </tr>
-                  ))}
-                  <tr>
-                    <th scope="row">Discogs release ID</th><td>{lookupRelease}</td><td>{savedRelease ?? 'No pressing linked'}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </details>}
             <div>
               <div className="rh-comparison-links">
                 {selected && onOpenSaved && (
@@ -585,7 +588,7 @@ export function PressingComparison({
           {offerKeepPressing && selected && (
             <section className="rh-pressing-review__footer grid gap-2 px-4 py-2 sm:px-6" aria-label="Pressing actions">
               {savedReleaseChanged && <p ref={changedNotice} tabIndex={-1} role="status" className="text-sm text-gray-600">
-                {alreadySaved ? 'The saved copy was updated and now matches this pressing.' : 'The saved pressing changed. Check the updated evidence before confirming again.'}
+                {alreadySaved ? 'The saved copy was updated and now matches this pressing.' : 'The saved pressing changed. Open Compare evidence to check the update before confirming again.'}
               </p>}
               {saveStatus && candidate ? (
                 <div className="grid gap-2" role="group" aria-labelledby={savePromptId}>

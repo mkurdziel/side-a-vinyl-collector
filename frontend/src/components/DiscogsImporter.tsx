@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { ModalDialog } from './ModalDialog';
 import api, { ApiError, type Album, type DiscogsAlbum } from '../services/api';
+import { SaveShelfSelect } from './SaveDestinationActions';
 
 type Shelf = Album['status'];
 type ImportJob = { album: DiscogsAlbum; destination: Shelf };
@@ -8,6 +9,7 @@ type ImportOutcome = Pick<ImportJob, 'destination'> & { status: 'imported' | 'sk
 type ImportProgress = Pick<ImportJob, 'destination'> & { albumId: number; current: number; total: number };
 
 const shelfNames: Record<Shelf, string> = { collection: 'Collection', wishlist: 'Wishlist' };
+const shelves: Shelf[] = ['collection', 'wishlist'];
 const primaryAction = 'rh-filled-action rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium hover:bg-purple-700 disabled:opacity-50';
 const secondaryAction = 'rounded-lg border border-gray-300 bg-gray-100 px-3 py-2 text-sm font-medium text-gray-900 hover:bg-gray-50 disabled:opacity-50';
 
@@ -28,6 +30,7 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
   const [stopping, setStopping] = useState(false);
   const [stopped, setStopped] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set<number>());
+  const [chosenShelf, setChosenShelf] = useState<Shelf>();
   const [showBackgroundStatus, setShowBackgroundStatus] = useState(false);
   const operationInProgress = useRef(false);
   const stopRequested = useRef(false);
@@ -110,19 +113,24 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
     const outcome = outcomes[album.discogsId];
     return outcome?.status === 'failed' ? [{ album, destination: outcome.destination }] : [];
   });
-  const imported = Object.values(outcomes).filter(outcome => outcome?.status === 'imported').length;
-  const skipped = Object.values(outcomes).filter(outcome => outcome?.status === 'skipped').length;
+  const results = Object.values(outcomes);
+  const countsByShelf = (status: 'imported' | 'failed') => shelves.flatMap(shelf => {
+    const count = results.filter(outcome => outcome?.status === status && outcome.destination === shelf).length;
+    return count ? [`${count} ${status === 'imported' ? 'imported' : 'failed to import'} to ${shelfNames[shelf]}`] : [];
+  });
+  const skipped = results.filter(outcome => outcome?.status === 'skipped').length;
   const summary = [
-    imported ? `${imported} imported` : null,
-    skipped ? `${skipped} already in your library` : null,
-    retryJobs.length ? `${retryJobs.length} failed` : null,
-  ].filter(Boolean).join(' · ');
-  const destination = shelfNames[viewMode];
+    ...countsByShelf('imported'),
+    ...(skipped ? [`${skipped} already in your library`] : []),
+    ...countsByShelf('failed'),
+  ].join(' · ');
+  const destination = chosenShelf ?? viewMode;
   const progressText = progress
     ? `Importing ${progress.current} of ${progress.total} to ${shelfNames[progress.destination]}…`
     : null;
   const close = () => {
     setShowBackgroundStatus(progress !== null);
+    if (!progress) setChosenShelf(undefined);
     onClose();
   };
 
@@ -173,7 +181,7 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
               <p className="mb-5 text-sm text-gray-600">
                 {fetchStatus === 'ready'
                   ? 'Records already in your library are excluded.'
-                  : `Load records and choose which ones to import to ${destination}.`}
+                  : 'Load records, then choose a shelf and the albums to import.'}
               </p>
               <button type="button" className={primaryAction} onClick={fetchCollection} disabled={busy}>
                 {fetchStatus === 'idle' ? 'Load Discogs collection'
@@ -190,16 +198,17 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
                       ? 'Refreshing Discogs collection…'
                       : summary || `${remaining.length} ${remaining.length === 1 ? 'record' : 'records'} available`)}
                   </p>
-                  <p className="text-sm text-gray-600" role="status">
+                  {(stopping || progress || stopped) && <p className="text-sm text-gray-600" role="status">
                     {stopping ? 'The current record will finish, then the import will stop.'
                       : progress ? 'The import continues if you close this window.'
-                      : stopped ? 'Import stopped. The outcomes below are kept.'
-                      : `New imports go to ${destination}.`}
-                  </p>
+                      : 'Import stopped. The outcomes below are kept.'}
+                  </p>}
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
                   {remaining.length > 0 && (
                     <>
+                      <SaveShelfSelect value={progress?.destination ?? destination} disabled={busy}
+                        onChange={shelf => { if (!operationInProgress.current) setChosenShelf(shelf); }} />
                       <button type="button" className={secondaryAction} disabled={busy}
                         onClick={() => setSelectedIds(selected.length === remaining.length
                           ? new Set()
@@ -207,9 +216,9 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
                         {selected.length === remaining.length ? 'Clear selection' : `Select all (${remaining.length})`}
                       </button>
                       <button type="button" className={primaryAction} disabled={busy || !selected.length}
-                        onClick={() => importRecords(selected.map(album => ({ album, destination: viewMode })))}>
+                        onClick={() => importRecords(selected.map(album => ({ album, destination })))}>
                         {selected.length
-                          ? `Import ${selected.length} ${selected.length === 1 ? 'record' : 'records'} to ${destination}`
+                          ? `Import ${selected.length} ${selected.length === 1 ? 'record' : 'records'} to ${shelfNames[progress?.destination ?? destination]}`
                           : 'Import selected records'}
                       </button>
                     </>

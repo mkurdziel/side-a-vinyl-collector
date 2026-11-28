@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { discogsReleaseSource } from '../albumDisplay';
 import {
   catalogNumberKey,
@@ -21,7 +21,13 @@ export type { PressingCandidate } from '../services/pressingEvidence';
 const pageSize = 3;
 const pinLimit = 2;
 const optionFields = ['format', 'country', 'year', 'label'] as const;
-const fieldLabels = { label: 'Label', country: 'Country', format: 'Format', year: 'Release year' };
+const pressingFieldLabels = {
+  catalogNumber: 'Catalog number',
+  label: 'Label',
+  format: 'Format',
+  country: 'Release country',
+  year: 'Release year',
+};
 const fieldLimits = { label: 32, format: 36, country: 28, year: 4 };
 
 type MatrixRunouts = NonNullable<PressingDetails['matrixRunouts']>;
@@ -45,6 +51,7 @@ interface Props {
   loadDetails?: LoadPressingDetails;
   onReadEvidence?: (releaseId: number, details: PressingDetails) => void;
   uncertainAction?: string;
+  savedComparison?: ReactNode;
 }
 
 function choiceField(choice: PressingCandidate, field: OptionField | 'catalogNumber') {
@@ -92,10 +99,10 @@ const comparisonFacts = [
   { label: 'Size', read: (choice: PressingCandidate) => pressingFormatFacts(choiceField(choice, 'format')).size },
   { label: 'Record type', read: (choice: PressingCandidate) => pressingFormatFacts(choiceField(choice, 'format')).type },
   { label: 'Speed', read: (choice: PressingCandidate) => pressingFormatFacts(choiceField(choice, 'format')).speed },
-  { label: 'Label', read: (choice: PressingCandidate) => summaryField(choice, 'label') },
-  { label: 'Country', read: (choice: PressingCandidate) => choiceField(choice, 'country') },
-  { label: 'Year', read: (choice: PressingCandidate) => choiceField(choice, 'year') },
-  { label: 'Catalog no.', read: candidateNumber, compare: catalogNumberKey },
+  { label: pressingFieldLabels.label, read: (choice: PressingCandidate) => summaryField(choice, 'label') },
+  { label: pressingFieldLabels.country, read: (choice: PressingCandidate) => choiceField(choice, 'country') },
+  { label: pressingFieldLabels.year, read: (choice: PressingCandidate) => choiceField(choice, 'year') },
+  { label: pressingFieldLabels.catalogNumber, read: candidateNumber, compare: catalogNumberKey },
 ];
 
 function comparisonRows(left: PressingCandidate, right?: PressingCandidate, searchedNumber?: string) {
@@ -118,6 +125,19 @@ function firstAlternative(first: PressingCandidate, choices: readonly PressingCa
   return comparable.find(choice => comparisonRows(first, choice, searchedNumber).some(row => row.differs)) ?? comparable[0];
 }
 
+function exampleCue(example: PressingCandidate, reference?: PressingCandidate, searchedNumber?: string) {
+  if (!reference) return 'Check the number and label on your copy.';
+  const facts = comparisonRows(reference, example, searchedNumber);
+  const differs = (label: string) => facts.some(fact => fact.label === label && fact.differs);
+  if (differs(pressingFieldLabels.catalogNumber)) return 'Compare the catalog number on your sleeve or label.';
+  if (differs(pressingFieldLabels.label)) return 'Compare the label name printed on your copy.';
+  if (differs('Mix')) return 'Look for mono or stereo on the sleeve or label.';
+  if (facts.some(fact => fact.label === pressingFieldLabels.catalogNumber && fact.values.every(Boolean))) {
+    return 'Same catalog number. Check the etched or stamped runout marks.';
+  }
+  return 'Check the number and label on your copy.';
+}
+
 interface PreviewColumn {
   choice: PressingCandidate;
   label: string;
@@ -135,7 +155,7 @@ function PressingPreview({ reference, target, searchedNumber }: {
   // Keep true differences first. A missing value is only worth an early row when it helps explain an uncertain match.
   const priority = [...facts.filter(fact => fact.differs), ...facts.filter(fact => !fact.differs && fact.values.every(Boolean)),
     ...facts.filter(fact => fact.values.some(value => !value))];
-  const importantMissing = facts.find(fact => fact.values.some(value => !value) && fact.label !== 'Year');
+  const importantMissing = facts.find(fact => fact.values.some(value => !value) && fact.label !== pressingFieldLabels.year);
   const rows = priority.slice(0, 3);
   if (importantMissing && !rows.includes(importantMissing) && !rows[2]?.differs) rows[2] = importantMissing;
 
@@ -160,7 +180,10 @@ function PressingPreview({ reference, target, searchedNumber }: {
 function RecordEvidenceHelp() {
   return <details className="rh-pressing-secondary text-sm text-gray-600">
     <summary>Where to check your record</summary>
-    <p className="max-w-prose pb-2">Look for the catalog number on the sleeve or center label. Check the label name and format, such as mono or stereo. The runout is the smooth band between the last track and the center label. Compare its etched or stamped markings with the Discogs listing.</p>
+    <div className="grid max-w-prose gap-2 pb-2">
+      <p>Look for the catalog number, label name, and mono or stereo on the sleeve or center label. Look for etched or stamped runout marks in the smooth band just inside the last track.</p>
+      <p>Discogs release country describes the market for the release. It can differ from where your record was made.</p>
+    </div>
   </details>;
 }
 
@@ -177,7 +200,7 @@ function PressingFacts({ choice, varying, formats, searchedNumber, compact }: {
     const value = summaryField(choice, field, formats);
     if (!value) return null;
     return <span className={`min-w-0 max-w-full ${compact && field !== 'year' ? 'truncate' : 'shrink-0'} ${varying?.has(field) ? 'font-semibold text-gray-900' : ''}`}>
-      <span className="sr-only">{fieldLabels[field]} </span>{value}
+      <span className="sr-only">{pressingFieldLabels[field]} </span>{value}
     </span>;
   };
   const line = `flex min-w-0 gap-x-2 text-gray-600 ${compact ? '' : 'flex-wrap'}`;
@@ -202,9 +225,9 @@ function PressingFacts({ choice, varying, formats, searchedNumber, compact }: {
 function PressingListingDetails({ choice }: { choice: PressingCandidate }) {
   const source = discogsReleaseSource(choice.releaseId);
   const rows = [
-    { label: 'Catalog numbers', value: choiceField(choice, 'catalogNumber') },
+    { label: pressingFieldLabels.catalogNumber, value: choiceField(choice, 'catalogNumber') },
     ...optionFields.map(field => ({
-      label: field === 'label' ? 'Labels and credits' : fieldLabels[field],
+      label: field === 'label' ? 'Labels and credits' : pressingFieldLabels[field],
       value: choiceField(choice, field),
     })),
   ].filter(({ value }) => value);
@@ -339,10 +362,12 @@ function allRunoutsMissing(choices: readonly PressingCandidate[], evidence: Part
 }
 
 function MissingRunouts({ choices, uncertainAction }: { choices: readonly PressingCandidate[]; uncertainAction: string }) {
-  const differences = [...differingFields(choices)].map(field => fieldLabels[field].toLowerCase());
+  const differences = [...differingFields(choices)]
+    .filter(field => field === 'format' || field === 'label')
+    .map(field => pressingFieldLabels[field].toLowerCase());
   const next = differences.length
-    ? `Compare the ${new Intl.ListFormat('en').format(differences)} with your record.`
-    : 'Check the label, country, format, and release year against your record.';
+    ? `Compare the ${new Intl.ListFormat('en').format(differences)} on your sleeve or label.`
+    : 'Check the catalog number and label on your copy.';
   return <p role="status" className="border-y border-gray-200 px-2 py-2 text-sm text-gray-600">
     Discogs lists no runout markings for these pressings. {next}{' '}{uncertainAction}
   </p>;
@@ -351,21 +376,21 @@ function MissingRunouts({ choices, uncertainAction }: { choices: readonly Pressi
 export function PressingCandidates({
   choices, selectedId, onSelect, searchedNumber, savedReleaseId, savedEvidence, savedEvidenceState, selectedEvidence, selectedEvidenceState,
   disabled, loadDetails, onReadEvidence,
-  medium = '', onMediumChange,
+  medium = '', onMediumChange, savedComparison,
   uncertainAction = 'If you’re unsure, go back without choosing a pressing.',
 }: Props) {
   const name = useId();
   const sharedNumberId = useId();
   const candidatesId = useId();
+  const comparisonId = useId();
   const mediumId = useId();
   const shortlistId = useId();
   const pinHintId = useId();
   const shortlistHeading = useRef<HTMLHeadingElement>(null);
-  const runoutToggle = useRef<HTMLButtonElement>(null);
-  const pageNotice = useRef<HTMLParagraphElement>(null);
+  const compareToggle = useRef<HTMLButtonElement>(null);
   const candidateList = useRef<HTMLUListElement>(null);
   const [checkingRunouts, setCheckingRunouts] = useState(false);
-  const [showListingTools, setShowListingTools] = useState(false);
+  const [showComparison, setShowComparison] = useState(false);
   const [requestedPage, setRequestedPage] = useState(0);
   const [focusRequest, setFocusRequest] = useState<{ releaseId: number }>();
   const [loadLocally] = useState(createPressingDetailsLoader);
@@ -395,12 +420,13 @@ export function PressingCandidates({
   const selection = withDetails.find(choice => choice.releaseId === selectedId);
   const selectedOutsideMedia = selection && !matchesPressingMedium(selection, medium);
   const selectedOffPage = selection && !selectedOutsideMedia && !visible.includes(selection) && !pinned.includes(selection);
-  const requests = (checkingRunouts || pinned.length > 0) ? withDetails.filter(choice => (
+  const showRunouts = showComparison && checkingRunouts;
+  const requests = showComparison ? withDetails.filter(choice => (
     !choice.pressing?.matrixRunouts?.length && !evidence[choice.releaseId] &&
-    (pinnedIds.includes(choice.releaseId) || (checkingRunouts && visible.includes(choice)))
+    (pinnedIds.includes(choice.releaseId) || (showRunouts && visible.includes(choice)))
   )) : [];
-  const compareGrid = checkingRunouts && visible.length > 1;
-  const inlineRunouts = checkingRunouts ? visible.filter(choice => !pinnedIds.includes(choice.releaseId)) : [];
+  const compareGrid = showRunouts && visible.length > 1;
+  const inlineRunouts = showRunouts ? visible.filter(choice => !pinnedIds.includes(choice.releaseId)) : [];
   const visibleMissing = allRunoutsMissing(inlineRunouts, evidence);
   const pinnedMissing = allRunoutsMissing(pinned, evidence);
   const varying = differingFields(withDetails);
@@ -418,9 +444,6 @@ export function PressingCandidates({
   const targetLabel = selectedOutsideMedia ? 'Selected pressing outside filter'
     : selection ? (target?.releaseId === savedReleaseId ? 'Saved pressing selected' : 'Selected pressing')
       : example ? 'Catalog example' : 'Saved pressing';
-  const exampleFacts = example && reference ? comparisonRows(reference, example, searchedNumber) : [];
-  const firstDifference = exampleFacts.find(fact => fact.differs);
-  const sharedExampleNumber = exampleFacts.some(fact => fact.label === 'Catalog no.' && fact.values.every(Boolean) && !fact.differs);
 
   useLayoutEffect(() => {
     if (!focusRequest) return;
@@ -429,7 +452,8 @@ export function PressingCandidates({
 
   const goToPage = (next: number) => {
     setRequestedPage(next);
-    pageNotice.current?.focus({ preventScroll: true });
+    const firstChoice = available[next * pageSize];
+    if (firstChoice) setFocusRequest({ releaseId: firstChoice.releaseId });
   };
 
   const togglePin = (id: number) => {
@@ -468,33 +492,103 @@ export function PressingCandidates({
   return (
     <fieldset disabled={disabled} aria-describedby={shared ? sharedNumberId : undefined}
       className="@container min-w-0 space-y-2 [overflow-wrap:anywhere]">
-      <legend className="text-sm font-semibold">Pressings from Discogs</legend>
+      <legend className="text-sm font-semibold">Choose a pressing</legend>
       {requests.map(({ releaseId }) => <EvidenceRequest key={releaseId} releaseId={releaseId}
         loadDetails={loadDetails ?? loadLocally} onResult={recordEvidence} />)}
-      {target && (unique.length > 1 || reference) && <div>
-        <PressingPreview searchedNumber={searchedNumber}
-          reference={reference && { choice: reference, label: saved ? 'Saved pressing' : 'Catalog reference', state: evidenceState(reference) }}
-          target={{
-            choice: target.releaseId === savedReleaseId && saved ? saved : withPressingEvidence(target, selectedEvidence, 'release'),
-            label: targetLabel,
-            state: evidenceState(target),
-          }} />
-        <div className="rh-pressing-preview__caption">
-          {example && <p className="text-xs text-gray-600">
-            {sharedExampleNumber && !shared && 'Same catalog number. '}
-            {firstDifference ? `Check your copy’s ${firstDifference.label.toLowerCase().replace('catalog no.', 'catalog number')}.`
-              : 'Check the label and format on your copy.'}
-          </p>}
-          {available.some(choice => choice.releaseId === target.releaseId) && <button type="button"
-            className="rh-lookup-link rh-pressing-preview__find" onClick={() => findChoice(target.releaseId)}>
-            Find in list<span className="sr-only"> · {targetLabel} {target.releaseId}</span>
-          </button>}
-        </div>
+      {example && unique.length > 1 && <div className="rh-pressing-example">
+        <p className="text-xs text-gray-600">
+          <span className="block font-semibold text-gray-900">Example only · Discogs {example.releaseId}</span>
+          {exampleCue(example, reference, searchedNumber)}
+        </p>
+        <button type="button" className="rh-lookup-link rh-pressing-example__find" onClick={() => findChoice(example.releaseId)}>
+          Find in list<span className="sr-only"> · Catalog example {example.releaseId}</span>
+        </button>
       </div>}
+      {selectedOutsideMedia && <button type="button" className="rh-lookup-link -ml-2 text-left" onClick={showSelection}>Show selected pressing in All media</button>}
+      <ul id={candidatesId} ref={candidateList} className={`min-w-0 divide-y divide-gray-200 border-y border-gray-200 ${compareGrid
+        ? '@min-[30rem]:grid @min-[30rem]:grid-cols-2 @min-[30rem]:gap-2 @min-[30rem]:divide-y-0 @min-[30rem]:border-y-0' : ''}
+        ${compareGrid && visible.length > 2 ? '@min-[40rem]:grid-cols-3' : ''}`}>
+        {visible.map(choice => {
+          const { releaseId } = choice;
+          const checked = selectedId === releaseId;
+          const isPinned = pinnedIds.includes(releaseId);
+          return (
+            <li key={releaseId} className={`min-w-0 ${checked ? 'bg-blue-50' : ''} ${compareGrid
+              ? '@min-[30rem]:row-span-2 @min-[30rem]:grid @min-[30rem]:grid-rows-subgrid @min-[30rem]:rounded-lg @min-[30rem]:border @min-[30rem]:border-gray-200' : ''}`}>
+              <div className={`grid min-w-0 items-start gap-x-2 ${showRunouts ? '' : 'sm:grid-cols-[minmax(0,1fr)_auto]'}`}>
+                <label className="flex min-h-11 min-w-0 cursor-pointer items-start gap-2 px-2 py-2 text-sm">
+                  <input type="radio" name={name} value={releaseId} checked={checked} onChange={() => onSelect(releaseId)}
+                    className="mt-1 shrink-0 accent-blue-600" />
+                  <span className="min-w-0">
+                  {checked && <span className="rh-pressing-candidate-role">{releaseId === savedReleaseId ? 'Saved pressing selected' : 'Selected pressing'}</span>}
+                    <PressingFacts choice={choice} varying={varying} formats={formats} searchedNumber={searchedNumber} />
+                  {releaseId === savedReleaseId && !checked && <span className="block text-gray-600">Your saved pressing</span>}
+                    {choice.catalogNumberMatch === 'unverified' && <span className="block text-gray-600">Check the number on the listing.</span>}
+                  </span>
+                </label>
+                {showComparison && <div className={`flex min-w-0 flex-wrap items-center gap-x-1 px-2 ${showRunouts ? '' : 'sm:max-w-64 sm:justify-end'}`}>
+                  {allowPinning && <button type="button" className="rh-lookup-link aria-disabled:opacity-60"
+                    aria-label={`${isPinned ? 'Unpin pressing' : 'Pin for comparison'} · ${candidateLabel(choice, searchedNumber, formats)}`}
+                    aria-describedby={pinHintId} aria-disabled={!isPinned && pinned.length >= pinLimit}
+                    onClick={() => togglePin(releaseId)}>{isPinned ? 'Unpin' : 'Pin'}</button>}
+                  <PressingListingDetails choice={choice} />
+                </div>}
+              </div>
+              {showRunouts && !isPinned && !visibleMissing && <CandidateRunout choice={choice} result={evidence[releaseId]} onRetry={retry} disabled={disabled} />}
+            </li>
+          );
+        })}
+      </ul>
+      {visibleMissing && <MissingRunouts choices={inlineRunouts} uncertainAction={uncertainAction} />}
+      {(allowPinning || medium) && (
+        <div className="flex flex-wrap items-center gap-x-2 text-sm">
+          <p role="status" className="mr-auto text-xs text-gray-600">
+            {lastPage > 0
+              ? `Pressings ${start + 1}–${start + visible.length} of ${available.length}`
+              : `${available.length} ${medium ? `${medium} ` : ''}${available.length === 1 ? 'pressing' : 'pressings'}`}
+          </p>
+          {page > 0 && <button type="button" className="rh-lookup-link" onClick={() => goToPage(page - 1)}>Previous pressings</button>}
+          {page < lastPage && <button type="button" className="rh-lookup-link" onClick={() => goToPage(page + 1)}>More pressings</button>}
+        </div>
+      )}
       {shared && <p id={sharedNumberId} className="text-xs text-gray-600">
         {shared.number} is shared by {shared.count} pressings in these results.
       </p>}
-      {pinned.length > 0 && (
+      <div className="rh-pressing-tools">
+        <button type="button" ref={compareToggle} className="rh-lookup-link -ml-2 text-left"
+          aria-expanded={showComparison} aria-controls={`${comparisonId} ${candidatesId}`}
+          onClick={() => setShowComparison(current => !current)}>Compare evidence</button>
+        {offerMediaFilter && <div className="flex flex-wrap items-center gap-x-2 text-sm text-gray-600">
+          <label htmlFor={mediumId}>Media</label>
+          <select id={mediumId} value={medium} aria-controls={candidatesId}
+            className="min-h-11 max-w-full rounded-lg border border-gray-300 px-2"
+            onChange={event => changeMedium(event.target.value)}>
+            <option value="">All media</option>
+            {media.map(name => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </div>}
+      </div>
+      <div id={comparisonId} hidden={!showComparison}>
+        {showComparison && <div className="rh-pressing-evidence-tools grid gap-2">
+          {target && (unique.length > 1 || reference) && <PressingPreview searchedNumber={searchedNumber}
+            reference={reference && { choice: reference, label: saved ? 'Saved pressing' : 'Catalog reference', state: evidenceState(reference) }}
+            target={{
+              choice: target.releaseId === savedReleaseId && saved ? saved : withPressingEvidence(target, selectedEvidence, 'release'),
+              label: targetLabel,
+              state: evidenceState(target),
+            }} />}
+          {savedComparison}
+          <div className="flex flex-wrap items-center gap-x-3">
+            <button type="button" className="rh-lookup-link -ml-2 text-left" aria-expanded={showRunouts} aria-controls={candidatesId}
+              onClick={() => setCheckingRunouts(current => !current)}>
+              {showRunouts ? 'Hide runout markings' : 'Check runout markings'}
+            </button>
+            <RecordEvidenceHelp />
+          </div>
+          {allowPinning && !pinned.length && <p id={pinHintId} className="text-xs text-gray-600">Pin up to two pressings in the list to compare across pages.</p>}
+        </div>}
+      </div>
+      {showComparison && pinned.length > 0 && (
         <section aria-labelledby={shortlistId} className="min-w-0 space-y-2 border-y border-gray-200 py-2">
           <div>
             <h3 id={shortlistId} ref={shortlistHeading} tabIndex={-1} className="text-sm font-semibold">Pinned pressings</h3>
@@ -521,7 +615,7 @@ export function PressingCandidates({
                   </button>
                   <button type="button" className="rh-lookup-link" aria-label={`Unpin pressing · ${candidateLabel(choice, searchedNumber, formats)}`}
                     onClick={() => {
-                      (pinned.length > 1 ? shortlistHeading.current : runoutToggle.current)?.focus({ preventScroll: true });
+                      (pinned.length > 1 ? shortlistHeading.current : compareToggle.current)?.focus({ preventScroll: true });
                       togglePin(releaseId);
                     }}>Unpin</button>
                 </div>
@@ -535,81 +629,6 @@ export function PressingCandidates({
         <summary>Selected pressing details</summary>
         <PressingSelectionSummary choice={selection} formats={formats} searchedNumber={searchedNumber} />
       </details>}
-      <div className="rh-pressing-evidence-tools">
-        <p className="text-xs text-gray-600">Look for etched or stamped runout marks just inside the last track.</p>
-        <div className="flex flex-wrap items-center gap-x-3">
-          <button type="button" ref={runoutToggle} className="rh-lookup-link -ml-2 text-left" aria-expanded={checkingRunouts} aria-controls={candidatesId}
-            onClick={() => setCheckingRunouts(current => !current)}>
-            {checkingRunouts ? 'Hide runout markings' : available.length > 1 ? 'Compare runout markings' : 'Check runout markings'}
-          </button>
-          <RecordEvidenceHelp />
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-x-3">
-        {offerMediaFilter && <div className="flex flex-wrap items-center gap-x-2 text-sm text-gray-600">
-          <label htmlFor={mediumId}>Media</label>
-          <select id={mediumId} value={medium} aria-controls={candidatesId}
-            className="min-h-11 max-w-full rounded-lg border border-gray-300 px-2"
-            onChange={event => changeMedium(event.target.value)}>
-            <option value="">All media</option>
-            {media.map(name => <option key={name} value={name}>{name}</option>)}
-          </select>
-        </div>}
-        <button type="button" className="rh-lookup-link -ml-2 text-left" aria-expanded={showListingTools} aria-controls={candidatesId}
-          onClick={() => setShowListingTools(current => !current)}>
-          {showListingTools ? (allowPinning ? 'Hide listing details and pins' : 'Hide listing details') : (allowPinning ? 'Listing details and pins' : 'Listing details')}
-        </button>
-      </div>
-      {selectedOutsideMedia && <button type="button" className="rh-lookup-link -ml-2 text-left" onClick={showSelection}>Show selected pressing in All media</button>}
-      {(allowPinning || medium) && (
-        <div>
-          <div className="flex flex-wrap items-center gap-x-2 text-sm">
-            <p ref={pageNotice} role="status" tabIndex={-1} className="mr-auto text-xs text-gray-600">
-              {lastPage > 0
-                ? `Pressings ${start + 1}–${start + visible.length} of ${available.length}`
-                : `${available.length} ${medium ? `${medium} ` : ''}${available.length === 1 ? 'pressing' : 'pressings'}`}
-            </p>
-            {page > 0 && <button type="button" className="rh-lookup-link" onClick={() => goToPage(page - 1)}>Previous pressings</button>}
-            {page < lastPage && <button type="button" className="rh-lookup-link" onClick={() => goToPage(page + 1)}>More pressings</button>}
-          </div>
-          {showListingTools && !pinned.length && <p id={pinHintId} className="text-xs text-gray-600">Pin up to two pressings to compare across pages.</p>}
-        </div>
-      )}
-      <ul id={candidatesId} ref={candidateList} className={`min-w-0 divide-y divide-gray-200 border-y border-gray-200 ${compareGrid
-        ? '@min-[30rem]:grid @min-[30rem]:grid-cols-2 @min-[30rem]:gap-2 @min-[30rem]:divide-y-0 @min-[30rem]:border-y-0' : ''}
-        ${compareGrid && visible.length > 2 ? '@min-[40rem]:grid-cols-3' : ''}`}>
-        {visible.map(choice => {
-          const { releaseId } = choice;
-          const checked = selectedId === releaseId;
-          const isPinned = pinnedIds.includes(releaseId);
-          return (
-            <li key={releaseId} className={`min-w-0 ${checked ? 'bg-blue-50' : ''} ${compareGrid
-              ? '@min-[30rem]:row-span-2 @min-[30rem]:grid @min-[30rem]:grid-rows-subgrid @min-[30rem]:rounded-lg @min-[30rem]:border @min-[30rem]:border-gray-200' : ''}`}>
-              <div className={`grid min-w-0 items-start gap-x-2 ${checkingRunouts ? '' : 'sm:grid-cols-[minmax(0,1fr)_auto]'}`}>
-                <label className="flex min-h-11 min-w-0 cursor-pointer items-start gap-2 px-2 py-2 text-sm">
-                  <input type="radio" name={name} value={releaseId} checked={checked} onChange={() => onSelect(releaseId)}
-                    className="mt-1 shrink-0 accent-blue-600" />
-                  <span className="min-w-0">
-                  {checked && <span className="rh-pressing-candidate-role">{releaseId === savedReleaseId ? 'Saved pressing selected' : 'Selected pressing'}</span>}
-                    <PressingFacts choice={choice} varying={varying} formats={formats} searchedNumber={searchedNumber} />
-                  {releaseId === savedReleaseId && !checked && <span className="block text-gray-600">Your saved pressing</span>}
-                    {choice.catalogNumberMatch === 'unverified' && <span className="block text-gray-600">Check the number on the listing.</span>}
-                  </span>
-                </label>
-                {showListingTools && <div className={`flex min-w-0 flex-wrap items-center gap-x-1 px-2 ${checkingRunouts ? '' : 'sm:max-w-64 sm:justify-end'}`}>
-                  {allowPinning && <button type="button" className="rh-lookup-link aria-disabled:opacity-60"
-                    aria-label={`${isPinned ? 'Unpin pressing' : 'Pin for comparison'} · ${candidateLabel(choice, searchedNumber, formats)}`}
-                    aria-describedby={pinHintId} aria-disabled={!isPinned && pinned.length >= pinLimit}
-                    onClick={() => togglePin(releaseId)}>{isPinned ? 'Unpin' : 'Pin'}</button>}
-                  <PressingListingDetails choice={choice} />
-                </div>}
-              </div>
-              {checkingRunouts && !isPinned && !visibleMissing && <CandidateRunout choice={choice} result={evidence[releaseId]} onRetry={retry} disabled={disabled} />}
-            </li>
-          );
-        })}
-      </ul>
-      {visibleMissing && <MissingRunouts choices={inlineRunouts} uncertainAction={uncertainAction} />}
     </fieldset>
   );
 }

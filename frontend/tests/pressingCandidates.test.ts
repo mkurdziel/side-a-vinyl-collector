@@ -15,6 +15,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let renderer: ReturnType<typeof create> | undefined;
 const textOf = (node: ReactTestInstance): string => node.children.map(child => typeof child === 'string' ? child : textOf(child)).join('');
 const button = (label: string) => renderer!.root.findAllByType('button').find(control => textOf(control) === label)!;
+const toggleComparison = () => act(async () => button('Compare evidence').props.onClick());
 const status = () => renderer!.root.findAllByProps({ role: 'status' }).map(textOf);
 const radios = () => renderer!.root.findAllByProps({ type: 'radio' }).map(control => control.props.value);
 const radioLabels = () => renderer!.root.findAllByType('label').filter(node => node.findAllByProps({ type: 'radio' }).length > 0);
@@ -50,12 +51,18 @@ describe('pressing candidate evidence', () => {
         onSelect: vi.fn(),
       }));
     });
-    const comparison = renderer!.root.findByType('table');
+    const chooser = renderer!.root.findByType('fieldset');
+    expect(textOf(chooser.findByType('legend'))).toBe('Choose a pressing');
+    expect(textOf(chooser)).toContain('Example only · Discogs 21');
+    expect(textOf(chooser)).toContain('Same catalog number. Check the etched or stamped runout marks.');
+    expect(textOf(chooser)).not.toContain('Check your copy’s country.');
+    expect(chooser.findAllByType('table')).toHaveLength(0);
+    await toggleComparison();
+    const comparison = chooser.findByType('table');
     expect(textOf(comparison.findByType('thead'))).toContain('Saved pressing 22');
     expect(textOf(comparison.findByType('thead'))).toContain('Catalog example 21');
-    expect(textOf(renderer!.root)).toContain('Check your copy’s country.');
     const evidenceRows = comparison.findByType('tbody').findAllByType('tr');
-    expect(evidenceRows.map(textOf)).toEqual(['CountryDiffersUSCanada', 'FormatVinylVinyl', 'MixStereoUnlisted']);
+    expect(evidenceRows.map(textOf)).toEqual(['Release countryDiffersUSCanada', 'FormatVinylVinyl', 'MixStereoUnlisted']);
     expect(evidenceRows.map(row => row.props.className)).toEqual(['rh-evidence-priority', undefined, undefined]);
     expect(renderer!.root.findAllByProps({ type: 'radio' }).every(radio => !radio.props.checked)).toBe(true);
   });
@@ -96,10 +103,10 @@ describe('pressing candidate evidence', () => {
     });
 
     const vinylRadio = radioLabels()[0];
-    expect(textOf(vinylRadio)).toMatch(/Catalog number PCS 7088.*Format Vinyl · LP · Album.*Country UK & Ireland.*Release year 2016.*Discogs release 9269057.*Label Apple Records/);
+    expect(textOf(vinylRadio)).toMatch(/Catalog number PCS 7088.*Format Vinyl · LP · Album.*Release country UK & Ireland.*Release year 2016.*Discogs release 9269057.*Label Apple Records/);
     expect(textOf(vinylRadio)).not.toContain('Universal Music Group');
-    expect(renderer!.root.findAllByType('details').map(textOf)).toEqual([expect.stringContaining('Where to check your record')]);
-    await act(async () => button('Listing details and pins').props.onClick());
+    expect(renderer!.root.findAllByType('details')).toHaveLength(0);
+    await toggleComparison();
     const listing = renderer!.root.findAllByType('details').find(node => textOf(node).includes('release 9269057'))!;
     expect(listing.props.open).toBeUndefined();
     expect(textOf(listing)).toContain(credits);
@@ -109,7 +116,7 @@ describe('pressing candidate evidence', () => {
     await act(async () => button('More pressings').props.onClick());
 
     const cdRadio = radioLabels()[0];
-    expect(textOf(cdRadio)).toMatch(/Catalog number PCS 7088.*Format CD · Album.*Country Japan.*Release year 1987.*Discogs release 1840188/);
+    expect(textOf(cdRadio)).toMatch(/Catalog number PCS 7088.*Format CD · Album.*Release country Japan.*Release year 1987.*Discogs release 1840188/);
     const pinCd = renderer!.root.findByProps({ 'aria-label': 'Pin for comparison · PCS 7088, CD · Album, Japan, 1987, Discogs release 1840188' });
     await act(async () => pinCd.props.onClick());
     const shortlist = renderer!.root.findByType('section');
@@ -119,7 +126,7 @@ describe('pressing candidate evidence', () => {
     await act(async () => renderer!.update(createElement(PressingSelectionSummary, {
       choice: vinyl, searchedNumber: 'PCS 7088', compact: true,
     })));
-    expect(textOf(renderer!.root)).toMatch(/Catalog number PCS 7088.*Format Vinyl · LP · Album.*Country UK & Ireland.*Release year 2016.*Discogs release 9269057/);
+    expect(textOf(renderer!.root)).toMatch(/Catalog number PCS 7088.*Format Vinyl · LP · Album.*Release country UK & Ireland.*Release year 2016.*Discogs release 9269057/);
     expect(textOf(renderer!.root)).not.toContain('Apple Records');
     expect(renderer!.root.findAllByType('details')).toHaveLength(0);
   });
@@ -143,7 +150,7 @@ describe('pressing candidate evidence', () => {
     ]);
     expect(radioLabels().map(textOf).every(label => !label.includes('Limited Edition'))).toBe(true);
     expect(onSelect).not.toHaveBeenCalled();
-    await act(async () => button('Listing details').props.onClick());
+    await toggleComparison();
     const rows = renderer!.root.findAllByType('li');
     rows.forEach((row, index) => {
       const listing = row.findByType('details');
@@ -170,7 +177,7 @@ describe('pressing candidate evidence', () => {
     });
     const mediumFilter = renderer!.root.findByType('select');
     expect(mediumFilter.findAllByType('option').map(textOf)).toEqual(['All media', 'Vinyl', 'Cassette', 'CD']);
-    await act(async () => button('Listing details and pins').props.onClick());
+    await toggleComparison();
     await act(async () => button('Pin').props.onClick());
     await act(async () => mediumFilter.props.onChange({ target: { value: 'CD' } }));
     expect(radios()).toEqual([4, 5]);
@@ -201,7 +208,6 @@ describe('pressing candidate evidence', () => {
       renderer = create(picker(), { createNodeMock: node => node.type === 'ul' ? { querySelector } : null });
     });
     const preview = () => textOf(renderer!.root.findByType('table').findByType('thead'));
-    expect(preview()).toBe('EvidenceSaved pressing 1Catalog example 2');
     expect(textOf(radioLabels()[1])).not.toContain('Catalog example');
     const findAction = button('Find in list · Catalog example 2');
     expect(findAction.children[0]).toBe('Find in list');
@@ -210,6 +216,8 @@ describe('pressing candidate evidence', () => {
     expect(focus).toHaveBeenCalledOnce();
     expect(onSelect).not.toHaveBeenCalled();
     expect(renderer!.root.findByProps({ type: 'radio', value: 2 }).props.checked).toBe(false);
+    await toggleComparison();
+    expect(preview()).toBe('EvidenceSaved pressing 1Catalog example 2');
 
     await act(async () => renderer!.update(picker(2)));
     expect(preview()).toBe('EvidenceSaved pressing 1Selected pressing 2');
@@ -222,7 +230,7 @@ describe('pressing candidate evidence', () => {
     expect(textOf(renderer!.root.findByType('table'))).not.toContain('Differs');
   });
 
-  it('shows evidence before a radio selection and only fetches runouts for visible pressings on request', async () => {
+  it('shows choices before opening comparison and only fetches runouts for visible pressings on request', async () => {
     const pending = Promise.withResolvers<{ pressing: PressingDetails | null }>();
     const onSelect = vi.fn();
     getPressingDetails.mockReturnValueOnce(pending.promise)
@@ -233,14 +241,25 @@ describe('pressing candidate evidence', () => {
     const fieldset = renderer!.root.findByType('fieldset');
     const initialText = textOf(fieldset);
     expect(initialText).toContain('S-5233 is shared by 3 pressings in these results.');
-    expect(initialText.indexOf('Look for etched or stamped runout marks')).toBeLessThan(initialText.indexOf('Compare runout markings'));
-    expect(initialText.indexOf('Where to check your record')).toBeLessThan(initialText.indexOf('Catalog number S-5233'));
+    expect(initialText).toContain('Choose a pressing');
+    expect(initialText).not.toContain('Where to check your record');
+    const listPosition = fieldset.children.indexOf(fieldset.findByType('ul'));
+    const note = fieldset.findAllByType('p').find(paragraph => textOf(paragraph).includes('is shared by'))!;
+    expect(listPosition).toBeLessThan(fieldset.children.indexOf(note));
+    expect(listPosition).toBeLessThan(fieldset.children.indexOf(button('Compare evidence').parent!));
+    expect(button('Check runout markings')).toBeUndefined();
+    expect(button('Compare evidence').props['aria-expanded']).toBe(false);
     expect(textOf(fieldset)).toContain('LP · Mono');
     expect(radios()).toEqual([1, 2, 3]);
     expect(getPressingDetails).not.toHaveBeenCalled();
     expect(onSelect).not.toHaveBeenCalled();
 
-    await act(async () => button('Compare runout markings').props.onClick());
+    await toggleComparison();
+    expect(button('Compare evidence').props['aria-expanded']).toBe(true);
+    expect(textOf(fieldset)).toContain('Where to check your record');
+    expect(textOf(fieldset)).toContain('Discogs release country describes the market for the release.');
+    expect(getPressingDetails).not.toHaveBeenCalled();
+    await act(async () => button('Check runout markings').props.onClick());
     expect(getPressingDetails.mock.calls.map(([releaseId]) => releaseId)).toEqual([1, 2, 3]);
     expect(status()).toContain('Discogs release 1. Checking Discogs…');
     expect(status()).toContain('Discogs release 2. Couldn’t load runout markings.');
@@ -250,9 +269,8 @@ describe('pressing candidate evidence', () => {
     await act(async () => button('Retry runout markings').props.onClick());
     expect(getPressingDetails.mock.calls.map(([releaseId]) => releaseId)).toEqual([1, 2, 3, 2]);
     expect(textOf(fieldset)).toContain('S-5233 is shared by 3 pressings in these results.');
-    await act(async () => button('Listing details and pins').props.onClick());
     expect(textOf(fieldset)).toContain('S-5233 · ALT-12');
-    expect(textOf(fieldset)).toContain('Country US');
+    expect(textOf(fieldset)).toContain('Release country US');
     expect(textOf(fieldset)).toContain('YEX-101');
     expect(textOf(fieldset)).toContain('YEX-102');
     expect(onSelect).not.toHaveBeenCalled();
@@ -263,7 +281,8 @@ describe('pressing candidate evidence', () => {
   it('aborts evidence reads for pressings that leave view', async () => {
     getPressingDetails.mockImplementation(() => new Promise(() => {}));
     await act(async () => { renderer = create(createElement(CandidatePicker, { choices, onSelect: vi.fn() })); });
-    await act(async () => button('Compare runout markings').props.onClick());
+    await toggleComparison();
+    await act(async () => button('Check runout markings').props.onClick());
     await act(async () => button('More pressings').props.onClick());
     expect(radios()).toEqual([4, 5]);
     expect(getPressingDetails.mock.calls.map(([releaseId]) => releaseId)).toEqual([1, 2, 3, 4, 5]);
@@ -289,7 +308,7 @@ describe('pressing candidate evidence', () => {
     }
 
     await act(async () => { renderer = create(createElement(Chooser)); });
-    await act(async () => button('Listing details and pins').props.onClick());
+    await toggleComparison();
     await act(async () => pin('S 5233').props.onClick());
     await act(async () => button('More pressings').props.onClick());
     expect(getPressingDetails.mock.calls[0][1].aborted).toBe(false);
@@ -297,7 +316,7 @@ describe('pressing candidate evidence', () => {
     await act(async () => firstRead.resolve({ pressing: { matrixRunouts: [{ value: 'RUNOUT-2' }] } }));
     const shortlist = renderer!.root.findByType('section');
     expect(textOf(shortlist)).toContain('LP · Mono');
-    expect(textOf(shortlist)).toContain('Country US');
+    expect(textOf(shortlist)).toContain('Release country US');
     expect(textOf(shortlist)).toContain('RUNOUT-2');
     expect(textOf(shortlist)).toContain('RUNOUT-4');
     expect(radios()).toEqual([4, 5]);
@@ -312,11 +331,18 @@ describe('pressing candidate evidence', () => {
     expect(textOf(shortlist)).toContain('RUNOUT-4');
     expect(getPressingDetails.mock.calls.map(([releaseId]) => releaseId)).toEqual([2, 4]);
 
+    await toggleComparison();
+    expect(renderer!.root.findAllByType('section')).toHaveLength(0);
+    await toggleComparison();
+    expect(textOf(renderer!.root.findByType('section'))).toContain('RUNOUT-4');
+    expect(getPressingDetails.mock.calls.map(([releaseId]) => releaseId)).toEqual([2, 4]);
+
     await act(async () => button('More pressings').props.onClick());
-    const unpin = shortlist.findAllByType('button').find(control => control.props['aria-label']?.startsWith('Unpin pressing · S 5233'))!;
+    const unpin = renderer!.root.findByType('section').findAllByType('button')
+      .find(control => control.props['aria-label']?.startsWith('Unpin pressing · S 5233'))!;
     await act(async () => unpin.props.onClick());
     const offPage = renderer!.root.findByType(PressingSelectionSummary);
-    expect(textOf(offPage)).toMatch(/Selected pressing.*S 5233.*Format LP · Mono.*Country Canada.*Discogs release 2.*Label Alshire/);
+    expect(textOf(offPage)).toMatch(/Selected pressing.*S 5233.*Format LP · Mono.*Release country Canada.*Discogs release 2.*Label Alshire/);
   });
 
   it('announces missing runouts once and keeps retry separate from known absence', async () => {
@@ -326,20 +352,20 @@ describe('pressing candidate evidence', () => {
     await act(async () => { renderer = create(createElement(CandidatePicker, {
       choices, onSelect: vi.fn(), uncertainAction: 'If you’re unsure, save the album without a pressing.',
     })); });
-    await act(async () => button('Compare runout markings').props.onClick());
+    await toggleComparison();
+    await act(async () => button('Check runout markings').props.onClick());
     expect(status()).toContain('Discogs release 2. Couldn’t load runout markings.');
     expect(status().some(message => message.includes('for these pressings'))).toBe(false);
 
     await act(async () => button('Retry runout markings').props.onClick());
     const missing = () => status().filter(message => message.includes('Discogs lists no runout markings'));
-    expect(missing()).toEqual(['Discogs lists no runout markings for these pressings. Compare the format with your record. If you’re unsure, save the album without a pressing.']);
+    expect(missing()).toEqual(['Discogs lists no runout markings for these pressings. Compare the format on your sleeve or label. If you’re unsure, save the album without a pressing.']);
 
     await act(async () => button('More pressings').props.onClick());
-    await act(async () => button('Listing details and pins').props.onClick());
     await act(async () => button('Pin').props.onClick());
     await act(async () => button('Pin').props.onClick());
     expect(radios()).toEqual([4, 5]);
-    expect(missing()).toEqual(['Discogs lists no runout markings for these pressings. Check the label, country, format, and release year against your record. If you’re unsure, save the album without a pressing.']);
+    expect(missing()).toEqual(['Discogs lists no runout markings for these pressings. Check the catalog number and label on your copy. If you’re unsure, save the album without a pressing.']);
   });
 
   it('shares an in-flight and completed lookup with the comparison table without sharing cancellation', async () => {
