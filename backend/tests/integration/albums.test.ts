@@ -30,6 +30,7 @@ describe('Album CRUD Operations', () => {
     app.get('/api/search', search);
     app.get('/api/albums/:id', albumController.getAlbumById);
     app.post('/api/albums', albumController.addAlbum);
+    app.post('/api/albums/:id/addition/undo', albumController.undoAlbumAddition);
     app.delete('/api/albums/:id', albumController.deleteAlbum);
     app.post('/api/albums/:id/removal/undo', albumController.undoAlbumRemoval);
     app.patch('/api/albums/:id/notes', albumController.updateAlbumNotes);
@@ -55,7 +56,51 @@ describe('Album CRUD Operations', () => {
     expect(wishlist.body.local.map((album: { artist_name: string }) => album.artist_name)).toEqual(['O']);
   });
 
+  it('distinguishes literal text from approximate saved search matches', async () => {
+    await request(app).post('/api/albums').send({ artist: 'The Suntones', album: 'Fiddler' }).expect(201);
+    await request(app).post('/api/albums').send({ artist: 'Neil Diamond', album: 'Stones' }).expect(201);
+
+    const mixed = await request(app).get('/api/search?q=Suntones&scope=saved&sort=title').expect(200);
+    expect(mixed.body.local).toMatchObject([
+      { title: 'Fiddler', match_kind: 'text' },
+      { title: 'Stones', match_kind: 'approximate' },
+    ]);
+    const combined = await request(app).get('/api/search?q=suntones%20fiddler&scope=saved').expect(200);
+    expect(combined.body.local).toMatchObject([{ title: 'Fiddler', match_kind: 'text' }]);
+  });
+
   describe('POST /api/albums', () => {
+    it('undoes only the exact catalog addition and preserves the previous catalog reference', async () => {
+      const original = await request(app).post('/api/albums').send({
+        artist: 'Exact addition', album: 'Prior release', discogsId: 4100,
+      }).expect(201);
+      const url = `/api/albums/${original.body.album.id}`;
+      await request(app).delete(url).expect(200);
+      const add = () => request(app).post('/api/albums').send({
+        artist: 'Exact addition', album: 'Prior release', status: 'wishlist', allowUndo: true,
+        applyCatalogReference: true, catalogListing: { source: 'discogs', kind: 'master', id: 44 },
+      }).expect(201);
+      const added = await add();
+      expect(added.headers['cache-control']).toBe('no-store');
+      expect(added.body.album).toMatchObject({ id: original.body.album.id, discogs_id: null, status: 'wishlist' });
+      expect(Date.parse(added.body.expiresAt)).toBeGreaterThan(Date.now());
+      const undo = (undoToken: string) => request(app).post(`${url}/addition/undo`).send({ undoToken });
+      await undo('x'.repeat(43)).expect(409);
+      const competing = await Promise.all([undo(added.body.undoToken), undo(added.body.undoToken)]);
+      expect(competing.map(response => response.status).sort()).toEqual([200, 404]);
+      await request(app).get(url).expect(404);
+      const row = await testPool.query('SELECT discogs_id, catalog_listing FROM albums WHERE id = $1', [original.body.album.id]);
+      expect(row.rows[0]).toEqual({ discogs_id: 4100, catalog_listing: null });
+
+      const addedAgain = await add();
+      expect(addedAgain.body.undoToken).not.toBe(added.body.undoToken);
+      await undo(added.body.undoToken).expect(409);
+      await request(app).patch(`${url}/notes`).send({ notes: 'Keep this copy' }).expect(200);
+      await undo(addedAgain.body.undoToken).expect(409);
+      const preserved = await request(app).get(url).expect(200);
+      expect(preserved.body.album).toMatchObject({ status: 'wishlist', notes: 'Keep this copy' });
+    });
+
     it('should create a new album in collection', async () => {
       const response = await request(app)
         .post('/api/albums')

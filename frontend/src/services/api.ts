@@ -47,6 +47,7 @@ export interface Album {
   notes?: string;
   added_at: string;
   status: 'collection' | 'wishlist';
+  match_kind?: 'text' | 'approximate';
 }
 
 export interface SearchResult {
@@ -203,13 +204,21 @@ class ApiService {
     discogsId?: number;
     catalogListing?: CatalogListing;
     applyCatalogReference?: boolean;
+    allowUndo?: boolean;
     barcode?: string;
     status?: 'collection' | 'wishlist';
-  }, signal?: AbortSignal): Promise<{ album: Album }> {
+  }, signal?: AbortSignal): Promise<{ album: Album; undoToken?: string; expiresAt?: string }> {
     return this.request('/api/albums', {
       method: 'POST',
       body: JSON.stringify(data),
       signal,
+    });
+  }
+
+  undoAlbumAddition(id: number, undoToken: string): Promise<{ album: Album }> {
+    return this.request(`/api/albums/${id}/addition/undo`, {
+      method: 'POST',
+      body: JSON.stringify({ undoToken }),
     });
   }
 

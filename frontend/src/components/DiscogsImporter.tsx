@@ -69,19 +69,21 @@ function ImportPressingEvidence({ pressings, onChoose, disabled }: {
   const [firstId, setFirstId] = useState(choices[0].releaseId);
   const [secondId, setSecondId] = useState(choices[1].releaseId);
   const [pairChanged, setPairChanged] = useState(false);
+  const [comparisonOpened, setComparisonOpened] = useState(false);
   const first = choices.find(choice => choice.releaseId === firstId) ?? choices[0];
   const alternatives = choices.filter(choice => choice.releaseId !== first.releaseId);
   const second = alternatives.find(choice => choice.releaseId === secondId) ?? alternatives[0];
-  return <details className="rh-pressing-secondary min-w-0 text-sm">
+  return <details className="rh-pressing-secondary min-w-0 text-sm"
+    onToggle={event => { if (event.currentTarget.open) setComparisonOpened(true); }}>
     <summary>Compare listings</summary>
-    <div className="space-y-2 pb-2">
+    {comparisonOpened && <div className="space-y-2 pb-2">
       <PressingPairEvidence reference={{ choice: first, label: 'Discogs' }} target={{ choice: second, label: 'Discogs' }}
         onLocate={onChoose} disabled={disabled} announceChanges={pairChanged} uncertainAction="Leave this title unresolved if the listings don't distinguish your copy.">
         {choices.length > 2 && <PressingPairSelects choices={choices} firstId={first.releaseId} secondId={second.releaseId}
           onChangeFirst={id => { setFirstId(id); setPairChanged(true); }}
           onChangeSecond={id => { setSecondId(id); setPairChanged(true); }} />}
       </PressingPairEvidence>
-    </div>
+    </div>}
   </details>;
 }
 
@@ -145,7 +147,7 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
   const panel = useRef<HTMLDivElement>(null);
   const header = useRef<HTMLDivElement>(null);
   const continuationBar = useRef<HTMLElement>(null);
-  const signoffBar = useRef<HTMLDivElement>(null);
+  const signoffBar = useRef<HTMLElement>(null);
   const reviewHeading = useRef<HTMLParagraphElement>(null);
   const noticesHeading = useRef<HTMLParagraphElement>(null);
   const coverageHeading = useRef<HTMLParagraphElement>(null);
@@ -822,11 +824,10 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
   const morePage = pagination?.nextPage;
   const coverageText = pagination?.totalPages ? `${Math.min(pagination.page, pagination.totalPages)} of ${pagination.totalPages} Discogs pages loaded`
     : 'Discogs collection is empty';
-  const showLoadedChoiceCount = needingChoice.size > 0 || queryTerms.length > 0 || needsChoiceOnly;
+  const filtersActive = queryTerms.length > 0 || needsChoiceOnly;
   const shortCoverageText = pagination?.totalPages
-    ? `${Math.min(pagination.page, pagination.totalPages)}/${pagination.totalPages} pages${showLoadedChoiceCount ? '' : ' loaded'}`
+    ? `${Math.min(pagination.page, pagination.totalPages)}/${pagination.totalPages} pages`
     : 'No Discogs pages';
-  const loadedChoiceText = `${counted(needingChoice.size, 'loaded title')} ${needingChoice.size === 1 ? 'needs' : 'need'} a pressing choice`;
   const matchingChoiceText = `${counted(matchingNeeds.length, 'matching title')} ${matchingNeeds.length === 1 ? 'needs' : 'need'} a pressing choice.`;
   const filterScopeText = needsChoiceOnly && queryTerms.length > 0
     ? `${counted(matchingNeeds.length, 'title')} ${matchingNeeds.length === 1 ? 'matches' : 'match'} both filters.`
@@ -858,6 +859,38 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
     </button>
     {restoring && <button type="button" className={secondaryAction} onClick={cancelPageLoad}>Cancel review refresh</button>}
   </>;
+  const describeMatchingPressings = filtersActive && needingChoice.size > 0;
+  const renderDecisionScope = (stage: 'browse' | 'signoff') => (
+    <div className="rh-discogs-decision-scope">
+      <p id={stage === 'signoff' ? 'discogs-signoff-count' : 'discogs-selection-count'} role="status">
+        <strong>{selected.length} selected for {shelfNames[destination]}</strong>
+        {filtersActive && ` · ${hiddenSelectedCount} outside filters`}
+      </p>
+      <p id={stage === 'signoff' ? 'discogs-signoff-coverage' : 'discogs-page-coverage'} ref={stage === 'browse' ? coverageHeading : undefined}
+        tabIndex={stage === 'browse' ? -1 : undefined} role="status">
+        <span className="rh-discogs-dock-wide">{coverageText}</span>
+        <span className="rh-discogs-dock-short">{shortCoverageText}</span>
+        {!!freshPressingGroups.length && <>
+          <span className="rh-discogs-dock-wide"> · {counted(freshPressingGroups.length, 'title')} awaiting a pressing choice</span>
+          <span className="rh-discogs-dock-short"> · {freshPressingGroups.length} need{freshPressingGroups.length === 1 ? 's' : ''} a pressing</span>
+        </>}
+        {!!unresolvedCount && <>
+          <span className="rh-discogs-dock-wide"> · {counted(unresolvedCount, 'earlier selection')} unresolved</span>
+          <span className="rh-discogs-dock-short"> · {counted(unresolvedCount, 'earlier issue')}</span>
+        </>}
+      </p>
+      {describeMatchingPressings && (
+        <p id={stage === 'signoff' ? 'discogs-signoff-filter-scope' : 'discogs-dock-filter-scope'} role="status">
+          <span className="rh-discogs-dock-wide">
+            {matchingNeeds.length} of {needingChoice.size} loaded titles needing a pressing choice match your filters
+          </span>
+          <span className="rh-discogs-dock-short">{matchingNeeds.length} of {needingChoice.size} pressing decisions match filters</span>
+        </p>
+      )}
+      {stage === 'browse' && fetchFailed && <p className="text-red-600" role="alert">{pageFailure}</p>}
+      {stage === 'browse' && fetchStatus === 'canceled' && <p role="status">Page load canceled. Your review is kept.</p>}
+    </div>
+  );
   return (
     <ModalDialog labelledBy="discogs-import-title" onClose={close} onEscape={reviewingSelection ? backToSelections : confirmingDiscard ? keepReview : close}>
       <div ref={panel} className="rh-dialog-panel max-w-6xl">
@@ -871,15 +904,11 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
         </div>
 
         {reviewingSelection && <section className="grid gap-4 p-4 sm:p-6" aria-labelledby="discogs-selected-heading">
-          <div className="grid gap-1">
-            <h3 id="discogs-selected-heading" tabIndex={-1} ref={selectionHeading} className="text-lg font-semibold">Review selected titles</h3>
-            <p id="discogs-signoff-count" className="text-sm text-gray-600" role="status">
-              {selected.length ? `${counted(selected.length, 'title')} selected for ${shelfNames[destination]}.` : 'No titles selected. Go back to select the releases you want.'}
-            </p>
-          </div>
+          <h3 id="discogs-selected-heading" tabIndex={-1} ref={selectionHeading} className="text-lg font-semibold">Review selected titles</h3>
+          {!selected.length && <p className="text-sm text-gray-600" role="status">Go back to select the releases you want.</p>}
+          {(morePage || freshPressingGroups.length > 0 || unresolvedCount > 0 || savedNoticeCount > 0) && (
           <div id="discogs-signoff-scope" className="space-y-1 border-y border-gray-200 py-2 text-sm">
-            <p className="font-semibold">{coverageText}</p>
-            {morePage && <p className="text-gray-600">{partialWarning}</p>}
+            {morePage && <p id="discogs-signoff-partial-warning" className="text-gray-600">{partialWarning}</p>}
             {freshPressingGroups.length > 0 && <section className="text-gray-600 [overflow-wrap:anywhere]" aria-label="Unselected titles with multiple pressings">
               <p>{counted(freshPressingGroups.length, 'title')} will be left out until you choose a pressing.</p>
               {freshPressingGroups.length === 1
@@ -903,42 +932,35 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
               </details>}
             </section>}
             {savedNoticeCount > 0 && <p className="text-gray-600">{counted(savedNoticeCount, 'title')} already saved.</p>}
-          </div>
-          <ul className="divide-y divide-gray-200 [overflow-wrap:anywhere]" aria-label="Titles in this import">
+          </div>)}
+          {selected.length > 0 && <ul className="divide-y divide-gray-200 [overflow-wrap:anywhere]" aria-label="Titles in this import">
             {selected.map((album, index) => {
               const facts = [album.pressing?.catalogNumber, album.pressing?.format, album.pressing?.country, album.year, album.pressing?.label]
                 .filter(Boolean).join(' · ');
-              return <li key={album.discogsId} className="grid gap-x-4 gap-y-1 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-                <div>
-                  <h4 className="text-sm font-semibold">{album.album}</h4>
-                  <p className="text-sm text-gray-600">{album.artist}</p>
-                  {facts && <p className="text-sm text-gray-600">{facts}</p>}
-                </div>
-                <div className="flex flex-wrap items-center gap-x-2">
-                  <a className="rh-comparison-source min-h-11 content-center" href={`https://www.discogs.com/release/${album.discogsId}`} target="_blank" rel="noreferrer">
-                    Discogs release {album.discogsId}<span className="sr-only"> (opens in a new tab)</span>
-                  </a>
-                  <button id={`discogs-signoff-remove-${album.discogsId}`} type="button" className="rh-lookup-link"
-                    aria-label={`Remove ${album.album} by ${album.artist} from this import`}
-                    aria-disabled={busy} onClick={() => {
-                      if (busy) return;
-                      const neighbor = selected[index + 1] ?? selected[index - 1];
-                      selectionFocus.current = neighbor ? `discogs-signoff-remove-${neighbor.discogsId}` : 'discogs-selected-heading';
-                      chooseAlbum(album, false);
-                    }}>Remove</button>
-                </div>
+              return <li key={album.discogsId} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 py-1">
+                <details className="min-w-0 text-sm">
+                  <summary className="min-h-11 cursor-pointer content-center">
+                    <span className="font-semibold">{album.album}</span>{' '}
+                    <span className="block pl-4 text-xs text-gray-600">{album.artist} · Discogs {album.discogsId}</span>
+                  </summary>
+                  <div className="pl-4">
+                    {facts && <p className="text-sm text-gray-600">{facts}</p>}
+                    <a className="rh-comparison-source min-h-11 content-center" href={`https://www.discogs.com/release/${album.discogsId}`} target="_blank" rel="noreferrer">
+                      View Discogs release {album.discogsId}<span className="sr-only"> (opens in a new tab)</span>
+                    </a>
+                  </div>
+                </details>
+                <button id={`discogs-signoff-remove-${album.discogsId}`} type="button" className="rh-lookup-link"
+                  aria-label={`Remove ${album.album} by ${album.artist} from this import`}
+                  aria-disabled={busy} onClick={() => {
+                    if (busy) return;
+                    const neighbor = selected[index + 1] ?? selected[index - 1];
+                    selectionFocus.current = neighbor ? `discogs-signoff-remove-${neighbor.discogsId}` : 'discogs-selected-heading';
+                    chooseAlbum(album, false);
+                  }}>Remove</button>
               </li>;
             })}
-          </ul>
-          <div ref={signoffBar} className="sticky bottom-0 flex flex-wrap items-center gap-2 border-t border-gray-200 bg-[var(--rh-surface)] py-2">
-            <SaveShelfSelect value={destination} disabled={busy}
-              onChange={shelf => { if (!operationInProgress.current) rememberDraft({ ...draftForReview(), destination: shelf }); }} />
-            <button type="button" className={secondaryAction} onClick={backToSelections}>Back to selections</button>
-            <button id="discogs-import-commit" type="button" className={primaryAction} disabled={!canReviewSelection}
-              aria-describedby="discogs-signoff-count discogs-signoff-scope" onClick={confirmSelectionImport}>
-              Import {counted(selected.length, 'title')} to {shelfNames[destination]}
-            </button>
-          </div>
+          </ul>}
         </section>}
         <div hidden={reviewingSelection} className="space-y-4 p-4 sm:p-6">
           {(summary || progressText) && <p className="text-sm font-medium text-gray-900" role="status">{progressText ?? summary}</p>}
@@ -1148,21 +1170,27 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
             })}
           </div>}
         </div>
+        {reviewingSelection && <footer ref={signoffBar} aria-label="Confirm Discogs import" className="rh-discogs-import-dock rh-discogs-signoff-dock">
+          {renderDecisionScope('signoff')}
+          <div className="rh-discogs-import-dock-actions">
+            <SaveShelfSelect value={destination} disabled={busy}
+              onChange={shelf => { if (!operationInProgress.current) rememberDraft({ ...draftForReview(), destination: shelf }); }} />
+            <button type="button" className={secondaryAction} aria-label="Back to selections" onClick={backToSelections}>
+              <span className="rh-discogs-dock-wide">Back to selections</span>
+              <span className="rh-discogs-dock-short" aria-hidden="true">Back</span>
+            </button>
+            <button id="discogs-import-commit" type="button" className={primaryAction} disabled={!canReviewSelection}
+              aria-label={`Import ${counted(selected.length, 'title')} to ${shelfNames[destination]}`}
+              aria-describedby={`discogs-signoff-count discogs-signoff-coverage${describeMatchingPressings ? ' discogs-signoff-filter-scope' : ''}${morePage ? ' discogs-signoff-partial-warning' : ''}`}
+              onClick={confirmSelectionImport}>
+              <span className="rh-discogs-dock-wide">Import {counted(selected.length, 'title')} to {shelfNames[destination]}</span>
+              <span className="rh-discogs-dock-short" aria-hidden="true">Import</span>
+            </button>
+          </div>
+        </footer>}
         {hasCatalog && !reviewingSelection && <footer ref={continuationBar} aria-label="Discogs import controls"
           className="rh-discogs-import-dock">
-          <div className="rh-discogs-import-dock-status flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs text-gray-600">
-            <p id="discogs-page-coverage" ref={coverageHeading} tabIndex={-1} className="font-semibold text-gray-900" role="status">
-              <span className="rh-discogs-dock-wide">{coverageText}</span>
-              <span className="rh-discogs-dock-short">{shortCoverageText}</span>
-              {showLoadedChoiceCount && <>
-                <span className="rh-discogs-dock-wide"> · {loadedChoiceText}</span>
-                <span className="rh-discogs-dock-short"> · {needingChoice.size} need{needingChoice.size === 1 ? 's' : ''} choice</span>
-              </>}
-            </p>
-            <p id="discogs-selection-count" role="status">{selected.length} selected · {shelfNames[destination]}</p>
-            {fetchFailed && <p className="basis-full text-red-600" role="alert">{pageFailure}</p>}
-            {fetchStatus === 'canceled' && <p className="basis-full" role="status">Page load canceled. Your review is kept.</p>}
-          </div>
+          {renderDecisionScope('browse')}
           <div className="rh-discogs-import-dock-actions">
             {(morePage || pageNotLoaded || fetchStatus === 'loading') && (
               <button type="button" className={`${secondaryAction} aria-disabled:opacity-55`}
@@ -1184,7 +1212,7 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
               </button>}
               {remaining.length > 0 && <button id="discogs-import-review" type="button" className={primaryAction}
                 aria-label="Review selection" disabled={!canReviewSelection}
-                aria-describedby={`discogs-selection-count discogs-page-coverage${morePage ? ' discogs-partial-import' : ''}${reviewStatus ? ' discogs-review-status' : ''}`}
+                aria-describedby={`discogs-selection-count discogs-page-coverage${describeMatchingPressings ? ' discogs-dock-filter-scope' : ''}${morePage ? ' discogs-partial-import' : ''}${reviewStatus ? ' discogs-review-status' : ''}`}
                 onClick={() => openSelectionReview('discogs-import-review')}>
                 <span className="rh-discogs-dock-wide">Review selection</span>
                 <span className="rh-discogs-dock-short" aria-hidden="true">Review</span>

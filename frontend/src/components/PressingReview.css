@@ -62,6 +62,26 @@
   text-align: start;
 }
 
+.rh-pressing-preview__cue-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.rh-pressing-runout-action {
+  flex: 0 0 auto;
+  max-inline-size: 48%;
+  font-size: 0.8125rem;
+  line-height: 1.2;
+  text-wrap: balance;
+}
+
+.rh-pressing-pair-runouts:not([hidden]) {
+  border-block-end: 1px solid var(--rh-edge);
+  background: var(--rh-surface-2);
+}
+
 .rh-pressing-preview__release {
   display: block;
   color: var(--rh-ink-2);
@@ -81,61 +101,24 @@
   gap: 4px 8px;
 }
 
-.rh-pressing-chooser-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 0 2px;
-}
-
 .rh-pressing-compare {
-  flex: 0 0 auto;
   line-height: 1.25;
 }
 
-.rh-pressing-chooser-heading > .rh-pressing-choice-jump {
-  display: none;
+.rh-pressing-choice-clue {
+  max-inline-size: 64ch;
 }
 
-.rh-pressing-scope {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-block: 0 4px;
-}
-
-.rh-pressing-scope__link {
-  flex: 0 0 auto;
-  max-inline-size: 36%;
-  text-wrap: balance;
-}
-
-.rh-pressing-example {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  column-gap: 8px;
-  padding-inline: 8px 0;
+.rh-pressing-evidence-actions {
+  padding: 0 8px 6px;
+  border: 1px solid var(--rh-edge);
   border-radius: 8px;
-  background: var(--rh-active-wash);
 }
 
-.rh-pressing-example__clue {
-  flex: 1;
-  min-inline-size: 0;
-}
-
-.rh-pressing-example__market {
-  flex: 0 0 100%;
-  padding-block-end: 4px;
-}
-
-.rh-pressing-example__action {
-  flex: 0 0 auto;
-  margin-inline-start: auto;
-  max-inline-size: 39%;
-  text-wrap: balance;
+.rh-pressing-evidence-actions__row {
+  display: flex;
+  gap: 0 4px;
+  flex-wrap: wrap;
 }
 
 .rh-pressing-tools {
@@ -191,8 +174,15 @@
 }
 
 @media (max-width: 25rem) {
-  .rh-pressing-chooser-heading > .rh-pressing-choice-jump {
-    display: inline-flex;
+  .rh-pressing-evidence-actions__row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rh-pressing-evidence-actions__row > button {
+    min-inline-size: 0;
+    padding-inline: 4px;
+    text-wrap: balance;
   }
 
   .rh-pressing-review__actions {
@@ -201,8 +191,6 @@
   }
 
   .rh-pressing-review__actions button,
-  .rh-pressing-example__action,
-  .rh-pressing-scope__link,
   .rh-pressing-compare,
   .rh-pressing-evidence-tools :is(button, summary) {
     font-size: 0.8125rem;

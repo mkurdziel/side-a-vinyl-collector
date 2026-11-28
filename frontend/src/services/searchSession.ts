@@ -29,6 +29,7 @@ export interface SearchSession {
   mode: LookupMode;
   shelf: Shelf;
   drafts: Partial<Record<LookupMode, LookupNavigation>>;
+  nameCatalogDestination?: Shelf;
   addOrigin?: AddSearchOrigin;
   anchor?: LookupAnchor;
 }
@@ -78,7 +79,9 @@ export function readSearchSession(): SearchSession | undefined {
       'catalog-number': parseNavigation(session.drafts?.['catalog-number'], 'catalog-number'),
     };
     const mode = drafts[session.mode] ? session.mode : 'name';
-    return { mode, shelf: session.shelf, drafts, addOrigin: parseOrigin(session.addOrigin), anchor: parseAnchor(session.anchor, drafts[mode]) };
+    return { mode, shelf: session.shelf, drafts,
+      ...(isShelf(session.nameCatalogDestination) ? { nameCatalogDestination: session.nameCatalogDestination } : {}),
+      addOrigin: parseOrigin(session.addOrigin), anchor: parseAnchor(session.anchor, drafts[mode]) };
   } catch {
     // The lookup can continue in memory if tab storage is unavailable or damaged.
   }
