@@ -1,7 +1,9 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import api, { ApiError, type PressingDetails, type SavedTitleMatch } from '../services/api';
-import { discogsReleaseSource, listingEvidence, savedCatalogSource, savedCopyContext, savedCopyLabel, type CatalogSource } from '../albumDisplay';
+import { ApiError, type DiscogsAlbum, type PressingDetails, type SavedTitleMatch } from '../services/api';
+import { createPressingDetailsLoader } from '../services/pressingEvidence';
+import { discogsReleaseSource, savedCatalogSource, savedCopyContext, savedCopyLabel, type CatalogSource } from '../albumDisplay';
 import { ModalDialog } from './ModalDialog';
+import { PressingCandidates, type PressingCandidate } from './PressingCandidates';
 
 export type SavedAlbumOutcome = 'opened' | 'removed' | 'unavailable';
 export type OpenSavedAlbum = (id: number, opener: HTMLButtonElement, inlineError?: boolean) => Promise<SavedAlbumOutcome>;
@@ -14,12 +16,14 @@ export interface LookupPressing {
   releaseId?: number;
   source?: CatalogSource;
   pressing?: PressingDetails;
+  catalogNumberMatch?: DiscogsAlbum['catalogNumberMatch'];
 }
 
 interface PressingComparisonProps {
   title: string;
   lookup?: LookupPressing;
   lookupChoices?: LookupPressing[];
+  searchedNumber?: string;
   matches: SavedTitleMatch[];
   onClose: () => void;
   onOpenSaved?: OpenSavedAlbum;
@@ -46,7 +50,7 @@ const pressingFields = [
 type PressingField = typeof pressingFields[number][0];
 type MatrixRunout = NonNullable<PressingDetails['matrixRunouts']>[number];
 type ReleaseDetails = { status: 'available'; pressing: PressingDetails } | { status: 'missing' | 'failed' };
-type ReleaseCandidate = LookupPressing & { releaseId: number };
+type ReleaseCandidate = LookupPressing & PressingCandidate;
 type SaveSelection = {
   copyId: number;
   releaseId: number;
@@ -62,11 +66,6 @@ type PressingReceipt = {
   undoToken?: string;
   error?: string;
 };
-const releaseDetailsMessages = {
-  available: 'Available',
-  missing: 'No details returned',
-  failed: 'Couldn’t load details',
-};
 
 function isReleaseCandidate(candidate?: LookupPressing): candidate is ReleaseCandidate {
   return !!discogsReleaseSource(candidate?.releaseId) && (!candidate?.source || candidate.source.kind === 'pressing');
@@ -81,10 +80,10 @@ function candidateValue(candidate: LookupPressing | undefined, key: PressingFiel
     ?? (key === 'year' && candidate?.year ? String(candidate.year) : undefined);
 }
 
-function candidateLabel(candidate: ReleaseCandidate, details?: PressingDetails, includeNumber = true) {
+function candidateLabel(candidate: ReleaseCandidate, details?: PressingDetails) {
   const value = (key: PressingField) => candidateValue(candidate, key, details);
   return [
-    includeNumber && (value('catalogNumber') ?? 'Catalog number unavailable'),
+    value('catalogNumber'),
     value('country'),
     value('year'),
     value('label'),
@@ -101,21 +100,9 @@ function catalogNumberKey(value?: string) {
   return value?.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '') ?? '';
 }
 
-function pressingGroups(candidates: ReleaseCandidate[], details: Partial<Record<number, ReleaseDetails>>) {
-  const groups = new Map<string, { number?: string; choices: ReleaseCandidate[] }>();
-  for (const candidate of candidates) {
-    const number = candidateValue(candidate, 'catalogNumber', availableDetails(details[candidate.releaseId]));
-    const key = catalogNumberKey(number);
-    const group = groups.get(key);
-    if (group) group.choices.push(candidate);
-    else groups.set(key, { number, choices: [candidate] });
-  }
-  return [...groups.values()];
-}
-
-async function fetchReleaseDetails(releaseId: number, signal: AbortSignal): Promise<ReleaseDetails> {
+async function fetchReleaseDetails(releaseId: number, signal: AbortSignal, loadDetails: ReturnType<typeof createPressingDetailsLoader>): Promise<ReleaseDetails> {
   try {
-    const { pressing } = await api.getPressingDetails(releaseId, signal);
+    const { pressing } = await loadDetails(releaseId, signal);
     return pressing && (pressing.matrixRunouts?.length || pressingFields.some(([key]) => fieldValue(pressing, key)))
       ? { status: 'available', pressing } : { status: 'missing' };
   } catch {
@@ -140,19 +127,24 @@ function RunoutMarkings({ markings }: { markings: MatrixRunout[] }) {
   )}</>;
 }
 
-function ReleaseDetailsStatus({ column, releaseId, details, hasRecord = true, onRetry }: {
+function ReleaseDetailsStatus({ column, releaseId, details, hasRecord = true, hasGaps, onRetry }: {
   column: string;
   releaseId?: number;
   details?: ReleaseDetails;
   hasRecord?: boolean;
+  hasGaps: boolean;
   onRetry: (releaseId: number) => void;
 }) {
   const notice = useRef<HTMLParagraphElement>(null);
-  let message = hasRecord ? 'No specific release' : 'No saved copy';
-  if (releaseId) message = details ? releaseDetailsMessages[details.status] : 'Checking Discogs…';
+  const quiet = !!releaseId && details?.status === 'available' && !hasGaps;
+  const message = !releaseId ? (hasRecord ? 'No pressing linked' : 'No saved copy')
+    : !details ? 'Checking Discogs…'
+      : details.status === 'failed' ? 'Discogs details couldn’t load.'
+        : details.status === 'missing' ? 'Discogs has no additional details.'
+          : hasGaps ? 'Dashes mark unlisted details.' : 'Discogs details loaded.';
   return (
     <>
-      <p ref={notice} role="status" tabIndex={-1} className="mt-0.5 text-xs font-normal text-gray-600">
+      <p ref={notice} role="status" tabIndex={-1} className={`mt-0.5 text-xs font-normal text-gray-600${quiet ? ' sr-only focus:not-sr-only' : ''}`}>
         <span className="sr-only">{column}: </span>{message}
       </p>
       {releaseId !== undefined && details?.status === 'failed' && (
@@ -169,16 +161,16 @@ function ReleaseDetailsStatus({ column, releaseId, details, hasRecord = true, on
 }
 
 export function PressingComparison({
-  title, lookup, lookupChoices, matches, onClose, onOpenSaved, onSavePressing, onUndoPressing, onSavedCopyRemoved,
+  title, lookup, lookupChoices, searchedNumber, matches, onClose, onOpenSaved, onSavePressing, onUndoPressing, onSavedCopyRemoved,
   backLabel, lookupStatus, onRetryLookup, onSearch,
   searchLabel = 'Edit album search', returnFocusTo, fallbackFocusTo,
 }: PressingComparisonProps) {
   const headingId = useId();
   const copySelectId = useId();
-  const candidateSelectId = useId();
   const savePromptId = useId();
   const saveErrorId = useId();
   const removalId = useId();
+  const savedEvidenceId = useId();
   const [selectedId, setSelectedId] = useState<number>();
   const [candidateId, setCandidateId] = useState<number>();
   const [openingId, setOpeningId] = useState<number>();
@@ -191,7 +183,7 @@ export function PressingComparison({
   const removalNotice = useRef<HTMLParagraphElement>(null);
   const returnAfterRemoval = useRef<HTMLButtonElement>(null);
   const copySelect = useRef<HTMLSelectElement>(null);
-  const candidateSelect = useRef<HTMLSelectElement>(null);
+  const candidateRegion = useRef<HTMLDivElement>(null);
   const saveTrigger = useRef<HTMLButtonElement>(null);
   const savePrompt = useRef<HTMLParagraphElement>(null);
   const confirmSave = useRef<HTMLButtonElement>(null);
@@ -202,6 +194,7 @@ export function PressingComparison({
   const restoreSaveFocus = useRef(false);
   const saving = useRef(false);
   const releaseRequests = useRef(new Map<number, AbortController>());
+  const [loadPressingDetails] = useState(createPressingDetailsLoader);
   const [details, setDetails] = useState<Partial<Record<number, ReleaseDetails>>>({});
   const removed = removedCopies.at(-1);
   const availableCopies = matches.filter(copy => !removedCopies.some(removedCopy => removedCopy.id === copy.id)).map(copy => {
@@ -212,10 +205,9 @@ export function PressingComparison({
   });
   const candidates = [lookup, ...(lookupChoices ?? [])].filter(isReleaseCandidate)
     .filter((candidate, index, choices) => choices.findIndex(choice => choice.releaseId === candidate.releaseId) === index);
-  const chosenCandidate = candidates.find(choice => choice.releaseId === candidateId);
-  const candidate = chosenCandidate ?? candidates[0];
-  const choosingCandidate = candidates.length > 1 && !chosenCandidate;
-  const activeLookup = candidate ?? lookup;
+  const candidate = candidates.length === 1 ? candidates[0] : candidates.find(choice => choice.releaseId === candidateId);
+  const activeLookup = candidate ?? (candidates.length === 0 ? lookup : undefined);
+  const catalogArtist = candidate?.artist ?? lookup?.artist ?? candidates[0]?.artist;
   const selected = availableCopies.find(copy => copy.id === selectedId) ?? availableCopies[0];
   const savedSource = selected ? savedCatalogSource(selected) : undefined;
   const lookupRelease = candidate?.releaseId;
@@ -269,13 +261,13 @@ export function PressingComparison({
       if (!id || details[id] || releaseRequests.current.has(id)) continue;
       const request = new AbortController();
       releaseRequests.current.set(id, request);
-      void fetchReleaseDetails(id, request.signal).then(result => {
+      void fetchReleaseDetails(id, request.signal, loadPressingDetails).then(result => {
         if (request.signal.aborted) return;
         releaseRequests.current.delete(id);
         setDetails(current => ({ ...current, [id]: result }));
       });
     }
-  }, [details, lookupRelease, savedRelease]);
+  }, [details, loadPressingDetails, lookupRelease, savedRelease]);
 
   const retryDetails = (releaseId: number) => {
     setDetails(current => ({ ...current, [releaseId]: undefined }));
@@ -292,6 +284,15 @@ export function PressingComparison({
   };
 
   const close = () => { if (!saving.current) onClose(); };
+  const cancelSave = () => {
+    if (saving.current) return;
+    restoreSaveFocus.current = true;
+    setSaveSelection(undefined);
+  };
+  const escape = () => {
+    if (saveStatus) cancelSave();
+    else close();
+  };
 
   function dropCopy(copy: SavedTitleMatch) {
     setRemovedCopies(current => [...current, copy]);
@@ -306,9 +307,13 @@ export function PressingComparison({
   const save = async () => {
     if (!selected || !lookupRelease || !onSavePressing || !saveSelection || !saveStatus || busy || alreadySaved || saving.current || lookupPending) return;
     if (saveSelection.changeSelection) {
-      if (!candidateSelect.current) restoreSaveFocus.current = true;
-      setSaveSelection(undefined);
-      candidateSelect.current?.focus();
+      const choices = candidateRegion.current;
+      const choice = choices?.querySelector<HTMLInputElement>('input[type="radio"]:checked:not(:disabled)')
+        ?? choices?.querySelector<HTMLInputElement>('input[type="radio"]:not(:disabled)');
+      if (choice) {
+        setSaveSelection(undefined);
+        choice.focus();
+      } else cancelSave();
       return;
     }
     const previousRelease = matches.find(copy => copy.id === selected.id)?.discogs_id;
@@ -362,16 +367,9 @@ export function PressingComparison({
   const savedDetails = savedRelease ? details[savedRelease] : undefined;
   const lookupPressing = availableDetails(lookupDetails);
   const savedPressing = availableDetails(savedDetails);
-  const groups = pressingGroups(candidates, details);
-  const activeGroup = groups.find(group => group.choices.some(choice => choice.releaseId === lookupRelease));
-  const sharedNumber = activeGroup && activeGroup.number && activeGroup.choices.length > 1 ? activeGroup : undefined;
-  const varyingFields = pressingFields.filter(([key]) => {
-    const values = new Set(sharedNumber?.choices.map(choice => candidateValue(choice, key, availableDetails(details[choice.releaseId]))?.toLowerCase()).filter(Boolean));
-    return key !== 'catalogNumber' && values.size > 1;
-  });
-  const lookupRecord = [title, activeLookup?.artist].filter(Boolean).join(' by ');
+  const lookupRecord = [title, catalogArtist].filter(Boolean).join(' by ');
   const selectedShelf = selected?.status === 'collection' ? 'Collection' : 'Wishlist';
-  const savedIdentityDiffers = selected && (selected.title !== title || selected.artist_name !== activeLookup?.artist);
+  const savedIdentityDiffers = selected && (selected.title !== title || selected.artist_name !== (catalogArtist ?? selected.artist_name));
   const action = openingId === selected?.id ? 'Opening saved copy…'
     : failedId === selected?.id ? 'Retry opening saved copy' : 'Open saved album';
   const sourceLink = (context: string, record: string, source?: CatalogSource) => source?.url && (
@@ -385,7 +383,7 @@ export function PressingComparison({
     const differs = lookupValue && savedValue && (key === 'catalogNumber'
       ? catalogNumberKey(lookupValue) !== catalogNumberKey(savedValue)
       : lookupValue.toLowerCase() !== savedValue.toLowerCase());
-    return { label, lookupValue, savedValue, priority: differs ? 0 : varyingFields.some(([field]) => field === key) ? 1 : 2 };
+    return { label, lookupValue, savedValue, priority: differs ? 0 : 1 };
   });
   const lookupRunouts = lookupPressing?.matrixRunouts ?? activeLookup?.pressing?.matrixRunouts ?? [];
   const savedRunouts = savedPressing?.matrixRunouts ?? (alreadySaved ? lookupRunouts : []);
@@ -395,33 +393,22 @@ export function PressingComparison({
     label: 'Matrix / Runout',
     lookupValue: lookupRunouts.length ? <RunoutMarkings markings={lookupRunouts} /> : undefined,
     savedValue: savedRunouts.length ? <RunoutMarkings markings={savedRunouts} /> : undefined,
-    priority: runoutsDiffer ? 0 : sharedNumber ? 1 : 2,
+    priority: runoutsDiffer ? 0 : 1,
   }] : [];
-  const evidence = [
-    ...[...fieldRows, ...runoutRow].sort((a, b) => a.priority - b.priority),
-    { label: 'Listing', lookupValue: listingEvidence(lookupSource), savedValue: selected ? listingEvidence(savedSource) : undefined, priority: 2 },
-    { label: 'Discogs release ID', lookupValue: lookupRelease?.toString(), savedValue: savedRelease?.toString(), priority: 2 },
-  ];
-  const variantLabels = new Intl.ListFormat('en', { type: 'conjunction' }).format(varyingFields.map(([, label]) => label.toLowerCase()));
-  const showLookup = !lookupStatus || candidates.length > 0;
-  const groupedChoices = groups.filter(group => group.choices.length > 1);
-  const otherChoices = groups.filter(group => group.choices.length === 1).flatMap(group => group.choices);
-  const options = (choices: ReleaseCandidate[], includeNumber: boolean) => choices.map(choice => (
-    <option key={choice.releaseId} value={choice.releaseId}>
-      {candidateLabel(choice, availableDetails(details[choice.releaseId]), includeNumber)}
-    </option>
-  ));
+  const evidence = [...fieldRows, ...runoutRow].sort((a, b) => a.priority - b.priority);
+  const lookupHasGaps = evidence.some(row => !row.lookupValue);
+  const savedHasGaps = evidence.some(row => !row.savedValue);
   const recordHelp = <details className="mt-1 max-w-prose text-sm text-gray-600">
     <summary className="min-h-11 cursor-pointer content-center font-medium">Where to check your record</summary>
     <p className="pb-2">Look for the catalog number on the sleeve or center label. The runout is the smooth band between the last track and the label. Match the etched or stamped letters and numbers to Matrix / Runout on Discogs when shown.</p>
   </details>;
 
   return (
-    <ModalDialog labelledBy={headingId} onClose={close} returnFocusTo={returnFocusTo} fallbackFocusTo={fallbackFocusTo}>
+    <ModalDialog labelledBy={headingId} onClose={close} onEscape={escape} returnFocusTo={returnFocusTo} fallbackFocusTo={fallbackFocusTo}>
       <div className="rh-dialog-panel max-w-3xl">
         <div className="rh-dialog-header flex items-center justify-between gap-2 border-b border-gray-200 px-4 py-3 sm:px-6">
-          <h2 id={headingId} ref={dialogHeading} tabIndex={-1} className="text-xl font-semibold">Compare pressings</h2>
-          <button type="button" className="rh-dialog-close" onClick={close} aria-label="Close pressing comparison"
+          <h2 id={headingId} ref={dialogHeading} tabIndex={-1} className="text-xl font-semibold">Review pressings</h2>
+          <button type="button" className="rh-dialog-close" onClick={close} aria-label="Close pressing review"
             aria-disabled={saveSelection?.status === 'saving' || undoing}>
             <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m6 6 12 12M18 6 6 18" />
@@ -431,7 +418,7 @@ export function PressingComparison({
         <div className="grid gap-4 p-4 sm:gap-5 sm:p-6 [overflow-wrap:anywhere]">
           <div>
             <p className="font-semibold">{title}</p>
-            {activeLookup?.artist && <p className="text-sm text-gray-600">{activeLookup.artist}</p>}
+            {(catalogArtist ?? selected?.artist_name) && <p className="text-sm text-gray-600">{catalogArtist ?? selected?.artist_name}</p>}
             {selected && (
               <div className="rh-comparison-outcome mt-2">
                 <div className="flex flex-wrap items-center justify-between gap-x-2">
@@ -461,74 +448,76 @@ export function PressingComparison({
                 aria-describedby={removalId} onClick={close}>{backLabel ?? 'Back to results'}</button>}
             </div>
           )}
-          {lookupStatus && <div className={lookupStatus === 'ready' && showLookup ? 'sr-only' : 'text-sm text-gray-600'}>
+          {lookupStatus && <div className={lookupStatus === 'ready' && candidates.length > 0 ? 'sr-only' : 'text-sm text-gray-600'}>
             <p role="status">{lookupPending ? 'Finding matching pressings on Discogs…' : lookupStatus === 'error'
-              ? 'Couldn’t find catalog pressings right now.' : showLookup ? 'Catalog pressings are ready.' : 'No matching Discogs pressings found.'}</p>
+              ? 'Couldn’t find catalog pressings right now.' : candidates.length > 0 ? 'Catalog pressings are ready.' : 'No matching Discogs pressings found.'}</p>
             {lookupStatus === 'error' && onRetryLookup && <button type="button" className="rh-lookup-link" onClick={() => {
               dialogHeading.current?.focus({ preventScroll: true });
               onRetryLookup();
             }}>Retry catalog search</button>}
           </div>}
-          {sharedNumber && <div className="rh-comparison-variants">
-            <p className="font-semibold">{sharedNumber.number} is shared by {sharedNumber.choices.length} pressings shown here</p>
-            <p className="mt-1 text-gray-600">{variantLabels
-              ? `The listings show differences in ${variantLabels}. Check those details and the runout on your record.`
-              : 'The listed details are inconclusive. Check the runout on your record before choosing.'}</p>
-            {recordHelp}
-          </div>}
-          {(candidates.length > 1 || (selected && availableCopies.length > 1)) && (
+          {selected && availableCopies.length > 1 && (
             <div className="rh-comparison-toolbar">
-              {candidate && candidates.length > 1 && <div className="rh-comparison-select">
-                <label htmlFor={candidateSelectId} className="text-sm font-semibold">Catalog pressing to compare</label>
-                <select ref={candidateSelect} id={candidateSelectId} value={chosenCandidate?.releaseId ?? ''} disabled={busy || lookupPending}
-                  onChange={event => { setCandidateId(Number(event.target.value)); setSaveSelection(undefined); }}>
-                  <option value="" disabled>Choose a catalog pressing</option>
-                  {groupedChoices.map(group => <optgroup key={catalogNumberKey(group.number)} label={group.number ? `Catalog number ${group.number}` : 'Catalog number unavailable'}>
-                    {options(group.choices, false)}
-                  </optgroup>)}
-                  {groupedChoices.length > 0 && otherChoices.length > 0
-                    ? <optgroup label="Other catalog numbers">{options(otherChoices, true)}</optgroup> : options(otherChoices, true)}
-                </select>
-              </div>}
-              {selected && availableCopies.length > 1 && <div className="rh-comparison-select">
+              <div className="rh-comparison-select">
                 <label htmlFor={copySelectId} className="text-sm font-semibold">Saved copy to compare</label>
                 <select ref={copySelect} id={copySelectId} value={selected.id} disabled={busy}
                   onChange={event => { setSelectedId(Number(event.target.value)); setFailedId(undefined); setSaveSelection(undefined); }}>
                   {availableCopies.map(copy => <option key={copy.id} value={copy.id}>{savedCopyContext(copy)}</option>)}
                 </select>
-              </div>}
+              </div>
             </div>
           )}
-          {showLookup && <div>
-            {choosingCandidate && candidate && <p className="mb-2 text-sm text-gray-600">Previewing Discogs release {candidate.releaseId}.</p>}
+          {!candidate && savedRelease && <section aria-labelledby={savedEvidenceId} className="grid gap-2 border-t border-gray-200 pt-3">
+            <h3 id={savedEvidenceId} className="text-sm font-semibold">Saved pressing evidence</h3>
+            <ReleaseDetailsStatus column="Saved copy" releaseId={savedRelease} details={savedDetails} hasGaps={false} onRetry={retryDetails} />
+            {savedPressing && <dl className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
+              {fieldRows.map(({ label, savedValue }) => savedValue && <div key={label}>
+                <dt className="text-xs text-gray-600">{label}</dt><dd className="font-medium">{savedValue}</dd>
+              </div>)}
+              {savedRunouts.length > 0 && <div className="col-span-full">
+                <dt className="mb-1 text-xs text-gray-600">Matrix / Runout</dt>
+                <dd><RunoutMarkings markings={savedRunouts} /></dd>
+              </div>}
+            </dl>}
+          </section>}
+          {candidates.length > 1 && <div ref={candidateRegion}>
+            <PressingCandidates choices={candidates} selectedId={candidate?.releaseId}
+              onSelect={id => { setCandidateId(id); setSaveSelection(undefined); }}
+              searchedNumber={searchedNumber} savedReleaseId={savedRelease} disabled={busy || lookupPending}
+              loadDetails={loadPressingDetails} />
+          </div>}
+          {candidate && <div>
             <table className="rh-pressing-table">
               <caption className="sr-only">Catalog evidence for {lookupRecord}</caption>
               <thead>
                 <tr>
                   <th scope="col">Evidence</th>
                   <th scope="col" aria-label="Catalog match">Catalog match
-                    <ReleaseDetailsStatus column="Catalog match" releaseId={lookupRelease} details={lookupDetails} onRetry={retryDetails} />
+                    <ReleaseDetailsStatus column="Catalog match" releaseId={lookupRelease} details={lookupDetails} hasGaps={lookupHasGaps} onRetry={retryDetails} />
                   </th>
                   <th scope="col" aria-label="Saved copy">Saved copy
                     <ReleaseDetailsStatus column="Saved copy" releaseId={savedRelease} details={savedDetails}
-                      hasRecord={!!selected} onRetry={retryDetails} />
+                      hasRecord={!!selected} hasGaps={savedHasGaps} onRetry={retryDetails} />
                   </th>
                 </tr>
               </thead>
               <tbody>
                 {evidence.map(({ label, lookupValue, savedValue, priority }) => (
-                  <tr key={label} className={priority < 2 ? 'rh-evidence-priority' : undefined}>
+                  <tr key={label} className={priority === 0 ? 'rh-evidence-priority' : undefined}>
                     <th scope="row">{label}</th>
                     <td>{lookupValue || '—'}</td>
                     <td>{savedValue || '—'}</td>
                   </tr>
                 ))}
+                <tr>
+                  <th scope="row">Discogs release ID</th><td>{lookupRelease}</td><td>{savedRelease ?? '—'}</td>
+                </tr>
               </tbody>
             </table>
-            {!sharedNumber && recordHelp}
-            <p className="text-sm text-gray-600">Side A saves one entry per artist and title.</p>
+            {candidates.length === 1 && recordHelp}
           </div>}
-          {onSavePressing && selected && candidate && !choosingCandidate && !lookupPending && (!pressingUpdated || !alreadySaved) && (
+          {selected && !lookupPending && <p className="text-sm text-gray-600">Side A saves one entry per artist and title.</p>}
+          {onSavePressing && selected && candidate && !lookupPending && (!pressingUpdated || !alreadySaved) && (
             <div>
               {savedReleaseChanged && <p ref={changedNotice} tabIndex={-1} role="status" className="mb-2 text-sm text-gray-600">
                 {alreadySaved ? 'The saved copy was updated and now matches this pressing.' : 'The saved pressing changed. Check the updated evidence before confirming again.'}
@@ -542,12 +531,7 @@ export function PressingComparison({
                   {savedRelease && <p className="text-sm text-gray-600">This will replace Discogs release {savedRelease} on this saved record.</p>}
                   {saveStatus === 'failed' && <p id={saveErrorId} role="alert" className="text-sm text-red-600">{saveSelection?.message}</p>}
                   <div className="flex flex-wrap items-center gap-2">
-                    <button type="button" className="rh-lookup-link" aria-disabled={busy}
-                      onClick={() => {
-                        if (saving.current) return;
-                        restoreSaveFocus.current = true;
-                        setSaveSelection(undefined);
-                      }}>Cancel</button>
+                    <button type="button" className="rh-lookup-link" aria-disabled={busy} onClick={cancelSave}>Cancel</button>
                     <button ref={confirmSave} type="button" className="rh-primary-action px-3 text-sm font-semibold"
                       aria-disabled={busy} aria-busy={saveStatus === 'saving'} aria-describedby={saveStatus === 'failed' ? saveErrorId : undefined}
                       onClick={() => void save()}>
