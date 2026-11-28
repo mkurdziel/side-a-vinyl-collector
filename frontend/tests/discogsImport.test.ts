@@ -229,7 +229,7 @@ describe('Discogs import', () => {
     const coverage = renderer.root.findByProps({ id: 'discogs-page-coverage' });
     expect(coverage.children.join('')).toBe('1 of 3 Discogs pages loaded');
     const actions = coverage.parent?.parent?.findAllByType('button');
-    expect(actions?.some(node => node.children.join('') === 'Load next Discogs page')).toBe(true);
+    expect(actions?.some(node => node.props['aria-label'] === 'Load next Discogs page')).toBe(true);
     expect(actions?.some(node => node.children.join('').startsWith('Import'))).toBe(false);
     expect(findButton('Review selection').props['aria-describedby']).toBe('discogs-selection-count discogs-page-coverage discogs-partial-import');
     expect(content()).toContain('Later pages may contain alternate pressings.');
@@ -305,7 +305,7 @@ describe('Discogs import', () => {
     });
     await act(async () => findButton('Load next Discogs page').props.onClick());
     await act(async () => select('Roseland NYC Live'));
-    expect(content()).toContain('2 titles selected for Wishlist');
+    expect(renderer.root.findByProps({ id: 'discogs-selection-count' }).children.filter(child => typeof child === 'string').join('')).toBe('2 titles selected');
 
     await act(async () => renderer.unmount());
     await act(async () => { renderer = create(createElement(DiscogsImporter, { ...importerProps, open: false })); });
@@ -490,9 +490,89 @@ describe('Discogs import', () => {
     expect(releaseChoice(5).props.checked).toBe(false);
     expect(content()).toContain('1 title needs your attention');
     expect(content()).toContain('4 Discogs listings across 2 titles');
-    expect(content()).toContain('2 titles require an individual choice. Select all skips them.');
+    expect(content()).toContain('2 titles excluded from bulk selection.');
     expect(renderer.root.findAllByType('button').some(node => node.children.join('').startsWith('Select all eligible titles'))).toBe(false);
     expect(renderer.root.findByProps({ 'aria-label': 'Pressings of Dummy by Portishead' }).findAllByType('article')).toHaveLength(2);
+    expect(addAlbum).not.toHaveBeenCalled();
+  });
+
+  it('compares any two listings in a larger group without changing a pressing choice', async () => {
+    const original = { ...albums[0], pressing: { catalogNumber: 'ORIGINAL', country: 'GB' } };
+    const variant = { ...albums[0], id: 4, discogsId: 4, pressing: { catalogNumber: 'VARIANT A', country: 'US' } };
+    const other = { ...albums[0], id: 5, discogsId: 5, pressing: { catalogNumber: 'VARIANT B', country: 'CA' } };
+    importDiscogsCollection.mockResolvedValueOnce({ albums: [original, variant, other], page: 1, totalPages: 1 });
+    await loadCollection();
+    const pair = renderer.root.findByProps({ 'aria-label': 'Listings to compare' });
+    const [first, second] = pair.findAllByType('select');
+    expect(first.props.value).toBe(1);
+    expect(second.props.value).toBe(4);
+    await act(async () => second.props.onChange({ target: { value: '5' } }));
+    await act(async () => first.props.onChange({ target: { value: '4' } }));
+    expect(first.props.value).toBe(4);
+    expect(second.props.value).toBe(5);
+    expect(first.findAllByType('option').map(option => option.props.value)).toEqual([1, 4]);
+    expect(second.findAllByType('option').map(option => option.props.value)).toEqual([1, 5]);
+    expect(renderer.root.findByType('table').findAllByType('td').slice(0, 2).map(cell => cell.children.join(''))).toEqual(['VARIANT A', 'VARIANT B']);
+    expect([1, 4, 5].map(id => releaseChoice(id).props.checked)).toEqual([false, false, false]);
+    expect(renderer.root.findByProps({ href: '#discogs-import-release-5' }).children.join('')).toBe('Go to pressing choices');
+
+    await act(async () => releaseChoice(1).props.onChange({ currentTarget: { checked: true } }));
+    await act(async () => second.props.onChange({ target: { value: '1' } }));
+    expect([1, 4, 5].map(id => releaseChoice(id).props.checked)).toEqual([true, false, false]);
+    expect(addAlbum).not.toHaveBeenCalled();
+  });
+
+  it('keeps artist/title and pressing-choice filters through sticky-rail review and Back', async () => {
+    const extra = { ...albums[0], id: 4, discogsId: 4 };
+    importDiscogsCollection.mockResolvedValueOnce({ albums: [albums[0], albums[1], extra], page: 1, totalPages: 2, nextPage: 2 });
+    await loadCollection();
+    await act(async () => releaseChoice(2).props.onChange({ currentTarget: { checked: true } }));
+    const filter = renderer.root.findByProps({ id: 'discogs-import-filter' });
+    await act(async () => filter.props.onChange({ currentTarget: { value: 'portishead dummy' } }));
+    const rail = renderer.root.findByProps({ 'aria-label': 'Discogs import controls' });
+    const pressingButton = rail.findAllByType('button').find(button => button.props['aria-pressed'] !== undefined);
+    await act(async () => pressingButton?.props.onClick());
+    expect(pressingButton?.props['aria-pressed']).toBe(true);
+    expect(rail.findByProps({ id: 'discogs-page-coverage' }).children.join('')).toBe('1 of 2 Discogs pages loaded');
+    expect(rail.findByProps({ id: 'discogs-selection-count' }).children.filter(child => typeof child === 'string').join('')).toBe('1 title selected');
+    expect(rail.findAllByType('button').map(button => button.props['aria-label'])).toContain('Load next Discogs page');
+    expect(renderer.root.findAllByProps({ id: 'discogs-import-release-2' })).toHaveLength(0);
+    await openImportReview();
+    expect(renderer.root.findByProps({ 'aria-label': 'Titles in this import' }).findByType('h4').children.join('')).toBe('Third');
+    await act(async () => findButton('Back to selections').props.onClick());
+
+    expect(filter.props.value).toBe('portishead dummy');
+    expect(renderer.root.findByProps({ 'aria-label': 'Discogs import controls' }).findAllByType('button')
+      .find(button => button.props['aria-pressed'] !== undefined)?.props['aria-pressed']).toBe(true);
+    await act(async () => findButton('Clear filters').props.onClick());
+    expect(releaseChoice(2).props.checked).toBe(true);
+    expect(addAlbum).not.toHaveBeenCalled();
+  });
+
+  it('restores exact choices and their shelf with Undo, then invalidates Undo after pages are refreshed', async () => {
+    const variant = { ...albums[0], id: 4, discogsId: 4 };
+    importDiscogsCollection.mockResolvedValueOnce({ albums: [albums[0], albums[1], variant], page: 1, totalPages: 1 })
+      .mockResolvedValueOnce({ albums: albums.slice(0, 2), page: 1, totalPages: 1 });
+    await loadCollection();
+    await act(async () => {
+      renderer.root.findByType('select').props.onChange({ target: { value: 'wishlist' } });
+      releaseChoice(4).props.onChange({ currentTarget: { checked: true } });
+      releaseChoice(2).props.onChange({ currentTarget: { checked: true } });
+    });
+    const clear = findButton('Clear selection');
+    await act(async () => clear.props.onClick());
+    expect(clear.children.join('')).toBe('Undo clear selection');
+    expect(releaseChoice(4).props.checked).toBe(false);
+    await act(async () => renderer.root.findByType('select').props.onChange({ target: { value: 'collection' } }));
+    await act(async () => findButton('Undo clear selection').props.onClick());
+    expect(renderer.root.findByType('select').props.value).toBe('wishlist');
+    expect([1, 2, 4].map(id => releaseChoice(id).props.checked)).toEqual([false, true, true]);
+    expect(clear.children.join('')).toBe('Clear selection');
+
+    await act(async () => clear.props.onClick());
+    await act(async () => findButton('Refresh reviewed pages').props.onClick());
+    expect(renderer.root.findAllByType('button').some(button => button.children.join('') === 'Undo clear selection')).toBe(false);
+    expect(renderer.root.findAllByProps({ id: 'discogs-import-release-4' })).toHaveLength(0);
     expect(addAlbum).not.toHaveBeenCalled();
   });
 

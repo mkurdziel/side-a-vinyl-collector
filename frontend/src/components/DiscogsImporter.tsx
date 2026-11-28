@@ -6,8 +6,9 @@ import {
   type ImportReviewNotice,
 } from '../services/discogsImportSession';
 import { ModalDialog } from './ModalDialog';
-import { PressingPreview } from './PressingCandidates';
+import { PressingPairSelects, PressingPreview } from './PressingCandidates';
 import { SaveShelfSelect } from './SaveDestinationActions';
+import './DiscogsImporter.css';
 
 type Shelf = 'collection' | 'wishlist';
 type ImportProgress = { albumId: number; destination: Shelf; current: number; total: number };
@@ -40,11 +41,11 @@ function bulkChoicesToReview(choices: ImportReviewChoice[], titleCounts: Map<str
   return choices.filter(choice => choice.source === 'bulk' && (titleCounts.get(titleKey(choice)) ?? 0) > 1);
 }
 
-function focusInReview(panel: HTMLElement | null, header: HTMLElement | null, target: HTMLElement | null, alignTo = target) {
+function focusInReview(panel: HTMLElement | null, header: HTMLElement | null, target: HTMLElement | null, alignTo = target, footer?: HTMLElement | null) {
   if (!target || !panel || !alignTo) return;
   const panelTop = panel.getBoundingClientRect().top + panel.clientTop;
   const visibleTop = panelTop + (header?.getBoundingClientRect().height ?? 0) + 12;
-  const visibleBottom = panelTop + panel.clientHeight - 12;
+  const visibleBottom = panelTop + panel.clientHeight - (footer?.getBoundingClientRect().height ?? 0) - 12;
   const targetBounds = target.getBoundingClientRect();
   const preferredOffset = alignTo.getBoundingClientRect().top - visibleTop;
   const minimumOffset = targetBounds.bottom - visibleBottom;
@@ -55,29 +56,21 @@ function focusInReview(panel: HTMLElement | null, header: HTMLElement | null, ta
 
 const pressingHeadingId = (album: ImportEntry['album']) => `discogs-import-pressings-${album.discogsId}`;
 
-function ImportPressingEvidence({ pressings, onChoose }: { pressings: ImportEntry['album'][]; onChoose: () => void }) {
-  const [comparisonId, setComparisonId] = useState(pressings[1].discogsId);
-  const first = pressings[0];
-  const options = pressings.slice(1);
-  const comparison = options.find(album => album.discogsId === comparisonId) ?? options[0];
-  const column = (album: ImportEntry['album']) => ({
-    choice: { releaseId: album.discogsId, artist: album.artist, year: album.year, pressing: album.pressing }, label: 'Discogs',
-  });
+function ImportPressingEvidence({ pressings, onChoose }: { pressings: ImportEntry['album'][]; onChoose: (releaseId: number) => void }) {
+  const choices = pressings.map(album => ({ releaseId: album.discogsId, artist: album.artist, year: album.year, pressing: album.pressing }));
+  const [firstId, setFirstId] = useState(choices[0].releaseId);
+  const [secondId, setSecondId] = useState(choices[1].releaseId);
+  const first = choices.find(choice => choice.releaseId === firstId) ?? choices[0];
+  const alternatives = choices.filter(choice => choice.releaseId !== first.releaseId);
+  const second = alternatives.find(choice => choice.releaseId === secondId) ?? alternatives[0];
   return <details className="rh-pressing-secondary min-w-0 text-sm">
     <summary>Compare listings</summary>
     <div className="space-y-2 pb-2">
-      {options.length > 1 && <label className="grid max-w-sm gap-1">
-        <span>Compare with Discogs release {first.discogsId}</span>
-        <select className="min-w-0 rounded-lg border border-gray-300 px-2 py-1" value={comparison.discogsId}
-          onChange={event => setComparisonId(Number(event.target.value))}>
-          {options.map(album => <option key={album.discogsId} value={album.discogsId}>
-            {[album.pressing?.catalogNumber, album.pressing?.format, album.year, `Discogs release ${album.discogsId}`].filter(Boolean).join(' · ')}
-          </option>)}
-        </select>
-      </label>}
-      <PressingPreview reference={column(first)} target={column(comparison)} showAll />
-      <a href={`#discogs-import-release-${first.discogsId}`} className="rh-lookup-link inline-grid text-left"
-        onClick={event => { event.preventDefault(); onChoose(); }}>Go to pressing choices</a>
+      <PressingPreview reference={{ choice: first, label: 'Discogs' }} target={{ choice: second, label: 'Discogs' }} showAll />
+      {choices.length > 2 && <PressingPairSelects choices={choices} firstId={first.releaseId} secondId={second.releaseId}
+        onChangeFirst={setFirstId} onChangeSecond={setSecondId} />}
+      <a href={`#discogs-import-release-${second.releaseId}`} className="rh-lookup-link inline-grid text-left"
+        onClick={event => { event.preventDefault(); onChoose(second.releaseId); }}>Go to pressing choices</a>
     </div>
   </details>;
 }
@@ -141,12 +134,18 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
   const [reviewStorageFailed, setReviewStorageFailed] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
   const header = useRef<HTMLDivElement>(null);
+  const continuationBar = useRef<HTMLElement>(null);
+  const signoffBar = useRef<HTMLDivElement>(null);
   const reviewHeading = useRef<HTMLParagraphElement>(null);
   const noticesHeading = useRef<HTMLParagraphElement>(null);
   const coverageHeading = useRef<HTMLParagraphElement>(null);
   const selectionHeading = useRef<HTMLHeadingElement>(null);
   const selectionFocus = useRef<string | null>(null);
   const [reviewingSelection, setReviewingSelection] = useState(false);
+  const [titleFilter, setTitleFilter] = useState('');
+  const [needsChoiceOnly, setNeedsChoiceOnly] = useState(false);
+  const focusPressingFilter = useRef(false);
+  const [clearedSelection, setClearedSelection] = useState<Pick<ImportReviewDraft, 'choices' | 'destination'> | null>(null);
   const reviewOrigin = useRef<{ id: string; releaseId?: number; scrollTop: number } | null>(null);
   const reviewFocus = useRef<'overview' | 'changes' | 'coverage' | null>(null);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
@@ -160,6 +159,27 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
   const pageRead = useRef<AbortController | null>(null);
   const stopRequested = useRef(false);
   const busy = fetchStatus === 'loading' || progress !== null || recovery === 'checking' || restoring || confirmingDiscard;
+  const hasCatalog = !!pagination;
+
+  useLayoutEffect(() => {
+    const scrollPanel = panel.current;
+    const footer = reviewingSelection ? signoffBar.current : continuationBar.current;
+    const stickyHeader = header.current;
+    if (!open || !scrollPanel?.style || !stickyHeader || typeof ResizeObserver === 'undefined') return;
+    const syncScrollPadding = () => {
+      scrollPanel.style.scrollPaddingBlockStart = `${stickyHeader.offsetHeight + 8}px`;
+      scrollPanel.style.scrollPaddingBlockEnd = `${(footer?.offsetHeight ?? 0) + 8}px`;
+    };
+    const observer = new ResizeObserver(syncScrollPadding);
+    observer.observe(stickyHeader);
+    if (footer) observer.observe(footer);
+    syncScrollPadding();
+    return () => {
+      observer.disconnect();
+      scrollPanel.style.scrollPaddingBlockStart = '';
+      scrollPanel.style.scrollPaddingBlockEnd = '';
+    };
+  }, [hasCatalog, open, reviewingSelection]);
 
   useLayoutEffect(() => {
     if (open && reviewFocus.current) {
@@ -167,7 +187,8 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
         : reviewFocus.current === 'coverage' ? coverageHeading.current ?? reviewHeading.current : reviewHeading.current;
       if (!target) return;
       reviewFocus.current = null;
-      focusInReview(panel.current, header.current, target);
+      if (target === coverageHeading.current) target.focus({ preventScroll: true });
+      else focusInReview(panel.current, header.current, target, target, continuationBar.current);
     }
   }, [draft, fetchStatus, open, pagination, reviewCheck, restoringPage, reviewingSelection]);
 
@@ -185,7 +206,8 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
         origin.focus({ preventScroll: true });
       } else {
         const fallback = releaseId ? panel.current.querySelector<HTMLElement>(`#discogs-import-release-${releaseId}`) : reviewHeading.current;
-        focusInReview(panel.current, header.current, fallback ?? reviewHeading.current);
+        const target = fallback ?? reviewHeading.current;
+        focusInReview(panel.current, header.current, target, target, continuationBar.current);
       }
     }
   }, [open, reviewingSelection]);
@@ -194,15 +216,15 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
     if (!reviewingSelection || !selectionFocus.current) return;
     const target = panel.current?.querySelector<HTMLElement>(`#${selectionFocus.current}`) ?? selectionHeading.current;
     selectionFocus.current = null;
-    focusInReview(panel.current, header.current, target);
+    focusInReview(panel.current, header.current, target, target, signoffBar.current);
   }, [draft, reviewingSelection]);
 
   useLayoutEffect(() => {
     if (!open) return;
-    if (confirmingDiscard) focusInReview(panel.current, header.current, keepReviewButton.current, discardConfirmation.current);
+    if (confirmingDiscard) focusInReview(panel.current, header.current, keepReviewButton.current, discardConfirmation.current, continuationBar.current);
     else if (focusDiscard.current) {
       focusDiscard.current = false;
-      focusInReview(panel.current, header.current, discardButton.current);
+      focusInReview(panel.current, header.current, discardButton.current, discardButton.current, continuationBar.current);
     }
   }, [confirmingDiscard, open]);
 
@@ -271,9 +293,9 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
       const nextPage = loaded < result.totalPages ? loaded + 1 : undefined;
       const currentDraft = draftForReview();
       const needsReview = new Set(bulkChoicesToReview(currentDraft.choices, countPressings(combinePages(pages))));
-      if (needsReview.size) reviewFocus.current = 'changes';
-      else if (!pagination) reviewFocus.current = 'overview';
+      if (!pagination) reviewFocus.current = 'overview';
       else if (page > 1 && !nextPage) reviewFocus.current = 'coverage';
+      setClearedSelection(null);
       if (reviewDraft.current || loaded > 1) {
         rememberDraft({
           ...currentDraft, lastPage: loaded, choices: currentDraft.choices.filter(choice => !needsReview.has(choice)),
@@ -344,6 +366,7 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
       });
 
       reviewFocus.current = notices.length ? 'changes' : 'overview';
+      setClearedSelection(null);
       if (reviewDraft.current || result.page > 1) rememberDraft({ ...savedDraft, choices, notices, lastPage: result.page });
       setLoadedPages(pages);
       setPagination({ page: result.page, totalPages: result.totalPages, nextPage: result.nextPage });
@@ -377,6 +400,7 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
       const queue = jobs.map((entry): ImportEntry => ({ ...entry, status: 'pending' }));
       const stored = remember([...journal.current.filter(entry => !ids.has(entry.album.discogsId) || !needsImportCheck(entry)), ...queue]);
       if (!verify) {
+        setClearedSelection(null);
         setPreviousDestination(destination);
         const current = reviewDraft.current;
         rememberDraft(current && (current.notices.length || pagination?.nextPage) ? {
@@ -438,7 +462,6 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
   const selected = remaining.filter(album => selectedIds.has(album.discogsId));
   const reviewTitles = new Set(reviewNotices.map(({ choice }) => titleKey(choice)));
   const allEligible = remaining.filter(album => titleCounts.get(titleKey(album)) === 1 && !reviewTitles.has(titleKey(album)));
-  const unselectedEligible = allEligible.filter(album => !selectedIds.has(album.discogsId));
   const eligibleTitleCount = new Set(remaining.map(titleKey)).size;
   const individualTitleCount = eligibleTitleCount - allEligible.length;
   const retryJobs = entries.filter(entry => entry.status === 'failed');
@@ -473,15 +496,38 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
   const savedNotices = reviewNotices.filter(notice => notice.cause === 'saved');
   const unresolvedCount = unresolvedNotices.length;
   const savedNoticeCount = savedNotices.length;
+  const unresolvedTitles = new Set(unresolvedNotices.map(({ choice }) => titleKey(choice)));
+  const chosenTitles = new Set(selected.map(titleKey));
+  const needingChoice = new Set(remaining.filter(album => {
+    const title = titleKey(album);
+    return !chosenTitles.has(title) && ((titleCounts.get(title) ?? 0) > 1 || unresolvedTitles.has(title));
+  }).map(titleKey));
+  const queryTerms = titleFilter.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const visibleTitleGroups = [...pressingsByTitle.entries()].filter(([title, [first]]) => (
+    (!needsChoiceOnly || needingChoice.has(title)) && queryTerms.every(term => `${first.artist} ${first.album}`.toLowerCase().includes(term))
+  ));
+  const visibleTitles = new Set(visibleTitleGroups.map(([title]) => title));
+  const unselectedEligible = allEligible.filter(album => visibleTitles.has(titleKey(album)) && !selectedIds.has(album.discogsId));
+  const firstPressingGroup = visibleTitleGroups.find(([title]) => needingChoice.has(title))?.[1][0];
+  const choiceFocusId = firstPressingGroup ? pressingHeadingId(firstPressingGroup) : 'discogs-import-filter';
   const draftSummary = draft && [`${counted(draft.choices.length, 'title')} selected for ${shelfNames[draft.destination]}`,
     unresolvedCount ? `${unresolvedCount} ${unresolvedCount === 1 ? 'needs' : 'need'} attention` : null,
     savedNoticeCount ? `${savedNoticeCount} already saved` : null].filter(Boolean).join(' · ');
   const canReviewSelection = selected.length > 0 && !busy && !resumeJobs.length && recovery !== 'error' && reviewCheck === 'ready';
 
+  useLayoutEffect(() => {
+    if (!open || !focusPressingFilter.current) return;
+    focusPressingFilter.current = false;
+    const target = panel.current?.querySelector<HTMLElement>(`#${choiceFocusId}`) ?? null;
+    focusInReview(panel.current, header.current, target, target, continuationBar.current);
+  }, [choiceFocusId, needsChoiceOnly, open]);
+
   const chooseAlbum = (album: Pick<DiscogsAlbum, 'discogsId' | 'artist' | 'album'>, checked: boolean) => {
     if (operationInProgress.current) return;
+    setClearedSelection(null);
     const current = draftForReview();
     const title = titleKey(album);
+    if (checked && needsChoiceOnly && needingChoice.has(title)) focusPressingFilter.current = true;
     const choices = current.choices.filter(choice => titleKey(choice) !== title);
     if (checked) choices.push(reviewChoiceFor(album, 'chosen'));
     const notices = checked ? current.notices.filter(notice => titleKey(notice.choice) !== title) : current.notices;
@@ -497,15 +543,27 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
 
   const chooseAll = () => {
     if (operationInProgress.current) return;
+    setClearedSelection(null);
     const current = draftForReview();
     rememberDraft({ ...current, choices: [...current.choices, ...unselectedEligible.map(album => reviewChoiceFor(album, 'bulk'))] });
   };
 
-  const clearSelection = () => {
+  const clearOrUndoSelection = () => {
     const current = reviewDraft.current;
     if (busy || operationInProgress.current || !current) return;
-    reviewFocus.current = 'overview';
-    rememberDraft({ ...current, choices: [] });
+    if (clearedSelection) {
+      if (reviewCheck !== 'ready') return;
+      rememberDraft({ ...current, ...clearedSelection });
+      setClearedSelection(null);
+    } else {
+      setClearedSelection({ choices: current.choices, destination: current.destination });
+      rememberDraft({ ...current, choices: [] });
+    }
+  };
+
+  const togglePressingFilter = () => {
+    if (!needsChoiceOnly) focusPressingFilter.current = true;
+    setNeedsChoiceOnly(!needsChoiceOnly);
   };
 
   const discardReview = () => {
@@ -516,6 +574,9 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
     setPreviousDestination(undefined);
     setReviewCheck('ready');
     setActivePressingReview(undefined);
+    setTitleFilter('');
+    setNeedsChoiceOnly(false);
+    setClearedSelection(null);
     setLoadedPages(new Map());
     setPagination(undefined);
     setFetchStatus('idle');
@@ -564,7 +625,7 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
 
   const jumpToReviewTarget = (id: string) => {
     const target = panel.current?.querySelector<HTMLElement>(`#${id}`) ?? null;
-    focusInReview(panel.current, header.current, target);
+    focusInReview(panel.current, header.current, target, target, continuationBar.current);
   };
 
   const openSelectionReview = (id: string, releaseId?: number) => {
@@ -671,7 +732,6 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
   }
 
   const fetchFailed = fetchStatus === 'error' || fetchStatus === 'connection-error';
-  const hasCatalog = !!pagination;
   const morePage = pagination?.nextPage;
   const coverageText = pagination?.totalPages ? `${Math.min(pagination.page, pagination.totalPages)} of ${pagination.totalPages} Discogs pages loaded`
     : 'Discogs collection is empty';
@@ -682,6 +742,8 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
     ? 'The server could not verify your Discogs account. Ask your server administrator to check the connection.'
     : fetchPage > 1 ? `Could not load Discogs page ${fetchPage}. Your existing selection is kept.`
       : 'Could not load your Discogs collection. Try loading it again.';
+  const pageActionLabel = fetchStatus === 'loading' ? `Loading Discogs page ${fetchPage}…` : retryPageLoad ? 'Retry Discogs page' : 'Load next Discogs page';
+  const compactPageActionLabel = fetchStatus === 'loading' ? 'Loading…' : retryPageLoad ? 'Retry' : 'Load next';
   const cancelPageButton = <button type="button" className={secondaryAction} onClick={cancelPageLoad}>Cancel page load</button>;
   const reviewStatus = reviewCheck === 'failed' ? hasCatalog
     ? 'Could not verify the selected records. Your choices are kept. Retry the review before importing.'
@@ -760,7 +822,7 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
               </li>;
             })}
           </ul>
-          <div className="sticky bottom-0 flex flex-wrap items-center gap-2 border-t border-gray-200 bg-[var(--rh-surface)] py-2">
+          <div ref={signoffBar} className="sticky bottom-0 flex flex-wrap items-center gap-2 border-t border-gray-200 bg-[var(--rh-surface)] py-2">
             <SaveShelfSelect value={destination} disabled={busy}
               onChange={shelf => { if (!operationInProgress.current) rememberDraft({ ...draftForReview(), destination: shelf }); }} />
             <button type="button" className={secondaryAction} onClick={backToSelections}>Back to selections</button>
@@ -815,6 +877,7 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
                   : morePage ? 'No new listings on the pages loaded so far.'
                     : entries.length ? 'No additional listings to import.' : 'No new listings to import.'}
               </p>
+              {morePage && <p id="discogs-partial-import" className="text-sm text-gray-600">Later pages may contain alternate pressings.</p>}
               <div className="flex flex-wrap items-center gap-x-3">
                 {reviewRefreshButton('rh-lookup-link text-left', 'Refresh reviewed pages')}
                 {draft && discardControl('rh-lookup-link')}
@@ -885,48 +948,29 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
                   </div>
                 </div>
               )}
-              {pagination && (
-                <div className="grid w-full min-w-0 gap-2 border-y border-gray-200 py-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-                  <div className="space-y-1">
-                    <p id="discogs-page-coverage" ref={coverageHeading} tabIndex={-1} className="text-sm font-semibold text-gray-900" role="status">
-                      {coverageText}
-                      {fetchStatus === 'loading' && <span className="sr-only">. Loading page {fetchPage}.</span>}
-                    </p>
-                    {morePage && <p id="discogs-partial-import" className="text-sm text-gray-600">Later pages may contain alternate pressings.</p>}
-                    {fetchFailed && <p className="text-sm text-red-600" role="alert">{pageFailure}</p>}
-                    {fetchStatus === 'canceled' && <p className="text-sm text-gray-600" role="status">Page load canceled. Your review is kept.</p>}
-                  </div>
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    {(morePage || pageNotLoaded || fetchStatus === 'loading') && (
-                      <button type="button" className={`${secondaryAction} aria-disabled:opacity-55`} aria-disabled={busy || reviewCheck !== 'ready'}
-                        aria-busy={fetchStatus === 'loading'} aria-describedby="discogs-page-coverage"
-                        onClick={() => { if (!busy && reviewCheck === 'ready') void fetchCollection(pageNotLoaded ? fetchPage : morePage ?? 1); }}>
-                        {fetchStatus === 'loading' ? `Loading Discogs page ${fetchPage}…` : retryPageLoad ? 'Retry Discogs page' : 'Load next Discogs page'}
-                      </button>
-                    )}
-                    {fetchStatus === 'loading' && cancelPageButton}
-                  </div>
-                </div>
-              )}
               {remaining.length > 0 && <div className="grid w-full min-w-0 gap-2 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
                 <div className="space-y-1">
-                  <p id="discogs-selection-count" className="text-sm font-semibold" role="status">{counted(selected.length, 'title')} selected for {shelfNames[destination]}</p>
+                  <label className="grid max-w-sm gap-1 text-sm font-semibold">
+                    Find loaded titles
+                    <input id="discogs-import-filter" className="min-h-11 min-w-0 rounded-lg border border-gray-300 px-2 font-normal"
+                      type="search" placeholder="Artist or title" value={titleFilter} onChange={event => setTitleFilter(event.currentTarget.value)} />
+                  </label>
                   {individualTitleCount > 0 && <p className="text-sm text-gray-600">
-                    {counted(individualTitleCount, 'title')} require{individualTitleCount === 1 ? 's' : ''} an individual choice. Select all skips {individualTitleCount === 1 ? 'it' : 'them'}.
+                    {counted(individualTitleCount, 'title')} excluded from bulk selection.
                   </p>}
                   <div className="flex flex-wrap items-center gap-1">
                     {unselectedEligible.length > 0 && <button type="button" className={secondaryAction} disabled={busy} onClick={chooseAll}>
                       Select all eligible titles ({unselectedEligible.length} to add)
                     </button>}
-                    {selected.length > 0 && <button type="button" className="rh-lookup-link text-left" disabled={busy} onClick={clearSelection}>Clear selection</button>}
+                    {(selected.length > 0 || clearedSelection) && <button type="button" className="rh-lookup-link text-left"
+                      disabled={busy || (!!clearedSelection && reviewCheck !== 'ready')} onClick={clearOrUndoSelection}>
+                      {clearedSelection ? 'Undo clear selection' : 'Clear selection'}
+                    </button>}
                   </div>
                 </div>
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <SaveShelfSelect value={progress?.destination ?? destination} disabled={busy || resumeJobs.length > 0}
                     onChange={shelf => { if (!operationInProgress.current) rememberDraft({ ...draftForReview(), destination: shelf }); }} />
-                  <button id="discogs-import-review" type="button" className={primaryAction} disabled={!canReviewSelection}
-                    aria-describedby={`discogs-selection-count discogs-page-coverage${morePage ? ' discogs-partial-import' : ''}${reviewStatus ? ' discogs-review-status' : ''}`}
-                    onClick={() => openSelectionReview('discogs-import-review')}>Review selection</button>
                 </div>
               </div>}
               {retryJobs.length > 0 && (
@@ -942,8 +986,12 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
             </div>
           )}
 
-          {visibleAlbums.size > 0 && <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-            {[...pressingsByTitle.entries()].map(([title, pressings]) => {
+          {(queryTerms.length > 0 || needsChoiceOnly) && <div className="flex flex-wrap items-center gap-x-2 text-sm text-gray-600">
+            <p role="status">{visibleTitleGroups.length ? `Showing ${counted(visibleTitleGroups.length, 'title')}` : 'No loaded titles match these filters.'}</p>
+            <button type="button" className="rh-lookup-link" onClick={() => { setTitleFilter(''); setNeedsChoiceOnly(false); jumpToReviewTarget('discogs-import-filter'); }}>Clear filters</button>
+          </div>}
+          {visibleTitleGroups.length > 0 && <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+            {visibleTitleGroups.map(([title, pressings]) => {
               const first = pressings[0];
               if (pressings.length === 1) return renderRecord(first);
               const headingId = pressingHeadingId(first);
@@ -963,7 +1011,7 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
                 </div>
                 {canChoose ? <fieldset className="min-w-0 space-y-2 border-0 p-0">
                   <legend className="sr-only">Choose a pressing for {first.album} by {first.artist}</legend>
-                  <ImportPressingEvidence pressings={pressings} onChoose={() => jumpToReviewTarget(`discogs-import-release-${first.discogsId}`)} />
+                  <ImportPressingEvidence pressings={pressings} onChoose={releaseId => jumpToReviewTarget(`discogs-import-release-${releaseId}`)} />
                   {choices}
                   {selectedPressing && <button type="button" className="rh-lookup-link text-left" disabled={busy}
                     aria-label={`Clear pressing choice for ${first.album} by ${first.artist}`}
@@ -977,6 +1025,39 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
             })}
           </div>}
         </div>
+        {hasCatalog && !reviewingSelection && <footer ref={continuationBar} aria-label="Discogs import controls"
+          className="rh-discogs-import-dock">
+          <div className="rh-discogs-import-dock-status flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs text-gray-600">
+            <p id="discogs-page-coverage" ref={coverageHeading} tabIndex={-1} className="font-semibold text-gray-900" role="status">{coverageText}</p>
+            <p id="discogs-selection-count" role="status">{counted(selected.length, 'title')} selected<span className="sr-only"> for {shelfNames[destination]}</span></p>
+            {fetchFailed && <p className="basis-full text-red-600" role="alert">{pageFailure}</p>}
+            {fetchStatus === 'canceled' && <p className="basis-full" role="status">Page load canceled. Your review is kept.</p>}
+          </div>
+          <div className="rh-discogs-import-dock-actions">
+            {(morePage || pageNotLoaded || fetchStatus === 'loading') && (
+              <button type="button" className={`${secondaryAction} aria-disabled:opacity-55`}
+                aria-label={pageActionLabel} aria-disabled={busy || reviewCheck !== 'ready'}
+                aria-busy={fetchStatus === 'loading'} aria-describedby="discogs-page-coverage"
+                onClick={() => { if (!busy && reviewCheck === 'ready') void fetchCollection(pageNotLoaded ? fetchPage : morePage ?? 1); }}>
+                <span className="rh-discogs-dock-wide">{pageActionLabel}</span>
+                <span className="rh-discogs-dock-short" aria-hidden="true">{compactPageActionLabel}</span>
+              </button>
+            )}
+            {fetchStatus === 'loading' ? cancelPageButton : <>
+              {(needingChoice.size > 0 || needsChoiceOnly) && <button type="button"
+                className="rh-lookup-link aria-pressed:bg-gray-100"
+                aria-label={`Pressings (${needingChoice.size}), filter titles that need a pressing choice`}
+                aria-pressed={needsChoiceOnly} onClick={togglePressingFilter}>Pressings ({needingChoice.size})</button>}
+              {remaining.length > 0 && <button id="discogs-import-review" type="button" className={primaryAction}
+                aria-label="Review selection" disabled={!canReviewSelection}
+                aria-describedby={`discogs-selection-count discogs-page-coverage${morePage ? ' discogs-partial-import' : ''}${reviewStatus ? ' discogs-review-status' : ''}`}
+                onClick={() => openSelectionReview('discogs-import-review')}>
+                <span className="rh-discogs-dock-wide">Review selection</span>
+                <span className="rh-discogs-dock-short" aria-hidden="true">Review</span>
+              </button>}
+            </>}
+          </div>
+        </footer>}
       </div>
     </ModalDialog>
   );

@@ -186,13 +186,11 @@ function AlbumMeta({ title, artist, year, shelf, resultId, artworkUnverified }: 
   );
 }
 
-function SortControl({ sort, onChange, placement }: { sort: SortBy; onChange: (sort: SortBy) => void; placement?: 'shelf' | 'lookup-options' }) {
-  const id = placement === 'lookup-options' ? 'phone-sort-select' : 'sort-select';
-  const placementClass = placement === 'shelf' ? 'rh-shelf-sort' : placement === 'lookup-options' ? 'rh-lookup-sort' : '';
+function SortControl({ sort, onChange, placement }: { sort: SortBy; onChange: (sort: SortBy) => void; placement?: 'shelf' }) {
   return (
-    <div className={`ml-auto flex items-center gap-2 ${placementClass}`}>
-      <label htmlFor={id} className="text-sm text-gray-600">Sort</label>
-      <select id={id} value={sort} onChange={event => onChange(event.target.value as SortBy)}
+    <div className={`ml-auto flex items-center gap-2${placement === 'shelf' ? ' rh-shelf-sort' : ''}`}>
+      <label htmlFor="sort-select" className="text-sm text-gray-600">Sort</label>
+      <select id="sort-select" value={sort} onChange={event => onChange(event.target.value as SortBy)}
         className="min-h-11 rounded-lg border border-gray-300 bg-white px-2.5">
         {Object.entries(sortLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select>
@@ -304,7 +302,9 @@ function App() {
   const [pressingReview, setPressingReview] = useState<{ album: DiscogsAlbum; destination: Shelf; searchedNumber?: string }>();
   const [albumReview, setAlbumReview] = useState<AlbumReview>();
   const [recentCatalogSaves, setRecentCatalogSaves] = useState<Set<number>>(() => new Set());
-  const [barcodeLookup, setBarcodeLookup] = useState<{ origin: 'add' | 'search'; destination: Shelf; initialBarcode?: string }>();
+  const [barcodeLookup, setBarcodeLookup] = useState<{
+    origin: 'add' | 'search'; destination: Shelf; initialBarcode?: string; unrecognizedSearchQuery: boolean;
+  }>();
   const showBarcodeScanner = !!barcodeLookup;
   const [showImageUploader, setShowImageUploader] = useState(false);
   const [showDiscogsImporter, setShowDiscogsImporter] = useState(false);
@@ -599,11 +599,15 @@ function App() {
   const openBarcodeLookup = (origin: 'add' | 'search') => {
     setLookupShelfEdits({});
     setLookupPressingEdits({});
-    const destination = origin === 'search' && searchesCatalog(latestScope.current) ? saveShelf : viewMode;
+    const fromSearch = origin === 'search';
+    const destination = fromSearch && searchesCatalog(latestScope.current) ? saveShelf : viewMode;
+    const query = fromSearch ? latestQuery.current.trim() : '';
+    const barcode = barcodeFromSearch(query);
     setBarcodeLookup({
       origin,
       destination,
-      initialBarcode: origin === 'search' ? barcodeFromSearch(latestQuery.current) ?? '' : undefined,
+      initialBarcode: fromSearch ? barcode ?? '' : undefined,
+      unrecognizedSearchQuery: !!query && !barcode,
     });
   };
 
@@ -1314,8 +1318,9 @@ function App() {
               </div>
             </div>
             <div className="rh-library-count text-sm" role="status" aria-atomic="true">
+              {!currentShelf && `Loading ${shelfLabel[viewMode]}…`}
               {currentShelf?.status === 'ready' && (
-                <span>{shelfAlbums.length} {shelfAlbums.length === 1 ? 'album' : 'albums'}<span className="sr-only sm:not-sr-only"> in {shelfLabel[viewMode]}</span></span>
+                <span>{shelfAlbums.length} {shelfAlbums.length === 1 ? 'album' : 'albums'}<span className="sr-only lg:not-sr-only"> in {shelfLabel[viewMode]}</span></span>
               )}
             </div>
             <SortControl placement="shelf" sort={sortBy} onChange={changeSort} />
@@ -1406,14 +1411,23 @@ function App() {
                 : `One character checks for an exact title or artist ${singleNameScope}.`}
             </p>}
             <div className="rh-search-options">
-              <button type="button" className="rh-lookup-options-toggle" aria-expanded={showLookupOptions} aria-controls="lookup-options"
-                aria-label={`Search options, ${lookupMethodLabel}, ${lookupSource}`}
-                onClick={() => setShowLookupOptions(open => !open)}>
-                <span className="rh-lookup-method">{lookupMethodLabel}</span><span id="lookup-source" className="rh-lookup-source">{lookupSource}</span>
-                <svg aria-hidden="true" className="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path strokeLinecap="round" strokeWidth="2" d="m6 9 6 6 6-6" />
-                </svg>
-              </button>
+              <div className="rh-lookup-quick-controls">
+                <button type="button" className="rh-lookup-options-toggle" aria-expanded={showLookupOptions} aria-controls="lookup-options"
+                  aria-label={`Search options, ${lookupMethodLabel}, ${lookupSource}`}
+                  onClick={() => setShowLookupOptions(open => !open)}>
+                  <span className="rh-lookup-method">{numberSearch ? 'Catalog number' : 'Name'}</span><span id="lookup-source" className="rh-lookup-source">{lookupSource}</span>
+                  <svg aria-hidden="true" className="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path strokeLinecap="round" strokeWidth="2" d="m6 9 6 6 6-6" />
+                  </svg>
+                </button>
+                {!numberSearch && searchScope !== 'catalog' && !shortName && (
+                  <button type="button" className="rh-include-catalogs" onClick={() => {
+                    setShowLookupOptions(false);
+                    changeScope('catalog');
+                    focusSearch();
+                  }}>Include catalogs</button>
+                )}
+              </div>
               <div id="lookup-options" className="rh-lookup-settings" data-expanded={showLookupOptions}>
                 {!numberSearch && <div className="rh-search-scope">
                   <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">Search in</label>
@@ -1424,7 +1438,7 @@ function App() {
                   </select>
                 </div>}
                 <div className="rh-search-modes" role="group" aria-label="Search by">
-                  <button type="button" aria-pressed={!numberSearch} onClick={() => changeLookupMethod('name')}>Album or artist</button>
+                  <button type="button" aria-pressed={!numberSearch} onClick={() => changeLookupMethod('name')}>Name</button>
                   <button type="button" aria-pressed={numberSearch} aria-describedby="catalog-number-clue" title="Number on the sleeve or label"
                     onClick={() => changeLookupMethod('catalog-number')}>Catalog number</button>
                   <button type="button" aria-haspopup="dialog" aria-describedby="barcode-clue" title="Digits below the barcode"
@@ -1443,7 +1457,6 @@ function App() {
                   </div>
                 </details>
                 {numberSearch && <p className="rh-number-scope text-xs text-gray-600" id="number-lookup-source">Discogs · Number on the sleeve or label</p>}
-                {!searchActive && <SortControl placement="lookup-options" sort={sortBy} onChange={changeSort} />}
               </div>
             </div>
           </form>
@@ -1475,7 +1488,6 @@ function App() {
 
         <div role="status" className="text-sm text-gray-600" aria-atomic="true">
           {numberSearch && queryLength === 1 && <p className="mb-4">Enter at least two characters for a catalog number.</p>}
-          {!searchActive && !currentShelf && <p className="py-8">Loading {shelfLabel[viewMode]}…</p>}
         </div>
 
         <div role="status" className="sr-only">{loadedPage?.message}</div>
@@ -1526,7 +1538,7 @@ function App() {
                 {!catalogActive && !shortName && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search online catalogs</button>}
                 {searchScope !== 'catalog' && <div className="flex flex-wrap items-center gap-x-2">
                   <button type="button" className="rh-lookup-link" aria-describedby="catalog-number-clue"
-                    onClick={() => changeLookupMethod('catalog-number')}>Search by catalog number</button>
+                    onClick={() => changeLookupMethod('catalog-number')}>Look up a catalog number</button>
                   <button type="button" className="rh-lookup-link" aria-haspopup="dialog" aria-describedby="barcode-clue"
                     onClick={() => openBarcodeLookup('search')}>Look up a barcode</button>
                 </div>}
@@ -1598,7 +1610,7 @@ function App() {
                   <button type="button" className="rh-lookup-link" onClick={() => searchInput.current?.focus()}>{numberSearch ? 'Edit catalog number' : 'Refine search'}</button>
                   <button type="button" className="rh-lookup-link" aria-describedby={numberSearch ? undefined : 'catalog-number-clue'}
                     onClick={() => numberSearch ? changeLookupMethod('name', 'catalog') : changeLookupMethod('catalog-number')}>
-                    {numberSearch ? 'Search by album or artist' : 'Search by catalog number'}
+                    {numberSearch ? 'Search by name' : 'Look up a catalog number'}
                   </button>
                   <button type="button" className="rh-lookup-link" aria-haspopup="dialog" aria-describedby="barcode-clue"
                     onClick={() => openBarcodeLookup('search')}>Look up a barcode</button>
@@ -1776,6 +1788,7 @@ function App() {
       {barcodeLookup && (
         <BarcodeScanner
           initialBarcode={barcodeLookup.initialBarcode}
+          unrecognizedSearchQuery={barcodeLookup.unrecognizedSearchQuery}
           backLabel={barcodeLookup.origin === 'search' ? 'Back to search' : undefined}
           onClose={() => setBarcodeLookup(undefined)}
           onBack={() => {

@@ -21,6 +21,10 @@ const toggleComparison = () => act(async () => button('Compare listings').props.
 const status = () => renderer!.root.findAllByProps({ role: 'status' }).map(textOf);
 const radios = () => renderer!.root.findAllByProps({ type: 'radio' }).map(control => control.props.value);
 const radioLabels = () => renderer!.root.findAllByType('label').filter(node => node.findAllByProps({ type: 'radio' }).length > 0);
+const selectByLabel = (label: string) => {
+  const id = renderer!.root.findAllByType('label').find(control => textOf(control) === label)!.props.htmlFor;
+  return renderer!.root.findByProps({ id });
+};
 
 function CandidatePicker({ reviewKey, ...props }: Omit<ComponentProps<typeof PressingCandidates>, 'preparation'> & { reviewKey?: string }) {
   const preparation = usePressingPreparation(reviewKey, props.choices);
@@ -126,7 +130,7 @@ describe('pressing candidate evidence', () => {
     expect(evidence.scrollTop).toBe(497);
     expect(evidence.closest).not.toHaveBeenCalled();
     expect(renderer!.root.findAllByProps({ type: 'radio' }).every(radio => !radio.props.checked)).toBe(true);
-    await act(async () => renderer!.root.findByType('select').props.onChange({ target: { value: 'Vinyl' } }));
+    await act(async () => selectByLabel('Media').props.onChange({ target: { value: 'Vinyl' } }));
     await act(async () => button('More pressings').props.onClick());
     await act(async () => button('Pin').props.onClick());
     await toggleComparison();
@@ -149,9 +153,47 @@ describe('pressing candidate evidence', () => {
     expect(evidence.closest).not.toHaveBeenCalled();
     expect(radios()).toEqual([4, 5, 6]);
     expect(renderer!.root.findByProps({ type: 'radio', value: 5 }).props.checked).toBe(true);
-    expect(renderer!.root.findByType('select').props.value).toBe('Vinyl');
+    expect(selectByLabel('Media').props.value).toBe('Vinyl');
     expect(button('Hide runout marks')).toBeDefined();
     expect(button('Go to 1 pinned pressing')).toBeDefined();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('compares the second and third listings in a three-release picker without choosing a pressing', async () => {
+    const focusRadio = vi.fn();
+    const querySelector = vi.fn(() => ({ focus: focusRadio, closest: () => null }));
+    const onSelect = vi.fn();
+    const editions: PressingCandidate[] = [
+      { releaseId: 101, pressing: { catalogNumber: 'ABC-1', label: 'Blues Note', format: 'Vinyl · LP', country: 'US' } },
+      { releaseId: 102, pressing: { catalogNumber: 'ABC-1', label: 'Blues Note', format: 'Vinyl · LP · Mono', country: 'US' } },
+      { releaseId: 103, pressing: { catalogNumber: 'ABC-1', label: 'Blues Note', format: 'Vinyl · LP · Stereo', country: 'Canada' } },
+    ];
+    await act(async () => {
+      renderer = create(createElement(CandidatePicker, { choices: editions, onSelect }), {
+        createNodeMock: node => node.type === 'ul' ? { querySelector } : null,
+      });
+    });
+
+    await toggleComparison();
+    const first = selectByLabel('First listing');
+    const second = selectByLabel('Second listing');
+    expect(first.props.value).toBe(101);
+    expect(second.props.value).toBe(103);
+    expect(first.findAllByType('option').map(option => option.props.value)).toEqual([101, 102]);
+    expect(textOf(first.findByProps({ value: 102 }))).toContain('Discogs 102 · ABC-1 · Vinyl · LP · Mono · US');
+
+    await act(async () => first.props.onChange({ target: { value: '102' } }));
+    expect(selectByLabel('First listing')).toBe(first);
+    expect(selectByLabel('Second listing')).toBe(second);
+    expect(second.findAllByType('option').map(option => option.props.value)).toEqual([101, 103]);
+    expect(textOf(renderer!.root.findByType('thead'))).toBe('EvidenceFirst listing 102Second listing 103');
+    expect(textOf(renderer!.root.findByType('tbody').findAllByType('tr')[0])).toBe('MixDiffersMonoStereo');
+    expect(status()).toContain('Comparing Discogs releases 102 and 103.');
+    await act(async () => button('Back to pressings').props.onClick());
+    expect(querySelector).toHaveBeenCalledExactlyOnceWith('input[value="101"]');
+    expect(focusRadio).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    expect(radios()).toEqual([101, 102, 103]);
+    expect(renderer!.root.findAllByProps({ type: 'radio' }).every(radio => !radio.props.checked)).toBe(true);
     expect(onSelect).not.toHaveBeenCalled();
   });
 
@@ -328,7 +370,7 @@ describe('pressing candidate evidence', () => {
     });
     expect(renderer!.root.findAllByType('select')).toHaveLength(0);
     await toggleComparison();
-    const mediumFilter = renderer!.root.findByType('select');
+    const mediumFilter = selectByLabel('Media');
     expect(mediumFilter.findAllByType('option').map(textOf)).toEqual(['All media', 'Vinyl', 'Cassette', 'CD']);
     expect(renderer!.root.findAll(node => node === mediumFilter || node.props.id === mediumFilter.props['aria-controls'])
       .map(node => node.type)).toEqual(['select', 'ul']);
@@ -336,7 +378,7 @@ describe('pressing candidate evidence', () => {
     await act(async () => mediumFilter.props.onChange({ target: { value: 'CD' } }));
     expect(radios()).toEqual([4, 5]);
     expect(status()).toContain('2 CD pressings');
-    expect(textOf(renderer!.root.findByType('table').findByType('thead'))).toBe('EvidenceSelected pressing outside filter 2');
+    expect(textOf(renderer!.root.findByType('table').findByType('thead'))).toBe('EvidenceCatalog reference 1Selected pressing outside filter 2');
     expect(textOf(renderer!.root.findByType('section'))).toContain('Discogs release 1');
     expect(button('Show selected pressing in All media')).toBeDefined();
     const pinnedSelection = renderer!.root.findAllByType('button').find(control => control.props['aria-label']?.startsWith('Select pressing ·'))!;
@@ -365,7 +407,7 @@ describe('pressing candidate evidence', () => {
       createElement(CandidatePicker, { choices, reviewKey, onSelect, selectedId });
     await act(async () => { renderer = create(picker('album-and-number')); });
     await toggleComparison();
-    await act(async () => renderer!.root.findByType('select').props.onChange({ target: { value: 'Vinyl' } }));
+    await act(async () => selectByLabel('Media').props.onChange({ target: { value: 'Vinyl' } }));
     await act(async () => button('Pin').props.onClick());
     await act(async () => button('Check runout marks').props.onClick());
     await act(async () => button('More pressings').props.onClick());
@@ -377,7 +419,7 @@ describe('pressing candidate evidence', () => {
     getPressingDetails.mockClear();
     await act(async () => { renderer = create(picker('album-and-number')); });
     expect(radios()).toEqual([4, 5, 6]);
-    expect(renderer!.root.findByType('select').props.value).toBe('Vinyl');
+    expect(selectByLabel('Media').props.value).toBe('Vinyl');
     expect(button('Compare listings').props['aria-expanded']).toBe(true);
     expect(textOf(button('Compare 2 pinned pressings'))).toBe('Compare 2 pins');
     expect(button('Hide runout marks')).toBeDefined();
@@ -421,9 +463,9 @@ describe('pressing candidate evidence', () => {
     expect(renderer!.root.findByProps({ type: 'radio', value: 2 }).props.checked).toBe(true);
 
     await act(async () => renderer!.update(picker(1)));
-    expect(preview()).toBe('EvidenceSaved pressing selected 1');
+    expect(preview()).toBe('EvidenceCatalog reference 2Saved pressing selected 1');
     expect(textOf(radioLabels()[0])).toContain('Saved pressing selected');
-    expect(textOf(renderer!.root.findByType('table'))).not.toContain('Differs');
+    expect(textOf(renderer!.root.findByType('table'))).toContain('MixDiffersMonoStereo');
   });
 
   it('preserves a legacy closed comparison and can resume runouts independently', async () => {
@@ -491,7 +533,7 @@ describe('pressing candidate evidence', () => {
     expect(textOf(fieldset)).toContain('YEX-101');
     expect(textOf(fieldset)).toContain('YEX-102');
     expect(onSelect).not.toHaveBeenCalled();
-    await act(async () => renderer!.root.findByProps({ value: 2 }).props.onChange());
+    await act(async () => renderer!.root.findByProps({ type: 'radio', value: 2 }).props.onChange());
     expect(onSelect).toHaveBeenCalledWith(2);
   });
 
