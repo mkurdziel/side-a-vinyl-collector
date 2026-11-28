@@ -29,6 +29,8 @@ describe('Backup and Restore', () => {
     app.get('/api/albums', albumController.getAllAlbums);
     app.delete('/api/albums/:id', albumController.deleteAlbum);
     app.post('/api/albums/:id/removal/undo', albumController.undoAlbumRemoval);
+    app.patch('/api/albums/:id/status', albumController.updateAlbumStatus);
+    app.post('/api/albums/:id/status/undo', albumController.undoAlbumMove);
     app.use('/api/backup', backupRoutes);
     app.use(errorHandler);
   });
@@ -245,11 +247,15 @@ describe('Backup and Restore', () => {
     expect((await testPool.query('SELECT title, local_cover_path FROM albums')).rows).toEqual([{ title: 'Saved album', local_cover_path: null }]);
   });
 
-  it('omits pending removal undo from export and invalidates it when the same library IDs are restored', async () => {
+  it('omits pending undo receipts from export and invalidates them when the same library IDs are restored', async () => {
     const added = await request(app).post('/api/albums')
       .send({ artist: 'Test artist', album: 'Removed album', status: 'wishlist' }).expect(201);
     const { id } = added.body.album;
     const { body: { undoToken } } = await request(app).delete(`/api/albums/${id}`).expect(200);
+    const { body: { album: moved } } = await request(app).post('/api/albums')
+      .send({ artist: 'Test artist', album: 'Moved album', status: 'wishlist' }).expect(201);
+    const { body: { undoToken: moveToken } } = await request(app).patch(`/api/albums/${moved.id}/status`)
+      .send({ status: 'collection' }).expect(200);
     const exported = await request(app).get('/api/backup/export').buffer(true).parse((response, done) => {
       const chunks: Buffer[] = [];
       response.on('data', chunk => chunks.push(Buffer.from(chunk)));
@@ -259,20 +265,25 @@ describe('Backup and Restore', () => {
     const backupJson = new AdmZip(exported.body).readAsText('data.json');
     const snapshot = JSON.parse(backupJson);
     expect(snapshot).not.toHaveProperty('album_removal_undo');
+    expect(snapshot).not.toHaveProperty('album_move_undo');
     expect(backupJson).not.toContain(undoToken);
-    expect(snapshot.albums).toMatchObject([{ id }]);
-    expect(snapshot.collections).toEqual([]);
+    expect(backupJson).not.toContain(moveToken);
+    expect(snapshot.albums).toEqual(expect.arrayContaining([expect.objectContaining({ id }), expect.objectContaining({ id: moved.id })]));
+    expect(snapshot.collections).toMatchObject([{ album_id: moved.id, status: 'collection' }]);
 
     const invalid = new AdmZip();
     invalid.addFile('data.json', Buffer.from(JSON.stringify({
       ...snapshot,
-      albums: [{ ...snapshot.albums[0], musicbrainz_id: 'not a UUID' }],
+      albums: snapshot.albums.map((album: { id: number }) => album.id === id ? { ...album, musicbrainz_id: 'not a UUID' } : album),
     })));
     await request(app).post('/api/backup/import').attach('backup', invalid.toBuffer(), 'invalid.zip').expect(400);
     expect((await testPool.query('SELECT album_id FROM album_removal_undo')).rows).toEqual([{ album_id: id }]);
+    expect((await testPool.query('SELECT expected_status FROM album_move_undo')).rows).toEqual([{ expected_status: 'collection' }]);
 
-    await request(app).post('/api/backup/import').attach('backup', exported.body, 'backup.zip').expect(200);
+    const restored = await request(app).post('/api/backup/import').attach('backup', exported.body, 'backup.zip').expect(200);
+    expect(Number.isFinite(Date.parse(restored.body.restoredAt))).toBe(true);
     await request(app).post(`/api/albums/${id}/removal/undo`).send({ undoToken }).expect(409);
+    await request(app).post(`/api/albums/${moved.id}/status/undo`).send({ undoToken: moveToken }).expect(409);
     expect((await testPool.query('SELECT album_id FROM album_removal_undo')).rows).toEqual([]);
     expect((await request(app).get('/api/albums?status=wishlist').expect(200)).body.albums).toEqual([]);
   });

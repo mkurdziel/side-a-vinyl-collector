@@ -4,7 +4,7 @@ import { ModalDialog } from './ModalDialog';
 
 interface SettingsModalProps {
   onClose: () => void;
-  onRestore: () => void;
+  onRestore: (restoredAt?: string) => void;
   restoreBlocked: boolean;
 }
 
@@ -73,9 +73,10 @@ export function SettingsModal({ onClose, onRestore, restoreBlocked }: SettingsMo
     setError('');
     setDownloaded(false);
     try {
-      setOutcome(await api.restoreBackup(review.file));
+      const restored = await api.restoreBackup(review.file);
+      setOutcome(restored);
       setReview(null);
-      onRestore();
+      onRestore(restored.restoredAt);
     } catch (failure) {
       setError(failure instanceof ApiError && failure.status < 500 ? failure.message : 'Could not verify the restore outcome. Check your library before trying again.');
     } finally {

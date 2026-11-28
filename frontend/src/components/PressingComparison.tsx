@@ -1,6 +1,6 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { ApiError, type DiscogsAlbum, type PressingDetails, type SavedTitleMatch } from '../services/api';
-import { createPressingDetailsLoader, withPressingEvidence } from '../services/pressingEvidence';
+import { catalogNumberKey, createPressingDetailsLoader, matchesPressingMedium, pressingFormatFacts, withPressingEvidence } from '../services/pressingEvidence';
 import { discogsReleaseSource, savedCatalogSource, savedCopyContext, savedCopyLabel, type CatalogSource } from '../albumDisplay';
 import { ModalDialog } from './ModalDialog';
 import { PressingCandidates, PressingSelectionSummary, type PressingCandidate } from './PressingCandidates';
@@ -85,8 +85,21 @@ function availableDetails(details?: ReleaseDetails) {
   return details?.status === 'available' ? details.pressing : undefined;
 }
 
-function catalogNumberKey(value?: string) {
-  return value?.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '') ?? '';
+function missingEvidence(releaseId: number | undefined, details?: ReleaseDetails) {
+  if (!releaseId) return 'No pressing linked';
+  if (!details) return 'Checking…';
+  return details.status === 'failed' ? 'Unavailable' : 'Unlisted';
+}
+
+function evidenceDiffers(key: PressingField, lookupValue?: string, savedValue?: string) {
+  if (!lookupValue || !savedValue) return false;
+  if (key === 'catalogNumber') return catalogNumberKey(lookupValue) !== catalogNumberKey(savedValue);
+  if (key !== 'format') return lookupValue.toLowerCase() !== savedValue.toLowerCase();
+
+  const lookup = pressingFormatFacts(lookupValue);
+  const saved = pressingFormatFacts(savedValue);
+  return (['format', 'size', 'type', 'mix', 'speed'] as const).some(field => lookup[field] && saved[field] &&
+    lookup[field].toLowerCase() !== saved[field].toLowerCase());
 }
 
 async function fetchReleaseDetails(releaseId: number, signal: AbortSignal, loadDetails: ReturnType<typeof createPressingDetailsLoader>): Promise<ReleaseDetails> {
@@ -130,7 +143,7 @@ function ReleaseDetailsStatus({ column, releaseId, details, hasRecord = true, ha
     : !details ? 'Checking Discogs…'
       : details.status === 'failed' ? 'Discogs details couldn’t load.'
         : details.status === 'missing' ? 'Discogs has no additional details.'
-          : hasGaps ? 'Dashes mark unlisted details.' : 'Discogs details loaded.';
+          : 'Discogs details loaded.';
   return (
     <>
       <p ref={notice} role="status" tabIndex={-1} className={`mt-0.5 text-xs font-normal text-gray-600${quiet ? ' sr-only focus:not-sr-only' : ''}`}>
@@ -162,6 +175,8 @@ export function PressingComparison({
   const savedEvidenceId = useId();
   const [selectedId, setSelectedId] = useState<number>();
   const [candidateId, setCandidateId] = useState<number>();
+  const [medium, setMedium] = useState('');
+  const [candidateEvidence, setCandidateEvidence] = useState<Partial<Record<number, PressingDetails>>>({});
   const [openingId, setOpeningId] = useState<number>();
   const [failedId, setFailedId] = useState<number>();
   const [removedCopies, setRemovedCopies] = useState<SavedTitleMatch[]>([]);
@@ -195,6 +210,8 @@ export function PressingComparison({
   const candidates = [lookup, ...(lookupChoices ?? [])].filter(isReleaseCandidate)
     .filter((candidate, index, choices) => choices.findIndex(choice => choice.releaseId === candidate.releaseId) === index);
   const candidate = candidates.length === 1 ? candidates[0] : candidates.find(choice => choice.releaseId === candidateId);
+  const selectionOutsideMedia = candidates.length > 1 && !!candidate &&
+    !matchesPressingMedium(withPressingEvidence(candidate, candidateEvidence[candidate.releaseId]), medium);
   const activeLookup = candidate ?? (candidates.length === 0 ? lookup : undefined);
   const catalogArtist = candidate?.artist ?? lookup?.artist ?? candidates[0]?.artist;
   const selected = availableCopies.find(copy => copy.id === selectedId) ?? availableCopies[0];
@@ -214,6 +231,9 @@ export function PressingComparison({
   const lookupPending = lookupStatus === 'pending';
   const offerKeepPressing = !!onSavePressing && !!selected && (!pressingUpdated || !alreadySaved);
   const keepLabel = savedRelease ? 'Keep current pressing' : 'Leave pressing unconfirmed';
+  const recordCandidateEvidence = useCallback((releaseId: number, pressing: PressingDetails) => {
+    setCandidateEvidence(current => ({ ...current, [releaseId]: pressing }));
+  }, []);
 
   useLayoutEffect(() => {
     if (removed) (copySelect.current ?? savedOutcome.current ?? returnAfterRemoval.current ?? removalNotice.current)?.focus();
@@ -305,7 +325,7 @@ export function PressingComparison({
   };
 
   const save = async () => {
-    if (!selected || !lookupRelease || !onSavePressing || !saveSelection || !saveStatus || busy || alreadySaved || saving.current || lookupPending) return;
+    if (!selected || !lookupRelease || !onSavePressing || !saveSelection || !saveStatus || busy || alreadySaved || saving.current || lookupPending || selectionOutsideMedia) return;
     if (saveSelection.changeSelection) {
       const choices = candidateRegion.current;
       const choice = choices?.querySelector<HTMLInputElement>('input[type="radio"]:checked:not(:disabled)')
@@ -380,10 +400,7 @@ export function PressingComparison({
   const fieldRows = pressingFields.map(([key, label]) => {
     const lookupValue = key !== 'year' || lookupRelease ? candidateValue(activeLookup, key, lookupPressing) : undefined;
     const savedValue = fieldValue(savedPressing, key) ?? (alreadySaved ? lookupValue : undefined);
-    const differs = lookupValue && savedValue && (key === 'catalogNumber'
-      ? catalogNumberKey(lookupValue) !== catalogNumberKey(savedValue)
-      : lookupValue.toLowerCase() !== savedValue.toLowerCase());
-    return { label, lookupValue, savedValue, priority: differs ? 0 : 1 };
+    return { label, lookupValue, savedValue, priority: evidenceDiffers(key, lookupValue, savedValue) ? 0 : 1 };
   });
   const lookupRunouts = lookupPressing?.matrixRunouts ?? activeLookup?.pressing?.matrixRunouts ?? [];
   const savedRunouts = savedPressing?.matrixRunouts ?? (alreadySaved ? lookupRunouts : []);
@@ -410,6 +427,19 @@ export function PressingComparison({
   const selectedSummary = candidate && !alreadySaved && <PressingSelectionSummary compact searchedNumber={searchedNumber}
     formats={candidates.map(choice => choice.pressing?.format ?? '')}
     choice={withPressingEvidence(candidate, lookupPressing, 'release')} />;
+  const savedEvidenceSummary = savedRelease && <>
+    <ReleaseDetailsStatus column="Saved copy" releaseId={savedRelease} details={savedDetails} hasGaps={false} onRetry={retryDetails} />
+    {savedPressing && <dl className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
+      {fieldRows.map(({ label, savedValue }) => savedValue && <div key={label}>
+        <dt className="text-xs text-gray-600">{label}</dt><dd className="font-medium">{savedValue}</dd>
+      </div>)}
+      {savedRunouts.length > 0 && <div className="col-span-full">
+        <dt className="mb-1 text-xs text-gray-600">Matrix / Runout</dt>
+        <dd><RunoutMarkings markings={savedRunouts} /></dd>
+      </div>}
+    </dl>}
+  </>;
+  const EvidenceContainer = candidates.length > 1 ? 'details' : 'div';
 
   return (
     <ModalDialog labelledBy={headingId} onClose={close} onEscape={escape} returnFocusTo={returnFocusTo} fallbackFocusTo={fallbackFocusTo}>
@@ -427,10 +457,10 @@ export function PressingComparison({
           </button>
         </div>
         <div className="rh-pressing-review__content">
-          <div className="rh-pressing-review__evidence grid content-start gap-4 p-4 sm:gap-5 sm:p-6"
+          <div className="rh-pressing-review__evidence grid content-start gap-2 px-4 py-2 sm:gap-4 sm:px-6 sm:py-4"
             role="region" aria-label="Pressing evidence" tabIndex={0}>
             {selected && (
-              <div className="rh-comparison-outcome">
+              <div className={currentReceipt || removed ? 'rh-comparison-outcome' : 'rh-pressing-context'}>
                 <div className="flex flex-wrap items-center justify-between gap-x-2">
                   <p ref={savedOutcome} tabIndex={-1} role="status">
                     {pressingUpdated && 'Pressing updated. '}{currentReceipt?.outcome === 'undone' && 'Pressing change undone. '}
@@ -476,27 +506,28 @@ export function PressingComparison({
                 </div>
               </div>
             )}
-            {!candidate && savedRelease && <section aria-labelledby={savedEvidenceId} className="grid gap-2 border-t border-gray-200 pt-3">
+            {!candidate && savedRelease && candidates.length <= 1 && <section aria-labelledby={savedEvidenceId} className="grid gap-2 border-t border-gray-200 pt-3">
               <h3 id={savedEvidenceId} className="text-sm font-semibold">Saved pressing evidence</h3>
-              <ReleaseDetailsStatus column="Saved copy" releaseId={savedRelease} details={savedDetails} hasGaps={false} onRetry={retryDetails} />
-              {savedPressing && <dl className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
-                {fieldRows.map(({ label, savedValue }) => savedValue && <div key={label}>
-                  <dt className="text-xs text-gray-600">{label}</dt><dd className="font-medium">{savedValue}</dd>
-                </div>)}
-                {savedRunouts.length > 0 && <div className="col-span-full">
-                  <dt className="mb-1 text-xs text-gray-600">Matrix / Runout</dt>
-                  <dd><RunoutMarkings markings={savedRunouts} /></dd>
-                </div>}
-              </dl>}
+              {savedEvidenceSummary}
             </section>}
             {candidates.length > 1 && <div ref={candidateRegion}>
               <PressingCandidates choices={candidates} selectedId={candidate?.releaseId}
                 onSelect={id => { setCandidateId(id); setSaveSelection(undefined); }}
-                searchedNumber={searchedNumber} savedReleaseId={savedRelease} disabled={busy || lookupPending}
+                searchedNumber={searchedNumber} savedReleaseId={savedRelease} savedEvidence={savedPressing}
+                savedEvidenceState={savedRelease && !savedDetails ? 'pending' : savedDetails?.status === 'failed' ? 'unavailable' : undefined}
+                disabled={busy || lookupPending} medium={medium} onMediumChange={value => { setMedium(value); setSaveSelection(undefined); }}
                 uncertainAction={offerKeepPressing ? (savedRelease ? 'If you’re unsure, keep the current pressing.' : 'If you’re unsure, leave the pressing unconfirmed.') : undefined}
-                loadDetails={loadPressingDetails} />
+                loadDetails={loadPressingDetails} onReadEvidence={recordCandidateEvidence} />
             </div>}
-            {candidate && <div>
+            {!candidate && savedRelease && candidates.length > 1 && (savedDetails?.status === 'failed' ? savedEvidenceSummary
+              : <details className="rh-pressing-secondary">
+                <summary>Saved pressing evidence</summary>
+                {savedEvidenceSummary}
+              </details>)}
+            {candidate && <EvidenceContainer className={candidates.length > 1 ? 'rh-pressing-secondary' : undefined}>
+              {candidates.length > 1 && <summary>Full pressing comparison
+                {(lookupDetails?.status === 'failed' || savedDetails?.status === 'failed') && ' · Details unavailable'}
+              </summary>}
               <table className="rh-pressing-table">
                 <caption className="sr-only">Catalog evidence for {lookupRecord}</caption>
                 <thead>
@@ -515,17 +546,17 @@ export function PressingComparison({
                   {evidence.map(({ label, lookupValue, savedValue, priority }) => (
                     <tr key={label} className={priority === 0 ? 'rh-evidence-priority' : undefined}>
                       <th scope="row">{label}</th>
-                      <td>{lookupValue || '—'}</td>
-                      <td>{savedValue || '—'}</td>
+                      <td>{lookupValue || missingEvidence(lookupRelease, lookupDetails)}</td>
+                      <td>{savedValue || missingEvidence(savedRelease, savedDetails)}</td>
                     </tr>
                   ))}
                   <tr>
-                    <th scope="row">Discogs release ID</th><td>{lookupRelease}</td><td>{savedRelease ?? '—'}</td>
+                    <th scope="row">Discogs release ID</th><td>{lookupRelease}</td><td>{savedRelease ?? 'No pressing linked'}</td>
                   </tr>
                 </tbody>
               </table>
               {candidates.length === 1 && recordHelp}
-            </div>}
+            </EvidenceContainer>}
             <div>
               <div className="rh-comparison-links">
                 {selected && onOpenSaved && (
@@ -576,11 +607,12 @@ export function PressingComparison({
               ) : (
                 <>
                   {selectedSummary}
-                  {selectedSummary && !lookupPending && <p className="text-xs text-gray-600">Confirmation records the exact Discogs release on your {selectedShelf} entry.</p>}
+                  {selectionOutsideMedia ? <p role="status" className="text-xs text-gray-600">The selected pressing is outside the {medium} filter. Show it in All media or choose another pressing.</p>
+                    : selectedSummary && !lookupPending && <p className="text-xs text-gray-600">Confirmation records the exact Discogs release on your {selectedShelf} entry.</p>}
                   {alreadySaved && !savedReleaseChanged && <p className="text-sm text-gray-600">This pressing is already saved.</p>}
                   <div className="flex flex-wrap items-center justify-end gap-1.5">
                     {keepPressing}
-                    {candidate && !lookupPending && !alreadySaved && <button ref={saveTrigger} type="button"
+                    {candidate && !lookupPending && !alreadySaved && !selectionOutsideMedia && <button ref={saveTrigger} type="button"
                       className="rh-primary-action px-3 text-sm font-semibold" aria-disabled={busy}
                       onClick={() => {
                         if (!busy) setSaveSelection({ copyId: selected.id, releaseId: candidate.releaseId,

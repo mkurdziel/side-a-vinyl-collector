@@ -1,101 +1,236 @@
 import { useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref, type RefObject } from 'react';
 import api, { ApiError, type Album } from '../services/api';
 
-type RemovalDetails = Pick<Album, 'id' | 'title' | 'status'>;
-type RemovalResult = Pick<Awaited<ReturnType<typeof api.deleteAlbum>>, 'undoToken' | 'expiresAt'>;
-type RemovalReceipt = RemovalDetails & RemovalResult;
-type RemovalEntry = RemovalReceipt & { undoing?: boolean; issue?: string };
+type AlbumDetails = Pick<Album, 'id' | 'title' | 'status'>;
+type UndoReceipt = { undoToken?: string; expiresAt?: string };
+type ShelfMove = { albumId: number; title: string; from: Album['status']; to: Album['status'] };
+type Kind = 'removal' | 'move' | 'pressing';
+type Receipt = AlbumDetails & Required<UndoReceipt> & { kind: Kind; closed?: true };
+type Entry = Receipt & { undoing?: boolean; issue?: string; tabOnly?: boolean };
 
 export interface RemovalHistoryHandle {
-  recordRemoval: (album: RemovalDetails, result?: RemovalResult) => void;
-  clear: () => void;
+  recordRemoval: (album: AlbumDetails, result?: UndoReceipt) => void;
+  recordMove: (move: ShelfMove, result?: UndoReceipt) => void;
+  recordPressing: (album: AlbumDetails, result?: UndoReceipt) => void;
+  undoMove: (albumId: number) => Promise<boolean>;
+  focusMove: (albumId: number) => void;
+  forgetPressing: (albumId: number, undoToken: string) => void;
+  forgetAlbumChanges: (albumId: number) => void;
+  clear: (restoredAt?: string) => void;
 }
 
 interface RemovalHistoryProps {
   ref: Ref<RemovalHistoryHandle>;
   onRestored: (album: Album) => void;
+  onMovedBack?: (album: Album) => void;
+  onPressingUndone?: (album: Album) => void;
+  onExternalChange?: () => void;
   fallbackFocus: RefObject<HTMLElement | null>;
 }
 
-const storageKey = 'side-a-removal-history';
-const legacyStorageKey = 'side-a-last-removal';
+const receiptPrefix = 'side-a-library-undo:';
+const restorePrefix = 'side-a-library-restored:';
+const legacyHistoryKey = 'side-a-removal-history';
+const legacyReceiptKey = 'side-a-last-removal';
+const undoWindow = 10 * 60_000;
 const shelfNames = { collection: 'Collection', wishlist: 'Wishlist' };
 const expiryTime = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+const actions = {
+  removal: { label: 'Undo removal', pending: 'Restoring…', request: (id: number, token: string) => api.undoAlbumRemoval(id, token) },
+  move: { label: 'Undo move', pending: 'Moving back…', request: (id: number, token: string) => api.undoAlbumMove(id, token) },
+  pressing: { label: 'Undo pressing change', pending: 'Restoring pressing…', request: (id: number, token: string) => api.undoPressing(id, token) },
+};
 
-function hasUndoTime(expiresAt: string) {
-  return Date.parse(expiresAt) > Date.now();
-}
+const deadline = (receipt: Pick<Receipt, 'expiresAt'>) => Date.parse(receipt.expiresAt);
+const receiptKey = (receipt: Pick<Receipt, 'id' | 'kind' | 'undoToken'>) =>
+  `${receiptPrefix}${receipt.kind}:${receipt.id}:${encodeURIComponent(receipt.undoToken)}`;
+const closedKey = (key: string) => `${key}:closed`;
 
-function isValidReceipt(value: unknown): value is RemovalReceipt {
+function isReceipt(value: unknown): value is Receipt {
   if (!value || typeof value !== 'object') return false;
-  const entry = value as Partial<RemovalReceipt>;
-  return typeof entry.id === 'number' && Number.isSafeInteger(entry.id) && entry.id > 0 &&
-    typeof entry.title === 'string' && (entry.status === 'collection' || entry.status === 'wishlist') &&
-    typeof entry.undoToken === 'string' && entry.undoToken.length > 0 &&
-    typeof entry.expiresAt === 'string' && hasUndoTime(entry.expiresAt);
+  const entry = value as Partial<Receipt>;
+  return (entry.kind === 'removal' || entry.kind === 'move' || entry.kind === 'pressing') &&
+    Number.isSafeInteger(entry.id) && (entry.id ?? 0) > 0 && typeof entry.title === 'string' &&
+    (entry.status === 'collection' || entry.status === 'wishlist') &&
+    typeof entry.undoToken === 'string' && !!entry.undoToken && entry.undoToken.length <= 256 &&
+    typeof entry.expiresAt === 'string' && Number.isFinite(Date.parse(entry.expiresAt));
 }
 
-function readStorage(key: string): unknown {
+function parseStored(value: string | null) {
+  try { return JSON.parse(value ?? 'null') as unknown; } catch { return null; }
+}
+
+function readStorage() {
+  const receipts = new Map<string, Receipt>();
+  const restoreKeys: { key: string; at: number }[] = [];
   try {
-    return JSON.parse(sessionStorage.getItem(key) ?? 'null');
-  } catch {
-    return null;
-  }
-}
-
-function readReceipts() {
-  const stored = readStorage(storageKey);
-  const legacy = readStorage(legacyStorageKey);
-  const entries = Array.isArray(stored) ? stored.filter(isValidReceipt) : [];
-  if (isValidReceipt(legacy) && 'kind' in legacy && legacy.kind === 'removed') entries.push(legacy);
-
-  const latest = new Map<number, RemovalReceipt>();
-  for (const { id, title, status, undoToken, expiresAt } of entries) {
-    const existing = latest.get(id);
-    if (!existing || Date.parse(expiresAt) > Date.parse(existing.expiresAt)) {
-      latest.set(id, { id, title, status, undoToken, expiresAt });
+    const keys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index));
+    for (const key of keys) {
+      if (key?.startsWith(receiptPrefix)) {
+        const receipt = parseStored(localStorage.getItem(key));
+        if (!isReceipt(receipt)) continue;
+        const actionKey = receiptKey(receipt);
+        if (receipt.closed && key === closedKey(actionKey)) receipts.set(actionKey, receipt);
+        else if (key === actionKey && !receipts.has(actionKey)) receipts.set(actionKey, receipt);
+      } else if (key?.startsWith(restorePrefix)) {
+        const at = Number(key.slice(restorePrefix.length));
+        if (Number.isFinite(at)) restoreKeys.push({ key, at });
+      }
     }
-  }
-  return [...latest.values()];
-}
-
-function persistReceipts(entries: readonly RemovalEntry[]) {
-  const valid = entries.filter(isValidReceipt).map(({ id, title, status, undoToken, expiresAt }) => (
-    { id, title, status, undoToken, expiresAt }
-  ));
-  try {
-    if (valid.length) sessionStorage.setItem(storageKey, JSON.stringify(valid));
-    else sessionStorage.removeItem(storageKey);
-    sessionStorage.removeItem(legacyStorageKey);
   } catch {
-    // A blocked storage area still allows Undo on the current page.
+    // Recovery is still available on the current page when browser storage is blocked.
+  }
+  const restoredAt = Math.max(0, ...restoreKeys.map(({ at }) => at));
+  return { receipts, restoredAt, obsoleteRestoreKeys: restoreKeys.filter(({ at }) => at < restoredAt) };
+}
+
+function persist(key: string, receipt: Receipt) {
+  try {
+    localStorage.setItem(key, JSON.stringify(receipt));
+    return true;
+  } catch {
+    return false;
   }
 }
 
-export function RemovalHistory({ ref, onRestored, fallbackFocus }: RemovalHistoryProps) {
-  const [entries, setEntries] = useState<RemovalEntry[]>(readReceipts);
+function forgetStored(key: string) {
+  try { localStorage.removeItem(key); } catch { /* Storage may be disabled. */ }
+}
+
+function selectReceipts(receipts: Map<string, Receipt>, restoredAt: number, now: number) {
+  const latest = new Map<string, Receipt>();
+  for (const receipt of receipts.values()) {
+    const expiresAt = deadline(receipt);
+    if (expiresAt <= now || expiresAt <= restoredAt + undoWindow) continue;
+    const group = `${receipt.kind}:${receipt.id}`;
+    const previous = latest.get(group);
+    if (!previous || expiresAt > deadline(previous)) latest.set(group, receipt);
+  }
+  return [...latest.values()].filter(receipt => {
+    if (receipt.closed) return false;
+    const removal = latest.get(`removal:${receipt.id}`);
+    return receipt.kind === 'removal' || !removal || deadline(receipt) > deadline(removal);
+  }).sort((a, b) => deadline(b) - deadline(a));
+}
+
+function description(receipt: Receipt) {
+  if (receipt.kind === 'move') return `“${receipt.title}” moved to ${shelfNames[receipt.status]}.`;
+  if (receipt.kind === 'pressing') return `Pressing updated for “${receipt.title}”.`;
+  return `“${receipt.title}” removed from ${shelfNames[receipt.status]}.`;
+}
+
+function successMessage(receipt: Receipt, restored: Album) {
+  if (receipt.kind === 'move') return `“${restored.title}” moved back to ${shelfNames[restored.status]}.`;
+  if (receipt.kind === 'pressing') return `Pressing restored for “${restored.title}”.`;
+  return `“${restored.title}” restored to ${shelfNames[restored.status]}.`;
+}
+
+export function RemovalHistory({ ref, onRestored, onMovedBack, onPressingUndone, onExternalChange, fallbackFocus }: RemovalHistoryProps) {
+  const [entries, setEntries] = useState<Entry[]>(() => {
+    const { receipts, restoredAt } = readStorage();
+    return selectReceipts(receipts, restoredAt, Date.now());
+  });
   const [expanded, setExpanded] = useState(true);
   const [outcome, setOutcome] = useState<{ message: string; error?: boolean }>();
   const latest = useRef(entries);
+  const volatile = useRef(new Map<string, Receipt>());
+  const restoreTime = useRef(0);
   const panel = useRef<HTMLElement>(null);
   const toggle = useRef<HTMLButtonElement>(null);
   const feedback = useRef<HTMLParagraphElement>(null);
-  const undoButtons = useRef(new Map<number, HTMLButtonElement>());
-  const nextFocus = useRef<number | 'feedback' | 'toggle' | 'fallback'>(undefined);
+  const undoButtons = useRef(new Map<string, HTMLButtonElement>());
+  const nextFocus = useRef<{ key: string } | 'feedback' | 'toggle' | 'fallback'>(undefined);
   const listId = useId();
+  const externalChange = useRef(onExternalChange);
+  useEffect(() => { externalChange.current = onExternalChange; }, [onExternalChange]);
 
-  const updateEntries = useCallback((next: RemovalEntry[]) => {
+  const updateEntries = useCallback((next: Entry[]) => {
     latest.current = next;
-    persistReceipts(next);
     setEntries(next);
   }, []);
 
-  useEffect(() => persistReceipts(latest.current), []);
+  const put = useCallback((receipt: Receipt) => {
+    const key = receiptKey(receipt);
+    const { id, kind, title, status, undoToken, expiresAt, closed } = receipt;
+    const stored = { id, kind, title, status, undoToken, expiresAt, closed };
+    if (persist(closed ? closedKey(key) : key, stored)) volatile.current.delete(key);
+    else volatile.current.set(key, stored);
+  }, []);
+
+  const refresh = useCallback(() => {
+    const { receipts, restoredAt, obsoleteRestoreKeys } = readStorage();
+    restoreTime.current = Math.max(restoreTime.current, restoredAt);
+    const now = Date.now();
+    for (const { key } of obsoleteRestoreKeys) forgetStored(key);
+    for (const [key, receipt] of [...receipts, ...volatile.current]) {
+      if (deadline(receipt) <= now || deadline(receipt) <= restoreTime.current + undoWindow) {
+        receipts.delete(key);
+        volatile.current.delete(key);
+        forgetStored(key);
+        forgetStored(closedKey(key));
+      } else if (receipt.closed || !receipts.get(key)?.closed) {
+        receipts.set(key, receipt);
+      }
+    }
+    const previous = new Map(latest.current.map(entry => [receiptKey(entry), entry]));
+    const next: Entry[] = selectReceipts(receipts, restoreTime.current, now).map(receipt => {
+      const key = receiptKey(receipt);
+      const current = previous.get(key);
+      return { ...receipt, undoing: current?.undoing, issue: current?.issue, tabOnly: volatile.current.has(key) };
+    });
+    const selected = new Set(next.map(receiptKey));
+    // A request sent before its deadline can still succeed after the local timer would expire.
+    for (const entry of latest.current) {
+      if (entry.undoing && deadline(entry) <= now && !selected.has(receiptKey(entry)) &&
+          !receipts.has(receiptKey(entry)) && deadline(entry) > restoreTime.current + undoWindow) next.push(entry);
+    }
+    updateEntries(next);
+  }, [updateEntries]);
+
+  useEffect(() => {
+    try {
+      const history = parseStored(sessionStorage.getItem(legacyHistoryKey));
+      const legacy = parseStored(sessionStorage.getItem(legacyReceiptKey));
+      const candidates = Array.isArray(history) ? history : [];
+      if (legacy && typeof legacy === 'object' && 'kind' in legacy && legacy.kind === 'removed') candidates.push(legacy);
+      let migrated = true;
+      const { receipts, restoredAt } = readStorage();
+      for (const value of candidates) {
+        const receipt: unknown = { ...value, kind: 'removal' };
+        if (!isReceipt(receipt) || deadline(receipt) <= Date.now() || deadline(receipt) <= restoredAt + undoWindow) continue;
+        const key = receiptKey(receipt);
+        if (!receipts.has(key) && !persist(key, receipt)) {
+          volatile.current.set(key, receipt);
+          migrated = false;
+        }
+      }
+      if (migrated) {
+        sessionStorage.removeItem(legacyHistoryKey);
+        sessionStorage.removeItem(legacyReceiptKey);
+      }
+    } catch { /* Storage may be disabled. */ }
+    refresh();
+
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== null && !event.key.startsWith(receiptPrefix) && !event.key.startsWith(restorePrefix)) return;
+      const active = panel.current?.ownerDocument.activeElement;
+      const focused = latest.current.find(entry => undoButtons.current.get(receiptKey(entry)) === active);
+      const before = restoreTime.current;
+      refresh();
+      if (focused && !latest.current.some(entry => receiptKey(entry) === receiptKey(focused))) {
+        nextFocus.current = latest.current.length ? 'toggle' : 'fallback';
+      }
+      if (restoreTime.current > before) setOutcome(undefined);
+      if (event.newValue !== null || event.key === null) externalChange.current?.();
+    };
+    window.addEventListener?.('storage', onStorage);
+    return () => window.removeEventListener?.('storage', onStorage);
+  }, [refresh]);
 
   useLayoutEffect(() => {
     const target = nextFocus.current;
     nextFocus.current = undefined;
-    const destination = typeof target === 'number' ? undoButtons.current.get(target)
+    const destination = typeof target === 'object' ? undoButtons.current.get(target.key)
       : target === 'feedback' ? feedback.current
       : target === 'toggle' ? toggle.current
       : target === 'fallback' ? fallbackFocus.current : undefined;
@@ -109,102 +244,132 @@ export function RemovalHistory({ ref, onRestored, fallbackFocus }: RemovalHistor
     setOutcome(undefined);
   };
 
-  useImperativeHandle(ref, () => ({
-    recordRemoval(album, result) {
-      const { id, title, status } = album;
-      const receipt = { id, title, status, ...result };
-      if (isValidReceipt(receipt)) {
-        nextFocus.current = id;
-        setOutcome(undefined);
-        setExpanded(true);
-        updateEntries([receipt, ...latest.current.filter(entry => entry.id !== id)]);
-      } else {
-        nextFocus.current = 'feedback';
-        setOutcome({ message: `“${title}” removed from ${shelfNames[status]}. Undo is unavailable.` });
-        updateEntries(latest.current.filter(entry => entry.id !== id));
-      }
-    },
-    clear() {
-      nextFocus.current = containsFocus() ? 'fallback' : undefined;
-      updateEntries([]);
-      setExpanded(true);
+  const record = (kind: Kind, album: AlbumDetails, result?: UndoReceipt) => {
+    const receipt: unknown = { ...album, ...result, kind };
+    const stored = readStorage();
+    const cutoff = Math.max(restoreTime.current, stored.restoredAt);
+    if (isReceipt(receipt) && deadline(receipt) <= cutoff + undoWindow) return;
+    if (isReceipt(receipt) && deadline(receipt) > Date.now()) {
+      const key = receiptKey(receipt);
+      if (stored.receipts.get(key)?.closed || volatile.current.get(key)?.closed) return;
+      if (kind === 'removal') nextFocus.current = { key };
+      put(receipt);
       setOutcome(undefined);
-    },
-  }));
+      setExpanded(true);
+    } else if (kind === 'removal') {
+      nextFocus.current = 'feedback';
+      setOutcome({ message: `“${album.title}” removed from ${shelfNames[album.status]}. Undo is unavailable.` });
+    }
+    refresh();
+  };
 
-  useEffect(() => {
-    const expire = () => {
-      const expired = latest.current.filter(entry => !entry.undoing && !hasUndoTime(entry.expiresAt));
-      if (!expired.length) {
-        timer = schedule();
-        return;
-      }
-      const remaining = latest.current.filter(entry => !expired.includes(entry));
-      const active = panel.current?.ownerDocument.activeElement;
-      const focusedEntry = expired.find(entry => undoButtons.current.get(entry.id) === active);
-      if (focusedEntry || (!remaining.length && panel.current?.contains(active ?? null))) nextFocus.current = 'feedback';
-      setOutcome({ message: focusedEntry || expired.length === 1
-        ? `The undo window for “${(focusedEntry ?? expired[0]).title}” ended.`
-        : 'The undo window for some recent removals ended.' });
-      updateEntries(remaining);
-    };
-    const schedule = () => {
-      const deadlines = latest.current.filter(entry => !entry.undoing).map(entry => Date.parse(entry.expiresAt));
-      if (!deadlines.length) return;
-      const delay = Math.min(2_147_483_647, Math.max(0, Math.min(...deadlines) - Date.now()));
-      return window.setTimeout(expire, delay);
-    };
-    let timer = schedule();
-    return () => window.clearTimeout(timer);
-  }, [entries, updateEntries]);
-
-  const undo = async (receipt: RemovalReceipt) => {
-    const belongsTo = (entry: RemovalEntry) => entry.id === receipt.id && entry.undoToken === receipt.undoToken;
-    const entry = latest.current.find(belongsTo);
-    if (!entry || entry.undoing || !isValidReceipt(entry)) return;
-
+  const undo = async (entry: Entry) => {
+    const key = receiptKey(entry);
+    const belongsTo = (other: Entry) => receiptKey(other) === key;
+    const current = latest.current.find(belongsTo);
+    if (!current || current.undoing || deadline(current) <= Date.now()) return false;
     updateEntries(latest.current.map(item => belongsTo(item) ? { ...item, undoing: true, issue: undefined } : item));
     const focusResult = () => {
-      const button = undoButtons.current.get(entry.id);
+      const button = undoButtons.current.get(key);
       if (button && button.ownerDocument.activeElement === button) nextFocus.current = 'feedback';
+    };
+    const complete = () => {
+      focusResult();
+      // A separate marker survives a concurrent write of the receipt and suppresses superseded actions.
+      put({ id: entry.id, title: entry.title, status: entry.status, kind: entry.kind,
+        undoToken: entry.undoToken, expiresAt: entry.expiresAt, closed: true });
+      updateEntries(latest.current.filter(item => !belongsTo(item)));
+      refresh();
     };
 
     let restored: Album;
     try {
-      ({ album: restored } = await api.undoAlbumRemoval(entry.id, entry.undoToken));
+      ({ album: restored } = await actions[entry.kind].request(entry.id, entry.undoToken));
     } catch (failure) {
-      if (!latest.current.some(belongsTo)) return;
-      if (failure instanceof ApiError && (failure.status === 400 || failure.status === 409)) {
-        focusResult();
+      if (!latest.current.some(belongsTo)) return false;
+      if (failure instanceof ApiError && [400, 404, 409].includes(failure.status)) {
+        complete();
         setOutcome({ message: `“${entry.title}” could not be restored. ${failure.message}`, error: true });
-        updateEntries(latest.current.filter(item => !belongsTo(item)));
-      } else if (!hasUndoTime(entry.expiresAt)) {
-        focusResult();
-        setOutcome({ message: `Couldn’t verify whether “${entry.title}” was restored. The undo window ended. Check your shelves.`, error: true });
-        updateEntries(latest.current.filter(item => !belongsTo(item)));
+        externalChange.current?.();
+      } else if (deadline(entry) <= Date.now()) {
+        complete();
+        setOutcome({ message: `Couldn’t verify the undo for “${entry.title}”. The undo window ended. Check your library.`, error: true });
       } else {
         updateEntries(latest.current.map(item => belongsTo(item)
           ? { ...item, undoing: false, issue: 'Couldn’t confirm the undo. Try again.' } : item));
       }
-      return;
+      return false;
     }
 
-    if (!latest.current.some(belongsTo)) return;
-    focusResult();
-    setOutcome({ message: `“${restored.title}” restored to ${shelfNames[restored.status]}.` });
-    updateEntries(latest.current.filter(item => !belongsTo(item)));
-    onRestored(restored);
+    if (!latest.current.some(belongsTo)) return false;
+    complete();
+    setOutcome({ message: successMessage(entry, restored) });
+    ({ removal: onRestored, move: onMovedBack, pressing: onPressingUndone })[entry.kind]?.(restored);
+    return true;
   };
+
+  useImperativeHandle(ref, () => ({
+    recordRemoval(album, result) { record('removal', album, result); },
+    recordMove({ albumId, title, to }, result) { record('move', { id: albumId, title, status: to }, result); },
+    recordPressing(album, result) { record('pressing', album, result); },
+    undoMove(albumId) {
+      const entry = latest.current.find(item => item.kind === 'move' && item.id === albumId);
+      return entry ? undo(entry) : Promise.resolve(false);
+    },
+    focusMove(albumId) {
+      const entry = latest.current.find(item => item.kind === 'move' && item.id === albumId);
+      if (entry) undoButtons.current.get(receiptKey(entry))?.focus();
+    },
+    forgetPressing(id, undoToken) {
+      const entry = latest.current.find(item => item.kind === 'pressing' && item.id === id && item.undoToken === undoToken);
+      if (!entry) return;
+      put({ ...entry, closed: true });
+      refresh();
+    },
+    forgetAlbumChanges(id) {
+      for (const entry of latest.current) {
+        if (entry.id === id && entry.kind !== 'removal') put({ ...entry, closed: true });
+      }
+      refresh();
+    },
+    clear(restoredAt) {
+      const at = restoredAt ? Date.parse(restoredAt) : Date.now();
+      restoreTime.current = Math.max(restoreTime.current, Number.isFinite(at) ? at : Date.now());
+      try { localStorage.setItem(`${restorePrefix}${restoreTime.current}`, ''); } catch { /* Storage may be disabled. */ }
+      nextFocus.current = containsFocus() ? 'fallback' : undefined;
+      setExpanded(true);
+      setOutcome(undefined);
+      refresh();
+    },
+  }));
+
+  useEffect(() => {
+    const deadlines = entries.filter(entry => !entry.undoing).map(deadline);
+    if (!deadlines.length) return;
+    const delay = Math.min(2_147_483_647, Math.max(0, Math.min(...deadlines) - Date.now()));
+    const timer = window.setTimeout(() => {
+      const expired = latest.current.filter(entry => !entry.undoing && deadline(entry) <= Date.now());
+      const active = panel.current?.ownerDocument.activeElement;
+      const focused = expired.find(entry => undoButtons.current.get(receiptKey(entry)) === active);
+      refresh();
+      if (!expired.length) return;
+      if (focused || (!latest.current.length && containsFocus())) nextFocus.current = 'feedback';
+      setOutcome({ message: focused || expired.length === 1
+        ? `The undo window for “${(focused ?? expired[0]).title}” ended.`
+        : 'The undo window for some recent changes ended.' });
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [entries, refresh]);
 
   if (!entries.length && !outcome) return null;
 
   return (
-    <aside ref={panel} className="mb-4 rounded-xl border border-gray-300 bg-white px-3 py-2" aria-label="Album removal recovery">
+    <aside ref={panel} className="mb-4 rounded-xl border border-gray-300 bg-white px-3 py-2" aria-label="Library change recovery">
       <div className="flex flex-wrap items-center justify-between gap-x-2">
         {entries.length > 0 && (
           <button ref={toggle} type="button" className="rh-lookup-link -ml-2 text-left" aria-expanded={expanded} aria-controls={listId}
             onClick={() => setExpanded(current => !current)}>
-            Recent removals<span className="sr-only">, {entries.length} available to undo</span>
+            Recent library changes<span className="sr-only">, {entries.length} available to undo</span>
           </button>
         )}
         {outcome && (
@@ -214,22 +379,27 @@ export function RemovalHistory({ ref, onRestored, fallbackFocus }: RemovalHistor
           </p>
         )}
         {(expanded || outcome) && <button type="button" className="rh-lookup-link ml-auto" onClick={dismiss}
-          aria-label="Dismiss removal notice">Dismiss</button>}
+          aria-label="Dismiss library change notice">Dismiss</button>}
       </div>
       {entries.length > 0 && <ul id={listId} className="divide-y divide-gray-200 border-t" hidden={!expanded}>
         {entries.map(entry => {
-          const label = entry.undoing ? 'Restoring…' : entry.issue ? 'Retry undo removal' : 'Undo removal';
-          const expiryId = `${listId}-${entry.id}-expiry`;
+          const action = actions[entry.kind];
+          const label = entry.undoing ? action.pending : entry.issue ? `Retry ${action.label.toLowerCase()}` : action.label;
+          const key = receiptKey(entry);
+          const expiryId = `${listId}-${entry.kind}-${entry.id}-expiry`;
           return (
-            <li key={entry.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2">
+            <li key={key} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2">
               <div className="min-w-0 text-sm [overflow-wrap:anywhere]">
-                <p className="font-medium">“{entry.title}” removed from {shelfNames[entry.status]}.</p>
-                <p id={expiryId} className="text-xs text-gray-600">Undo until <time dateTime={entry.expiresAt}>{expiryTime.format(new Date(entry.expiresAt))}</time></p>
+                <p className="font-medium">{description(entry)}</p>
+                <p id={expiryId} className="text-xs text-gray-600">
+                  Undo until <time dateTime={entry.expiresAt}>{expiryTime.format(new Date(entry.expiresAt))}</time>
+                  {entry.tabOnly && <span className="block">Undo is available while this tab stays open.</span>}
+                </p>
                 {entry.issue && <p role="alert" className="mt-1 text-red-600">{entry.issue}</p>}
               </div>
               <button ref={button => {
-                if (button) undoButtons.current.set(entry.id, button);
-                else undoButtons.current.delete(entry.id);
+                if (button) undoButtons.current.set(key, button);
+                else undoButtons.current.delete(key);
               }} type="button" className="min-h-11 rounded-lg border border-gray-300 bg-gray-100 px-3 text-sm font-semibold text-gray-900 hover:bg-gray-50"
                 aria-label={`${label} · ${entry.title}`} aria-describedby={expiryId}
                 aria-disabled={entry.undoing} aria-busy={entry.undoing} onClick={() => void undo(entry)}>{label}</button>

@@ -70,6 +70,7 @@ export interface BackupManifest {
 
 export interface BackupOutcome {
   message: string;
+  restoredAt?: string;
   stats: { albums: number; artwork: number; barcodes: number };
   warnings: string[];
   skippedArtwork: { album: string; reason: string }[];
@@ -185,14 +186,21 @@ class ApiService {
     });
   }
 
-  async updateStatus(id: number, status: Album['status'], expectedStatus?: Album['status']): Promise<void> {
+  async updateStatus(id: number, status: Album['status'], expectedStatus?: Album['status']): Promise<{ undoToken?: string; expiresAt?: string }> {
     return this.request(`/api/albums/${id}/status`, {
       method: 'PATCH',
       body: JSON.stringify({ status, expectedStatus }),
     });
   }
 
-  updatePressing(id: number, discogsId: number, expectedDiscogsId: number | null): Promise<{ album: Album; undoToken: string }> {
+  undoAlbumMove(id: number, undoToken: string): Promise<{ album: Album }> {
+    return this.request(`/api/albums/${id}/status/undo`, {
+      method: 'POST',
+      body: JSON.stringify({ undoToken }),
+    });
+  }
+
+  updatePressing(id: number, discogsId: number, expectedDiscogsId: number | null): Promise<{ album: Album; undoToken: string; expiresAt: string }> {
     return this.request(`/api/albums/${id}/pressing`, {
       method: 'PATCH',
       body: JSON.stringify({ discogsId, expectedDiscogsId }),

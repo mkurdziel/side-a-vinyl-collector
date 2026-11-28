@@ -9,9 +9,10 @@ import { ImageUploader } from './components/ImageUploader';
 import { DiscogsImporter } from './components/DiscogsImporter';
 import { AlbumDetailModal } from './components/AlbumDetailModal';
 import { SettingsModal } from './components/SettingsModal';
-import { SaveDestinationActions, type DestinationAction } from './components/SaveDestinationActions';
+import { SaveDestinationActions, SaveShelfSelect, type DestinationAction } from './components/SaveDestinationActions';
 import { ModalDialog } from './components/ModalDialog';
 import { ManualAlbumDialog, type ManualAlbumDraft } from './components/ManualAlbumDialog';
+import type { StoredManualAlbumDraft } from './services/manualAlbumDrafts';
 import { CatalogPressingPicker } from './components/CatalogPressingPicker';
 import { RemovalHistory, type RemovalHistoryHandle } from './components/RemovalHistory';
 
@@ -29,6 +30,7 @@ type ResultKind = 'saved' | 'catalog';
 type SearchRequest = { controller: AbortController; timer?: number };
 type SaveAction = DestinationAction | 'remove';
 type ShelfMove = { albumId: number; title: string; from: Shelf; to: Shelf };
+type DetailMove = ShelfMove & { expiresAt: string; issue?: string; undoing?: boolean };
 type SaveIssue = { message: string; albumId?: number; stale?: boolean };
 type LoadedPage = { target: string; message: string; trigger?: HTMLButtonElement };
 type LookupMode = 'name' | 'catalog-number';
@@ -84,7 +86,7 @@ function lookupPressing(album: DiscogsAlbum): LookupPressing {
     releaseId: source?.kind === 'pressing' ? album.discogsId : undefined };
 }
 
-function savedPressingChoices(album: Album, matches: DiscogsAlbum[]) {
+function savedPressingChoices(album: SavedTitleMatch, matches: DiscogsAlbum[]) {
   const title = catalogIdentity(album.title);
   const artist = catalogIdentity(album.artist_name);
   const choices = new Map<number, LookupPressing>();
@@ -97,6 +99,24 @@ function savedPressingChoices(album: Album, matches: DiscogsAlbum[]) {
     }
   }
   return [...choices.values()];
+}
+
+function savedCatalogNumberMatches(matches: DiscogsAlbum[]) {
+  const saved = new Map<number, { album: SavedTitleMatch; releaseNumberMatches: boolean }>();
+  for (const listing of matches) {
+    const shelf = listing.inCollection ? 'collection' : listing.inWishlist ? 'wishlist' : undefined;
+    const copies = listing.titleMatches ?? (shelf && listing.existingAlbumId != null ? [{
+      id: listing.existingAlbumId, title: listing.album, artist_name: listing.artist, status: shelf, year: listing.year,
+      discogs_id: listing.existingMatch === 'release' ? listing.discogsId : undefined,
+    } satisfies SavedTitleMatch] : []);
+    for (const album of copies) {
+      const releaseNumberMatches = [listing, ...listing.pressingChoices ?? []].some(candidate =>
+        candidate.catalogNumberMatch === 'exact' && candidate.discogsId === album.discogs_id);
+      const current = saved.get(album.id);
+      if (!current || (releaseNumberMatches && !current.releaseNumberMatches)) saved.set(album.id, { album, releaseNumberMatches });
+    }
+  }
+  return [...saved.values()].sort((a, b) => Number(b.releaseNumberMatches) - Number(a.releaseNumberMatches));
 }
 
 const savedAlbumKey = (id: number) => `saved:${id}`;
@@ -243,7 +263,7 @@ function App() {
   const [loadedPage, setLoadedPage] = useState<LoadedPage>();
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [addingByName, setAddingByName] = useState(false);
-  const [manualEntry, setManualEntry] = useState<{ draft: ManualAlbumDraft; shelf: Shelf }>();
+  const [manualEntry, setManualEntry] = useState<{ draft: ManualAlbumDraft; shelf: Shelf; resumeDraft?: StoredManualAlbumDraft }>();
   const [detectedDraft, setDetectedDraft] = useState<ManualAlbumDraft>();
   const [pressingReview, setPressingReview] = useState<{ album: DiscogsAlbum; destination: Shelf; searchedNumber?: string }>();
   const [albumReview, setAlbumReview] = useState<AlbumReview>();
@@ -260,7 +280,13 @@ function App() {
   const [lookupPressingEdits, setLookupPressingEdits] = useState<Partial<Record<number, SavedTitleMatch>>>({});
   const albumDetailOpener = useRef<HTMLButtonElement | null>(null);
   const [albumToRemove, setAlbumToRemove] = useState<Album | null>(null);
-  const [lastShelfMove, setLastShelfMove] = useState<ShelfMove | null>(null);
+  const [detailMove, setDetailMove] = useState<DetailMove>();
+  useEffect(() => {
+    if (!detailMove || detailMove.undoing) return;
+    const timer = window.setTimeout(() => setDetailMove(current => current === detailMove ? undefined : current),
+      Math.max(0, Date.parse(detailMove.expiresAt) - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [detailMove]);
   const [showSettings, setShowSettings] = useState(false);
   const [discogsConfigured, setDiscogsConfigured] = useState<boolean | null>(null);
   const [discogsCheckFailed, setDiscogsCheckFailed] = useState(false);
@@ -291,7 +317,6 @@ function App() {
   const catalogHeading = useRef<HTMLHeadingElement>(null);
   const savedHeading = useRef<HTMLHeadingElement>(null);
   const activeShelfButton = useRef<HTMLButtonElement>(null);
-  const undoButton = useRef<HTMLButtonElement>(null);
   const removalHistory = useRef<RemovalHistoryHandle>(null);
 
   const viewMode = shelfRequest.view;
@@ -641,11 +666,24 @@ function App() {
     }
   };
 
-  const confirmSavedPressing: SavePressing = (copy, releaseId) =>
-    updateSavedPressing(copy.id, () => api.updatePressing(copy.id, releaseId, copy.discogs_id ?? null));
+  const confirmSavedPressing: SavePressing = async (copy, releaseId) => {
+    const result = await updateSavedPressing(copy.id, () => api.updatePressing(copy.id, releaseId, copy.discogs_id ?? null));
+    if (result.expiresAt) removalHistory.current?.recordPressing(result.album, result);
+    return result;
+  };
 
-  const undoSavedPressing: UndoPressing = async (copy, undoToken) =>
-    (await updateSavedPressing(copy.id, () => api.undoPressing(copy.id, undoToken))).album;
+  const undoSavedPressing: UndoPressing = async (copy, undoToken) => {
+    try {
+      const { album } = await updateSavedPressing(copy.id, () => api.undoPressing(copy.id, undoToken));
+      removalHistory.current?.forgetPressing(copy.id, undoToken);
+      return album;
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 400 || error.status === 404 || error.status === 409)) {
+        removalHistory.current?.forgetPressing(copy.id, undoToken);
+      }
+      throw error;
+    }
+  };
 
   const closeAlbumReview = () => {
     albumReviewRequest.current?.abort();
@@ -748,24 +786,25 @@ function App() {
       : current);
   };
 
-  const moveRecord = async ({ albumId, title, from, to }: ShelfMove, undoOf?: ShelfMove) => {
+  const reflectShelfMove = (albumId: number, to: Shelf) => {
+    excludeFromShelf(albumId, to);
+    updateSearchMembership(albumId, to);
+    if (showBarcodeScanner || showImageUploader) setLookupShelfEdits(current => ({ ...current, [albumId]: to }));
+  };
+
+  const moveRecord = async (move: ShelfMove, stayInDetails = false) => {
+    const { albumId, from, to } = move;
+    let receipt: Awaited<ReturnType<typeof api.updateStatus>> | undefined;
     const saved = await saveRecord(savedAlbumKey(albumId), to === 'collection' ? 'move' : 'wishlist', async () => {
-      await api.updateStatus(albumId, to, from);
-      excludeFromShelf(albumId, to);
-      updateSearchMembership(albumId, to);
-      if (showBarcodeScanner || showImageUploader) {
-        setLookupShelfEdits(current => ({ ...current, [albumId]: to }));
-      }
+      receipt = await api.updateStatus(albumId, to, from);
+      reflectShelfMove(albumId, to);
     }, albumId);
     if (!saved) return false;
 
-    if (undoOf) {
-      setLastShelfMove(current => current === undoOf ? null : current);
-      toast.success(`“${title}” moved back to ${shelfLabel[to]}.`);
-      if (undoButton.current?.ownerDocument.activeElement === undoButton.current && undoButton.current) focusSearch();
-    } else {
-      setLastShelfMove({ albumId, title, from, to });
-    }
+    removalHistory.current?.recordMove(move, receipt);
+    const expiresAt = receipt?.expiresAt;
+    setDetailMove(current => stayInDetails && expiresAt ? { ...move, expiresAt }
+      : current?.albumId === albumId ? undefined : current);
     return true;
   };
 
@@ -780,14 +819,11 @@ function App() {
 
   const moveScannedAlbum = async (albumId: number, title: string) => {
     const moved = await moveLookupAlbum(albumId, title);
-    if (moved) window.requestAnimationFrame(() => undoButton.current?.focus());
+    if (moved) window.requestAnimationFrame(() => removalHistory.current?.focusMove(albumId));
     return moved;
   };
 
-  const undoShelfMove = (albumId: number) => {
-    if (lastShelfMove?.albumId !== albumId) return Promise.resolve(false);
-    return moveRecord({ ...lastShelfMove, from: lastShelfMove.to, to: lastShelfMove.from }, lastShelfMove);
-  };
+  const undoShelfMove = (albumId: number) => removalHistory.current?.undoMove(albumId) ?? Promise.resolve(false);
 
   const openManualEntry = () => setManualEntry({
     draft: searchActive && searchScope !== 'catalog-number' ? draftForSearch(searchQuery, detectedDraft) : {},
@@ -798,10 +834,13 @@ function App() {
     albumDetailOpener.current = opener ?? null;
     setDetailBackToMatches(backToMatches);
     setRestoredDetailShelf(undefined);
+    setDetailMove(undefined);
     setSelectedAlbum(album);
   };
 
   const forgetSavedCopy = (albumId: number) => {
+    removalHistory.current?.forgetAlbumChanges(albumId);
+    setDetailMove(current => current?.albumId === albumId ? undefined : current);
     if (showBarcodeScanner || showImageUploader) {
       setLookupShelfEdits(current => ({ ...current, [albumId]: null }));
     }
@@ -828,7 +867,6 @@ function App() {
   const pressingCopyRemoved = (albumId: number) => {
     forgetSavedCopy(albumId);
     setAlbumReview(current => current?.album.id === albumId ? { ...current, removed: true } : current);
-    setLastShelfMove(current => current?.albumId === albumId ? null : current);
     refreshShelf();
   };
 
@@ -852,7 +890,7 @@ function App() {
       else showAlbumDetails(album, opener, fromLookup);
       if (issueKey || saveErrors[savedAlbumKey(albumId)]?.stale) {
         setAlbumToRemove(current => current?.id === albumId ? null : current);
-        setLastShelfMove(current => current?.albumId === albumId ? null : current);
+        setDetailMove(current => current?.albumId === albumId ? undefined : current);
         setSaveErrors(current => ({ ...current, [issueKey ?? savedAlbumKey(albumId)]: undefined }));
         refreshLibrary();
       }
@@ -861,7 +899,6 @@ function App() {
       const missing = error instanceof Error && 'status' in error && error.status === 404;
       if (fromLookup && missing) {
         forgetSavedCopy(albumId);
-        setLastShelfMove(current => current?.albumId === albumId ? null : current);
         refreshShelf();
         if (!inlineError) toast.error('This album is no longer saved.');
         return 'removed';
@@ -869,7 +906,7 @@ function App() {
       if (issueKey && missing) {
         setAlbumToRemove(current => current?.id === albumId ? null : current);
         setSelectedAlbum(current => current?.id === albumId ? null : current);
-        setLastShelfMove(current => current?.albumId === albumId ? null : current);
+        forgetSavedCopy(albumId);
         setSaveErrors(current => ({ ...current, [issueKey]: undefined }));
         refreshLibrary();
         toast.error('This album is no longer saved.');
@@ -890,7 +927,7 @@ function App() {
   const moveAlbum = async (album: Album, button: HTMLButtonElement, fromDetails: boolean) => {
     const hadFocus = button.ownerDocument.activeElement === button;
     const to = album.status === 'collection' ? 'wishlist' : 'collection';
-    const saved = await moveRecord({ albumId: album.id, title: album.title, from: album.status, to });
+    const saved = await moveRecord({ albumId: album.id, title: album.title, from: album.status, to }, fromDetails && detailBackToMatches);
     if (!saved) return;
 
     if (fromDetails && detailBackToMatches) {
@@ -901,14 +938,18 @@ function App() {
     if (fromDetails) setSelectedAlbum(current => current?.id === album.id ? null : current);
     if (hadFocus || fromDetails) {
       window.requestAnimationFrame(() => {
-        undoButton.current?.focus();
+        removalHistory.current?.focusMove(album.id);
       });
     }
   };
 
-  const undoDetailMove = async (move: ShelfMove) => {
-    if (!await undoShelfMove(move.albumId)) return;
-    setSelectedAlbum(current => current?.id === move.albumId ? { ...current, status: move.from } : current);
+  const undoDetailMove = async (move: DetailMove) => {
+    if (move.undoing) return;
+    setDetailMove({ ...move, undoing: true, issue: undefined });
+    if (!await undoShelfMove(move.albumId)) {
+      setDetailMove(current => current?.albumId === move.albumId ? { ...current, undoing: false, issue: 'Couldn’t undo this move. Check Recent library changes after closing this album.' } : current);
+      return;
+    }
     setRestoredDetailShelf(move.from);
     window.requestAnimationFrame(() => restoredDetailNotice.current?.focus({ preventScroll: true }));
   };
@@ -929,7 +970,6 @@ function App() {
 
     setAlbumToRemove(null);
     setSelectedAlbum(current => current?.id === album.id ? null : current);
-    setLastShelfMove(current => current?.albumId === album.id ? null : current);
     removalHistory.current?.recordRemoval(album, receipt);
   };
 
@@ -937,10 +977,12 @@ function App() {
   const catalogResults = catalogState.status === 'ready' ? catalogState.results : null;
   const savedCount = results?.local.length ?? 0;
   const catalogCount = catalogResults?.discogs.length ?? 0;
+  const hasNewCatalogAlbums = catalogResults?.discogs.some(album => !album.inCollection && !album.inWishlist);
   const queryLength = searchQuery.trim().length;
   const searchActive = queryLength >= 2;
   const catalogActive = searchesCatalog(searchScope);
   const numberSearch = searchScope === 'catalog-number';
+  const numberShelfMatches = numberSearch && catalogResults ? savedCatalogNumberMatches(catalogResults.discogs) : [];
   const continueOnline = addingByName && !catalogActive;
   const catalogUnavailable = catalogState.status === 'error' || !!catalogResults?.errors?.length;
   const pressingReviewIssue = pressingReview && saveErrors[catalogKey(pressingReview.album)];
@@ -995,11 +1037,11 @@ function App() {
                 onMove={moveAlbum} onRemove={startRemoval} onOpenIssue={openSaveIssue} />
             </div>
             {searchActive && canCompare && <button type="button" className="rh-lookup-link rh-saved-compare"
-              aria-label={`Review pressings for your saved ${album.title}`} aria-haspopup="dialog" disabled={!!pending}
+              aria-label={`Review for saved ${album.title}`} aria-haspopup="dialog" disabled={!!pending}
               onClick={event => {
                 albumReviewOpener.current = event.currentTarget;
                 setAlbumReview({ album, status: 'ready', choices: availablePressings });
-              }}>Review pressings</button>}
+              }}>Review for saved album</button>}
           </article>
         );
       })}
@@ -1007,18 +1049,12 @@ function App() {
   );
 
   const renderContinuation = (kind: ResultKind, data: SearchResult) => {
-    const count = kind === 'saved' ? data.local.length : data.discogs.length;
     const more = data.nextOffset;
     const state = loadingMore[kind];
     const label = kind === 'saved' ? 'saved albums' : 'catalog albums';
-    if (kind === 'saved' && more === undefined && state !== 'error') return null;
+    if (more === undefined && state !== 'error') return null;
     return (
       <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-gray-600">
-        {kind === 'catalog' && (
-          <p role="status">{more !== undefined ? `Showing the first ${count} catalog matches. More are available.` : `Showing ${count} catalog ${count === 1 ? 'match' : 'matches'}.`}
-            {data.catalogSampled && more === undefined && ' Refine your search for more catalog matches.'}
-          </p>
-        )}
         {more !== undefined && (
           <button type="button" className={secondaryButton} aria-disabled={state === 'pending' || (kind === 'saved' ? savedLoading : catalogLoading)}
             onClick={event => void loadMore(kind, data, more, event?.currentTarget)}>
@@ -1119,6 +1155,7 @@ function App() {
                   type="text"
                   enterKeyHint="search"
                   aria-keyshortcuts="Alt+Shift+F"
+                  aria-describedby={numberSearch ? 'number-lookup-source' : undefined}
                   className={`w-full border px-2 py-2 sm:px-3 ${searchQuery ? 'pr-11 sm:pr-12' : ''}`}
                   placeholder={numberSearch ? 'Number on the sleeve or label' : 'Album title or artist name'}
                   value={searchQuery}
@@ -1141,11 +1178,11 @@ function App() {
                   </button>
                 )}
               </div>
-              <button type="submit" className={`${secondaryButton} min-w-11 disabled:opacity-60`} aria-label="Search" disabled={!searchActive}>
+              <button type="submit" className={`${secondaryButton} min-w-11 disabled:opacity-60`} aria-label={numberSearch ? 'Look up in Discogs' : 'Search'} disabled={!searchActive}>
                 <svg aria-hidden="true" className="mx-auto size-4.5 sm:hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeWidth={2} d="m21 21-4.35-4.35M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" />
                 </svg>
-                <span className="hidden sm:inline">Search</span>
+                <span className="hidden sm:inline">{numberSearch ? 'Look up in Discogs' : 'Search'}</span>
               </button>
             </div>
             {!numberSearch && <div className="rh-search-scope flex flex-wrap items-center gap-x-2">
@@ -1162,6 +1199,7 @@ function App() {
                 <option value="catalog">Shelves and online catalogs</option>
               </select>
             </div>}
+            {numberSearch && <p className="rh-number-scope text-xs text-gray-600" id="number-lookup-source">Looks up numbers in Discogs</p>}
               <button
                 type="button"
                 className={`${continueOnline ? secondaryButton : 'rh-primary-action'} rh-add-trigger flex shrink-0 items-center justify-center gap-1 px-2.5 py-2 text-sm font-semibold sm:gap-2 sm:px-4`}
@@ -1191,39 +1229,16 @@ function App() {
           viewMode={viewMode}
         />
 
-        <RemovalHistory ref={removalHistory} onRestored={() => refreshLibrary()} fallbackFocus={searchInput} />
-
-        {lastShelfMove && (
-          <aside className="mb-4 rounded-xl border border-gray-300 bg-white p-3" aria-label="Latest shelf move">
-            <p role="status" className="text-sm font-medium [overflow-wrap:anywhere]">
-              “{lastShelfMove.title}” moved to {shelfLabel[lastShelfMove.to]}.
-            </p>
-            <SaveIssueNotice issue={saveErrors[savedAlbumKey(lastShelfMove.albumId)]} issueKey={savedAlbumKey(lastShelfMove.albumId)} loadingAlbumId={loadingAlbumId} onOpen={openSaveIssue} />
-            <div className="mt-2 flex items-center gap-2">
-              <button
-                ref={undoButton}
-                type="button"
-                className={secondaryButton}
-                aria-disabled={!!pendingSaves[savedAlbumKey(lastShelfMove.albumId)] || !!saveErrors[savedAlbumKey(lastShelfMove.albumId)]?.stale}
-                aria-busy={!!pendingSaves[savedAlbumKey(lastShelfMove.albumId)]}
-                onClick={() => void undoShelfMove(lastShelfMove.albumId)}
-              >
-                {pendingSaves[savedAlbumKey(lastShelfMove.albumId)] ? 'Undoing…' : 'Undo'}
-              </button>
-              <button
-                type="button"
-                aria-label="Dismiss shelf move"
-                className="min-h-11 rounded-lg px-3 text-sm text-gray-600 hover:bg-gray-100"
-                onClick={() => {
-                  setLastShelfMove(null);
-                  focusSearch();
-                }}
-              >
-                Dismiss
-              </button>
-            </div>
-          </aside>
-        )}
+        <RemovalHistory ref={removalHistory} onRestored={refreshLibrary} fallbackFocus={searchInput}
+          onMovedBack={album => {
+            reflectShelfMove(album.id, album.status);
+            setSelectedAlbum(current => current?.id === album.id ? { ...current, status: album.status } : current);
+            setDetailMove(current => current?.albumId === album.id ? undefined : current);
+            setSaveErrors(current => ({ ...current, [savedAlbumKey(album.id)]: undefined }));
+            refreshLibrary();
+          }}
+          onPressingUndone={reflectSavedPressing}
+          onExternalChange={() => refreshLibrary()} />
 
         <div role="status" className="text-sm text-gray-600" aria-atomic="true">
           {queryLength === 1 && <p className="mb-4">Enter at least two characters to search.</p>}
@@ -1241,13 +1256,15 @@ function App() {
                 window.requestAnimationFrame(() => activeShelfButton.current?.focus());
               }}>Back to {shelfLabel[viewMode]}</button>
               {searchScope === 'catalog' && <a href="#saved-results-title">Saved</a>}
-              {catalogActive && <a href="#catalog-results-title">Catalogs</a>}
+              {numberShelfMatches.length > 0 && <a href="#number-saved-results-title">On your shelves</a>}
+              {catalogActive && <a href="#catalog-results-title">{numberSearch ? 'Discogs' : 'Catalogs'}</a>}
             </nav>}
             <details className="rh-search-tips">
               <summary aria-label="Search tips"><span className="hidden sm:inline">Search </span>Tips</summary>
               <div>
-                <p>Use Search in to choose a shelf or include online catalogs. Name searches keep that choice when you open them from Add.</p>
-                <p>Look up a catalog number printed on the sleeve or label. Check the format and year before saving a pressing.</p>
+                <p>Use Search in to choose shelves or online catalogs for name searches. Catalog-number lookup searches Discogs.</p>
+                <p>Find the catalog number on the sleeve or label. Check the label, format, and year before confirming an exact release.</p>
+                <p>Each artist and title has one shelf entry. Save the album first if you still need to identify its pressing.</p>
                 <p className="rh-keyboard-tip">Focus search with <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd>.</p>
               </div>
             </details>
@@ -1288,12 +1305,44 @@ function App() {
             </section>
         )}
 
+        {searchActive && numberShelfMatches.length > 0 && (
+          <section className="rh-saved-section" aria-labelledby="number-saved-results-title">
+            <h2 id="number-saved-results-title" className="rh-result-heading mb-2 text-lg font-semibold">On your shelves</h2>
+            <ul className="rh-number-saved-list">
+              {numberShelfMatches.map(({ album, releaseNumberMatches }) => (
+                <li key={album.id}>
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-semibold [overflow-wrap:anywhere]">{album.title}</h3>
+                    <p className="text-xs text-gray-600">{album.artist_name} · {shelfLabel[album.status]}</p>
+                    <p className="text-xs text-gray-600">{releaseNumberMatches
+                      ? 'Discogs lists this number for your saved release.' : 'Same album on your shelf. Check which release you own.'}</p>
+                  </div>
+                  <button type="button" className="rh-lookup-link text-left" aria-label={`Open ${savedCopyLabel(album)}`}
+                    aria-haspopup="dialog" aria-disabled={loadingAlbumId === album.id}
+                    onClick={event => void inspectSavedAlbum(album.id, event.currentTarget)}>Open saved album</button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         {searchActive && catalogActive && (
           <section aria-labelledby="catalog-results-title">
             <div className={`rh-catalog-bar${catalogCount > 0 ? ' rh-catalog-bar-sticky' : ''}`}>
-              <h2 ref={catalogHeading} id="catalog-results-title" tabIndex={-1} className="rh-result-heading text-lg font-semibold">{numberSearch ? 'Discogs results' : 'Catalog albums'}</h2>
+              <div className="min-w-0">
+                <h2 ref={catalogHeading} id="catalog-results-title" tabIndex={-1} className="rh-result-heading text-lg font-semibold">{numberSearch ? 'Discogs results' : 'Catalog albums'}</h2>
+                {!!catalogCount && catalogResults && <p role="status" className="text-xs text-gray-600">
+                  {catalogResults.nextOffset !== undefined ? `Showing the first ${catalogCount} ${catalogCount === 1 ? 'match' : 'matches'}. More available.`
+                    : `${catalogCount} ${catalogCount === 1 ? 'match' : 'matches'}.`}
+                  {catalogResults.catalogSampled && catalogResults.nextOffset === undefined && ' Refine the search for more matches.'}
+                </p>}
+              </div>
+              {hasNewCatalogAlbums && <SaveShelfSelect label="Save new matches to" value={saveShelf} onChange={setSaveShelf} />}
             </div>
-            {catalogLoading && !catalogUnavailable && <p role="status" className="mb-3 text-sm text-gray-600">Searching catalogs…</p>}
+            {!!catalogCount && (numberSearch || hasNewCatalogAlbums) && <p className="rh-catalog-guidance text-sm text-gray-600">{numberSearch
+              ? 'Several releases can share a number. Compare the details on your copy before confirming a pressing.'
+              : 'You can save an album now and identify its pressing later.'}</p>}
+            {catalogLoading && !catalogUnavailable && <p role="status" className="mb-3 text-sm text-gray-600">{numberSearch ? 'Looking up the number in Discogs…' : 'Searching catalogs…'}</p>}
             {catalogUnavailable && (
               <div className="rh-search-recovery mb-3">
                 <p role="status" className="text-sm">{catalogLoading ? 'Retrying catalogs…' : catalogCount > 0
@@ -1341,13 +1390,14 @@ function App() {
                           <h3 id={catalogResultTarget(album)} tabIndex={-1} className="rh-result-heading text-sm font-semibold">{album.album}</h3>
                           <p className="mt-0.5 text-xs text-gray-600">{album.artist}{album.year ? ` · ${album.year}` : ''}</p>
                           <p className="rh-catalog-edition">{source?.kind === 'pressing' ? pressingLabel || `Discogs release ${album.discogsId}` : listingEvidence(source)}</p>
-                          {album.catalogNumberMatch === 'exact' && <p className="text-xs text-gray-600">Catalog number matches</p>}
-                          {album.catalogNumberMatch === 'unverified' && <p className="text-xs text-gray-600">Check the catalog number on the listing</p>}
+                          {album.catalogNumberMatch === 'exact' && <p className="text-xs text-gray-600">Discogs lists this catalog number</p>}
+                          {album.catalogNumberMatch === 'unverified' && <p className="text-xs text-gray-600">Catalog number unverified</p>}
                         </div>
                         <div className="rh-catalog-actions grid gap-1.5">
                           {(saveErrors[saveKey]?.albumId === undefined || savedShelf) && <SaveDestinationActions
                             albumTitle={album.album}
                             catalogLabel={catalogLabel}
+                            sharedDestination
                             preferred={saveShelf}
                             existingStatus={savedShelf}
                             existingMatch={album.existingMatch}
@@ -1447,6 +1497,10 @@ function App() {
             setShowAddMenu(false);
             openManualEntry();
           }}
+          onResumeManualClick={resumeDraft => {
+            setShowAddMenu(false);
+            setManualEntry({ draft: {}, shelf: resumeDraft.shelf, resumeDraft });
+          }}
           onImportClick={() => {
             setShowAddMenu(false);
             setShowDiscogsImporter(true);
@@ -1459,13 +1513,10 @@ function App() {
       )}
 
       {manualEntry && (
-        <ManualAlbumDialog draft={manualEntry.draft} initialShelf={manualEntry.shelf}
+        <ManualAlbumDialog draft={manualEntry.draft} initialShelf={manualEntry.shelf} resumeDraft={manualEntry.resumeDraft}
           onClose={() => setManualEntry(undefined)}
-          onSaved={() => {
-            setManualEntry(undefined);
-            refreshLibrary();
-          }}
-          onOpenSaved={async id => { await openSavedAlbum(id, { closeLookup: () => setManualEntry(undefined) }); }}
+          onSaved={refreshLibrary}
+          onOpenSaved={async (id, opener) => { await openSavedAlbum(id, { opener, closeLookup: () => setManualEntry(undefined) }); }}
         />
       )}
 
@@ -1480,9 +1531,9 @@ function App() {
           onSave={saveReviewedAlbum} onSaveWithoutPressing={() => saveReviewedAlbum()} />
       )}
 
-      {showSettings && <SettingsModal restoreBlocked={discogsImporting} onClose={() => setShowSettings(false)} onRestore={() => {
-        setLastShelfMove(null);
-        removalHistory.current?.clear();
+      {showSettings && <SettingsModal restoreBlocked={discogsImporting} onClose={() => setShowSettings(false)} onRestore={restoredAt => {
+        setDetailMove(undefined);
+        removalHistory.current?.clear(restoredAt);
         setArtworkRevisions({});
         setLibraryArtworkRevision(Date.now());
         setShelfResult(null);
@@ -1556,14 +1607,13 @@ function App() {
           }}
           onRefresh={refreshLibrary}
           shelfActions={<div className="grid gap-3">
-            {detailBackToMatches && lastShelfMove?.albumId === selectedAlbum.id && (
+            {detailBackToMatches && detailMove?.albumId === selectedAlbum.id && (
               <div className="rh-detail-move-feedback">
-                <p role="status" className="text-sm font-medium">Moved to {shelfLabel[lastShelfMove.to]}.</p>
+                <p role="status" className="text-sm font-medium">Moved to {shelfLabel[detailMove.to]}.</p>
+                {detailMove.issue && <p role="alert" className="text-sm text-red-600">{detailMove.issue}</p>}
                 <button type="button" className="rh-lookup-link"
-                  aria-disabled={!!pendingSaves[savedAlbumKey(selectedAlbum.id)] || !!saveErrors[savedAlbumKey(selectedAlbum.id)]?.stale}
-                  aria-busy={!!pendingSaves[savedAlbumKey(selectedAlbum.id)]}
-                  onClick={() => void undoDetailMove(lastShelfMove)}>
-                  {pendingSaves[savedAlbumKey(selectedAlbum.id)] ? 'Undoing…' : 'Undo move'}
+                  aria-disabled={detailMove.undoing} aria-busy={detailMove.undoing} onClick={() => void undoDetailMove(detailMove)}>
+                  {detailMove.undoing ? 'Undoing…' : 'Undo move'}
                 </button>
               </div>
             )}
@@ -1608,7 +1658,7 @@ function App() {
           <div className="rh-dialog-panel max-w-md p-4 sm:p-6">
             <h2 id="album-removal-title" className="text-lg font-semibold">Remove from {shelfLabel[albumToRemove.status]}?</h2>
             <p className="mt-2 text-sm text-gray-600 [overflow-wrap:anywhere]">
-              “{albumToRemove.title}” and any notes saved with it will be removed from your {shelfLabel[albumToRemove.status]}. You can undo this for 10 minutes.
+              “{albumToRemove.title}” and its notes will leave {shelfLabel[albumToRemove.status]}. You can undo the removal in Recent library changes in this browser for 10 minutes.
             </p>
             <div className="mt-3"><SaveIssueNotice issue={saveErrors[savedAlbumKey(albumToRemove.id)]} issueKey={savedAlbumKey(albumToRemove.id)} loadingAlbumId={loadingAlbumId} onOpen={openSaveIssue} /></div>
             <div className="mt-4 flex flex-wrap justify-end gap-2">

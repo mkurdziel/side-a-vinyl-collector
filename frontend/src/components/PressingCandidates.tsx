@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { discogsReleaseSource } from '../albumDisplay';
 import {
+  catalogNumberKey,
   concisePressingValue,
   createPressingDetailsLoader,
+  matchesPressingMedium,
   preferredCatalogNumber,
+  pressingFormatFacts,
   pressingMedia,
   sharedCatalogNumber,
   summarizePressingFormat,
@@ -31,7 +34,11 @@ interface Props {
   onSelect: (id: number) => void;
   searchedNumber?: string;
   savedReleaseId?: number;
+  savedEvidence?: PressingDetails;
+  savedEvidenceState?: 'pending' | 'unavailable';
   disabled?: boolean;
+  medium?: string;
+  onMediumChange: (medium: string) => void;
   loadDetails?: LoadPressingDetails;
   onReadEvidence?: (releaseId: number, details: PressingDetails) => void;
   uncertainAction?: string;
@@ -66,8 +73,80 @@ function candidateLabel(choice: PressingCandidate, searchedNumber: string | unde
 
 function differingFields(choices: readonly PressingCandidate[]) {
   return new Set(optionFields.filter(field => (
-    new Set(choices.map(choice => choiceField(choice, field).toLowerCase()).filter(Boolean)).size > 1
+    field === 'format'
+      ? (['format', 'size', 'type', 'mix', 'speed'] as const).some(key => hasKnownDifference(choices.map(choice => pressingFormatFacts(choiceField(choice, field))[key])))
+      : hasKnownDifference(choices.map(choice => choiceField(choice, field)))
   )));
+}
+
+function hasKnownDifference(values: readonly string[]) {
+  return new Set(values.map(value => value.toLowerCase()).filter(Boolean)).size > 1;
+}
+
+const comparisonFacts = [
+  { label: 'Format', read: (choice: PressingCandidate) => pressingFormatFacts(choiceField(choice, 'format')).format },
+  { label: 'Mix', read: (choice: PressingCandidate) => pressingFormatFacts(choiceField(choice, 'format')).mix },
+  { label: 'Size', read: (choice: PressingCandidate) => pressingFormatFacts(choiceField(choice, 'format')).size },
+  { label: 'Record type', read: (choice: PressingCandidate) => pressingFormatFacts(choiceField(choice, 'format')).type },
+  { label: 'Speed', read: (choice: PressingCandidate) => pressingFormatFacts(choiceField(choice, 'format')).speed },
+  { label: 'Label', read: (choice: PressingCandidate) => summaryField(choice, 'label') },
+  { label: 'Country', read: (choice: PressingCandidate) => choiceField(choice, 'country') },
+  { label: 'Year', read: (choice: PressingCandidate) => choiceField(choice, 'year') },
+  { label: 'Catalog no.', read: candidateNumber, compare: catalogNumberKey },
+];
+
+function comparisonRows(left: PressingCandidate, right: PressingCandidate, searchedNumber?: string) {
+  return comparisonFacts.map(({ label, read, compare }) => {
+    const values = [read(left, searchedNumber), read(right, searchedNumber)];
+    const differs = hasKnownDifference(compare ? values.map(compare) : values);
+    return { label, values, differs };
+  }).filter(({ values }) => values.some(Boolean));
+}
+
+function firstAlternative(first: PressingCandidate, choices: readonly PressingCandidate[], searchedNumber?: string) {
+  const number = preferredCatalogNumber(choiceField(first, 'catalogNumber'), searchedNumber);
+  const media = pressingMedia(choiceField(first, 'format'));
+  const options = choices.filter(choice => choice.releaseId !== first.releaseId);
+  const withSharedNumber = options.filter(choice => number &&
+    catalogNumberKey(preferredCatalogNumber(choiceField(choice, 'catalogNumber'), searchedNumber) ?? '') === catalogNumberKey(number));
+  const related = withSharedNumber.length ? withSharedNumber : options;
+  const sameMedium = related.filter(choice => pressingMedia(choiceField(choice, 'format')).some(value => media.includes(value)));
+  const comparable = sameMedium.length ? sameMedium : related;
+  return comparable.find(choice => comparisonRows(first, choice, searchedNumber).some(row => row.differs)) ?? comparable[0];
+}
+
+function FirstComparison({ left, right, savedReleaseId, savedEvidenceState, searchedNumber }: {
+  left: PressingCandidate;
+  right: PressingCandidate;
+  savedReleaseId?: number;
+  savedEvidenceState?: 'pending' | 'unavailable';
+  searchedNumber?: string;
+}) {
+  const facts = comparisonRows(left, right, searchedNumber);
+  if (!facts.length) return null;
+
+  // Keep true differences first. A missing value is only worth an early row when it helps explain an uncertain match.
+  const priority = [...facts.filter(fact => fact.differs), ...facts.filter(fact => !fact.differs && fact.values.every(Boolean)),
+    ...facts.filter(fact => fact.values.some(value => !value))];
+  const importantMissing = facts.find(fact => fact.values.some(value => !value) && fact.label !== 'Year');
+  const rows = priority.slice(0, 3);
+  if (importantMissing && !rows.includes(importantMissing) && !rows[2]?.differs) rows[2] = importantMissing;
+
+  return <table className="rh-pressing-table rh-pressing-preview">
+    <caption className="sr-only">{left.releaseId === savedReleaseId ? 'Saved pressing and catalog alternative' : 'Compare two catalog pressings'}</caption>
+    <thead><tr>
+      <th scope="col">Evidence</th>
+      {[left, right].map(choice => <th key={choice.releaseId} scope="col">
+        {choice.releaseId === savedReleaseId ? 'Saved pressing' : 'Discogs'} <span className="font-normal">{choice.releaseId}</span>
+      </th>)}
+    </tr></thead>
+    <tbody>{rows.map(({ label, values, differs }) => <tr key={label} className={differs ? 'rh-evidence-priority' : undefined}>
+      <th scope="row">{label}</th>
+      {values.map((value, index) => <td key={index} className={value ? undefined : 'text-gray-600'}>
+        {value || (index === 0 && savedEvidenceState ? (savedEvidenceState === 'pending' ? 'Checking…' : 'Unavailable') : 'Unlisted')}
+      </td>)}
+    </tr>)}</tbody>
+  </table>;
 }
 
 function PressingFacts({ choice, varying, formats, searchedNumber, compact }: {
@@ -244,7 +323,8 @@ function MissingRunouts({ choices, uncertainAction }: { choices: readonly Pressi
 }
 
 export function PressingCandidates({
-  choices, selectedId, onSelect, searchedNumber, savedReleaseId, disabled, loadDetails, onReadEvidence,
+  choices, selectedId, onSelect, searchedNumber, savedReleaseId, savedEvidence, savedEvidenceState, disabled, loadDetails, onReadEvidence,
+  medium = '', onMediumChange,
   uncertainAction = 'If you’re unsure, go back without choosing a pressing.',
 }: Props) {
   const name = useId();
@@ -257,8 +337,8 @@ export function PressingCandidates({
   const runoutToggle = useRef<HTMLButtonElement>(null);
   const pageNotice = useRef<HTMLParagraphElement>(null);
   const [checkingRunouts, setCheckingRunouts] = useState(false);
+  const [showListingTools, setShowListingTools] = useState(false);
   const [requestedPage, setRequestedPage] = useState(0);
-  const [requestedMedium, setRequestedMedium] = useState('');
   const [loadLocally] = useState(createPressingDetailsLoader);
   const [pinnedIds, setPinnedIds] = useState<number[]>([]);
   const [evidence, setEvidence] = useState<Partial<Record<number, EvidenceResult>>>({});
@@ -276,16 +356,16 @@ export function PressingCandidates({
   const formats = withDetails.map(choice => choiceField(choice, 'format'));
   const media = [...new Set(formats.flatMap(pressingMedia))];
   const allowPinning = withDetails.length > pageSize;
-  const offerMediaFilter = allowPinning && media.length > 1;
-  const medium = offerMediaFilter && media.includes(requestedMedium) ? requestedMedium : '';
-  const available = medium ? withDetails.filter(choice => pressingMedia(choiceField(choice, 'format')).includes(medium)) : withDetails;
+  const offerMediaFilter = !!medium || (allowPinning && media.length > 1);
+  const available = withDetails.filter(choice => matchesPressingMedium(choice, medium));
   const lastPage = Math.max(0, Math.ceil(available.length / pageSize) - 1);
   const page = Math.min(requestedPage, lastPage);
   const start = page * pageSize;
   const visible = available.slice(start, start + pageSize);
   const pinned = pinnedIds.flatMap(id => withDetails.filter(choice => choice.releaseId === id));
-  const selectedOffPage = withDetails.find(choice => choice.releaseId === selectedId &&
-    !visible.some(option => option.releaseId === selectedId) && !pinned.some(option => option.releaseId === selectedId));
+  const selection = withDetails.find(choice => choice.releaseId === selectedId);
+  const selectedOutsideMedia = selection && !matchesPressingMedium(selection, medium);
+  const selectedOffPage = selection && !selectedOutsideMedia && !visible.includes(selection) && !pinned.includes(selection);
   const requests = (checkingRunouts || pinned.length > 0) ? withDetails.filter(choice => (
     !choice.pressing?.matrixRunouts?.length && !evidence[choice.releaseId] &&
     (pinnedIds.includes(choice.releaseId) || (checkingRunouts && visible.includes(choice)))
@@ -299,6 +379,11 @@ export function PressingCandidates({
   const pinnedDifferences = differingFields(pinned);
   // Keep the warning based on the search listing. Detailed release lookups can add more label numbers.
   const shared = sharedCatalogNumber(unique, searchedNumber);
+  const savedChoice = withDetails.find(choice => choice.releaseId === savedReleaseId);
+  const saved = savedReleaseId === undefined ? undefined : withPressingEvidence(savedChoice ?? { releaseId: savedReleaseId }, savedEvidence, 'release');
+  const first = saved ?? visible[0];
+  const second = first && (selection && selection.releaseId !== first.releaseId && !selectedOutsideMedia
+    ? selection : firstAlternative(first, visible, searchedNumber));
 
   const goToPage = (next: number) => {
     setRequestedPage(next);
@@ -312,6 +397,15 @@ export function PressingCandidates({
   };
 
   const retry = (id: number) => setEvidence(current => ({ ...current, [id]: undefined }));
+  const changeMedium = (next: string) => {
+    onMediumChange(next);
+    setRequestedPage(0);
+  };
+  const showSelection = () => {
+    if (!selection) return;
+    onMediumChange('');
+    goToPage(Math.floor(withDetails.indexOf(selection) / pageSize));
+  };
 
   if (!unique.length) return null;
 
@@ -321,13 +415,12 @@ export function PressingCandidates({
       <legend className="text-sm font-semibold">Pressings from Discogs</legend>
       {requests.map(({ releaseId }) => <EvidenceRequest key={releaseId} releaseId={releaseId}
         loadDetails={loadDetails ?? loadLocally} onResult={recordEvidence} />)}
-      {(shared || showRunoutGuide) && (
-        <div id={guideId} className="space-y-1 text-sm text-gray-600">
-          {shared && <p><strong className="font-semibold text-gray-900">{shared.number} is shared by {shared.count} pressings in these results.</strong>
-            {' '}Check the label, country, format, and any runout markings before choosing.</p>}
-          {showRunoutGuide && <p>Look for etched or stamped characters in the smooth band between the last track and the center label.</p>}
-        </div>
-      )}
+      {first && second && <FirstComparison left={first} right={second} savedReleaseId={savedReleaseId}
+        savedEvidenceState={savedEvidenceState} searchedNumber={searchedNumber} />}
+      {(shared || showRunoutGuide) && <div id={guideId} className="space-y-1 text-xs text-gray-600">
+        {shared && <p>{shared.number} is shared by {shared.count} pressings in these results.</p>}
+        {showRunoutGuide && <p>Runouts are etched or stamped in the smooth band next to the center label.</p>}
+      </div>}
       {pinned.length > 0 && (
         <section aria-labelledby={shortlistId} className="min-w-0 space-y-2 border-y border-gray-200 py-2">
           <div>
@@ -340,15 +433,17 @@ export function PressingCandidates({
             {pinned.map(choice => {
               const { releaseId } = choice;
               const checked = releaseId === selectedId;
+              const outsideMedia = !matchesPressingMedium(choice, medium);
               return <li key={releaseId} className="grid min-w-0 content-start gap-1 border-t border-gray-200 px-2 py-2 text-sm">
                 <div><PressingFacts choice={choice} varying={pinnedDifferences} formats={formats} searchedNumber={searchedNumber} /></div>
                 {releaseId === savedReleaseId && <p className="text-gray-600">Your saved pressing</p>}
+                {outsideMedia && <p className="text-gray-600">Outside the {medium} filter</p>}
                 <PressingListingDetails choice={choice} />
                 {!pinnedMissing && <CandidateRunout choice={choice} result={evidence[releaseId]} onRetry={retry} disabled={disabled} />}
                 <div className="flex flex-wrap gap-x-1">
-                  <button type="button" className="rh-lookup-link -ml-2 text-left aria-disabled:opacity-60" aria-disabled={checked}
+                  <button type="button" className="rh-lookup-link -ml-2 text-left aria-disabled:opacity-60" aria-disabled={checked || outsideMedia}
                     aria-label={`${checked ? 'Selected pressing' : 'Select pressing'} · ${candidateLabel(choice, searchedNumber, formats)}`}
-                    onClick={() => { if (!checked) onSelect(releaseId); }}>
+                    onClick={() => { if (!checked && !outsideMedia) onSelect(releaseId); }}>
                     {checked ? 'Selected pressing' : 'Select pressing'}
                   </button>
                   <button type="button" className="rh-lookup-link" aria-label={`Unpin pressing · ${candidateLabel(choice, searchedNumber, formats)}`}
@@ -363,13 +458,13 @@ export function PressingCandidates({
           {pinnedMissing && <MissingRunouts choices={pinned} uncertainAction={uncertainAction} />}
         </section>
       )}
-      {selectedOffPage && <PressingSelectionSummary choice={selectedOffPage} formats={formats} searchedNumber={searchedNumber} />}
+      {selectedOffPage && <PressingSelectionSummary choice={selection} formats={formats} searchedNumber={searchedNumber} />}
       <div className="flex flex-wrap items-center gap-x-3">
         {offerMediaFilter && <div className="flex flex-wrap items-center gap-x-2 text-sm text-gray-600">
           <label htmlFor={mediumId}>Media</label>
           <select id={mediumId} value={medium} aria-controls={candidatesId}
             className="min-h-11 max-w-full rounded-lg border border-gray-300 px-2"
-            onChange={event => { setRequestedMedium(event.target.value); setRequestedPage(0); }}>
+            onChange={event => changeMedium(event.target.value)}>
             <option value="">All media</option>
             {media.map(name => <option key={name} value={name}>{name}</option>)}
           </select>
@@ -378,11 +473,16 @@ export function PressingCandidates({
           onClick={() => setCheckingRunouts(current => !current)}>
           {checkingRunouts ? 'Hide runout markings' : available.length > 1 ? 'Compare runout markings' : 'Check runout markings'}
         </button>
+        <button type="button" className="rh-lookup-link -ml-2 text-left" aria-expanded={showListingTools} aria-controls={candidatesId}
+          onClick={() => setShowListingTools(current => !current)}>
+          {showListingTools ? (allowPinning ? 'Hide listing details and pins' : 'Hide listing details') : (allowPinning ? 'Listing details and pins' : 'Listing details')}
+        </button>
       </div>
+      {selectedOutsideMedia && <button type="button" className="rh-lookup-link -ml-2 text-left" onClick={showSelection}>Show selected pressing in All media</button>}
       {(allowPinning || medium) && (
         <div>
           <div className="flex flex-wrap items-center gap-x-2 text-sm">
-            <p ref={pageNotice} role="status" tabIndex={-1} className="mr-auto text-gray-600">
+            <p ref={pageNotice} role="status" tabIndex={-1} className="mr-auto text-xs text-gray-600">
               {lastPage > 0
                 ? `Pressings ${start + 1}–${start + visible.length} of ${available.length}`
                 : `${available.length} ${medium ? `${medium} ` : ''}${available.length === 1 ? 'pressing' : 'pressings'}`}
@@ -390,7 +490,7 @@ export function PressingCandidates({
             {page > 0 && <button type="button" className="rh-lookup-link" onClick={() => goToPage(page - 1)}>Previous pressings</button>}
             {page < lastPage && <button type="button" className="rh-lookup-link" onClick={() => goToPage(page + 1)}>More pressings</button>}
           </div>
-          {!pinned.length && <p id={pinHintId} className="text-sm text-gray-600">Pin up to two pressings to compare across pages.</p>}
+          {showListingTools && !pinned.length && <p id={pinHintId} className="text-xs text-gray-600">Pin up to two pressings to compare across pages.</p>}
         </div>
       )}
       <ul id={candidatesId} className={`min-w-0 divide-y divide-gray-200 border-y border-gray-200 ${compareGrid
@@ -413,13 +513,13 @@ export function PressingCandidates({
                     {choice.catalogNumberMatch === 'unverified' && <span className="block text-gray-600">Check the number on the listing.</span>}
                   </span>
                 </label>
-                <div className={`flex min-w-0 flex-wrap items-center gap-x-1 px-2 ${checkingRunouts ? '' : 'sm:max-w-64 sm:justify-end'}`}>
+                {showListingTools && <div className={`flex min-w-0 flex-wrap items-center gap-x-1 px-2 ${checkingRunouts ? '' : 'sm:max-w-64 sm:justify-end'}`}>
                   {allowPinning && <button type="button" className="rh-lookup-link aria-disabled:opacity-60"
                     aria-label={`${isPinned ? 'Unpin pressing' : 'Pin for comparison'} · ${candidateLabel(choice, searchedNumber, formats)}`}
                     aria-describedby={pinHintId} aria-disabled={!isPinned && pinned.length >= pinLimit}
                     onClick={() => togglePin(releaseId)}>{isPinned ? 'Unpin' : 'Pin'}</button>}
                   <PressingListingDetails choice={choice} />
-                </div>
+                </div>}
               </div>
               {checkingRunouts && !isPinned && !visibleMissing && <CandidateRunout choice={choice} result={evidence[releaseId]} onRetry={retry} disabled={disabled} />}
             </li>
