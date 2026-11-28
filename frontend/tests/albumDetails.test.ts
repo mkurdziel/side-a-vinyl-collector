@@ -138,6 +138,7 @@ describe('pressing comparison evidence', () => {
 
     await act(async () => pending.reject(new Error('Offline')));
     expect(releaseStatuses()).toEqual(['Catalog match: Discogs details couldn’t load.', 'Saved copy: Discogs has no additional details.']);
+    expect(renderer!.root.findAllByType('summary').map(textOf)).toContain('Full pressing comparison · Details unavailable');
     expect(values('Label')).toEqual(['Unavailable', 'Unlisted']);
     await act(async () => renderer!.root.findByProps({ 'aria-label': 'Retry details for catalog match' }).props.onClick());
     expect(getPressingDetails.mock.calls.map(([id]) => id)).toEqual([410, 420, 410]);
@@ -272,11 +273,10 @@ describe('pressing comparison evidence', () => {
     expect(reviewEvidence.parent).toBe(actions.parent);
     expect(evidenceTable()).toBeDefined();
     const selectionSummary = actions.findByType(PressingSelectionSummary);
-    expect(selectionSummary.props).toMatchObject({ compact: true, choice: { releaseId: 430 } });
+    expect(selectionSummary.props).toMatchObject({ identityOnly: true, choice: { releaseId: 430 } });
     expect(textOf(selectionSummary)).toContain('Selected pressing');
     expect(button('Use this pressing').props['aria-describedby']).toBe(selectionSummary.props.id);
     expect(actions.findAllByType('button').map(textOf)).toContain('Keep current pressing');
-    expect(textOf(actions)).toContain('Confirmation records the exact Discogs release on your Collection entry.');
     await act(async () => button('Use this pressing').props.onClick());
     const confirmation = renderer!.root.findByProps({ role: 'group' });
     expect(textOf(confirmation)).toContain('Replace the pressing for Dummy in Collection?');
@@ -331,6 +331,9 @@ describe('pressing comparison evidence', () => {
     expect(button('Use this pressing')).toBeUndefined();
     const select = renderer!.root.findByType('select');
     await act(async () => select.props.onChange({ target: { value: '2' } }));
+    expect(radio(410).props.checked).toBe(false);
+    expect(button('Use this pressing')).toBeUndefined();
+    await act(async () => choose(410));
     await act(async () => button('Use this pressing').props.onClick());
     expect(textOf(renderer!.root.findByProps({ role: 'group' }))).toContain('Wishlist, saved record 2');
     await act(async () => select.props.onChange({ target: { value: '1' } }));
@@ -349,6 +352,8 @@ describe('pressing comparison evidence', () => {
       });
     });
     expect(textOf(renderer!.root.findByType('h2'))).toBe('Review pressings');
+    expect(button('Use this pressing')).toBeUndefined();
+    await act(async () => choose(410));
     await act(async () => button('Use this pressing').props.onClick());
     expect(button('Confirm pressing')).toBeDefined();
     await act(async () => escape());
@@ -367,6 +372,7 @@ describe('pressing comparison evidence', () => {
     const onSavePressing = vi.fn().mockReturnValueOnce(pending.promise);
     const render = (discogs_id: number) => createComparison([{ ...album, discogs_id }], { onSavePressing });
     await act(async () => { renderer = create(render(420)); });
+    await act(async () => choose(410));
     await act(async () => button('Use this pressing').props.onClick());
     await act(async () => button('Confirm pressing').props.onClick());
     await act(async () => {
@@ -390,6 +396,7 @@ describe('pressing comparison evidence', () => {
     const onClose = vi.fn();
     await act(async () => { renderer = create(createComparison([{ ...album, discogs_id }], { onSavePressing, onClose })); });
     expect(button(label)).toBeDefined();
+    await act(async () => choose(410));
     await act(async () => button('Use this pressing').props.onClick());
     expect(renderer!.root.findByProps({ role: 'group' }).findAllByType('button').map(textOf)).toContain(label);
     await act(async () => button(label).props.onClick());
@@ -408,6 +415,7 @@ describe('pressing comparison evidence', () => {
         createNodeMock: node => node.props.role === 'status' && !node.props.className ? { focus: outcomeFocus } : null,
       });
     });
+    await act(async () => choose(410));
     await act(async () => button('Use this pressing').props.onClick());
     await act(async () => button('Confirm pressing').props.onClick());
     expect(onSavedCopyRemoved).toHaveBeenCalledExactlyOnceWith(album.id);
@@ -429,6 +437,7 @@ describe('pressing comparison evidence', () => {
         createNodeMock: node => node.props.children === 'Back to results' ? { focus: returnFocus } : null,
       });
     });
+    await act(async () => choose(410));
     await act(async () => button('Use this pressing').props.onClick());
     await act(async () => button('Confirm pressing').props.onClick());
     await act(async () => button('Undo pressing change').props.onClick());
@@ -467,6 +476,34 @@ describe('saving a new catalog pressing', () => {
   });
   const button = (label: string) => renderer!.root.findAllByType('button').find(control => textOf(control) === label)!;
 
+  it('requires an explicit choice for one pressing and keeps retry and album-only save available', async () => {
+    const onSave = vi.fn().mockResolvedValue(true);
+    const onSaveWithoutPressing = vi.fn();
+    getPressingDetails.mockRejectedValueOnce(new Error('Offline')).mockResolvedValueOnce({ pressing: null });
+    await act(async () => {
+      renderer = create(createPicker({ album: releases[0], destination: 'wishlist', onSave, onSaveWithoutPressing }));
+    });
+    const candidate = renderer!.root.findByProps({ type: 'radio', value: 410 });
+    const submit = () => renderer!.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() });
+    expect(candidate.props.checked).toBe(false);
+    expect(button('Save pressing').props['aria-disabled']).toBe(true);
+    expect(button('Save without pressing').props['aria-label']).toBe('Save without pressing to Wishlist');
+    expect(textOf(renderer!.root.findByType('footer'))).toContain('Save to Wishlist');
+    await act(async () => submit());
+    expect(onSave).not.toHaveBeenCalled();
+
+    await act(async () => button('Check runout markings').props.onClick());
+    await act(async () => button('Retry runout markings').props.onClick());
+    expect(getPressingDetails.mock.calls.map(([id]) => id)).toEqual([410, 410]);
+    expect(textOf(renderer!.root)).toContain('Discogs lists no runout markings for this release.');
+    expect(button('Save without pressing').props['aria-disabled']).toBe(false);
+    await act(async () => candidate.props.onChange());
+    expect(button('Save pressing').props['aria-disabled']).toBe(false);
+    await act(async () => submit());
+    expect(onSave).toHaveBeenCalledExactlyOnceWith(releases[0]);
+    expect(onSaveWithoutPressing).not.toHaveBeenCalled();
+  });
+
   it('keeps enriched evidence beside Save pressing after the selected candidate leaves the page', async () => {
     getPressingDetails.mockImplementation(async releaseId => ({ pressing: releaseId === 410 ? { label: 'Go! Beat' } : null }));
     const onSave = vi.fn().mockResolvedValue(true);
@@ -488,9 +525,9 @@ describe('saving a new catalog pressing', () => {
     const reviewEvidence = renderer!.root.findByProps({ 'aria-label': 'Pressing evidence' });
     expect(reviewEvidence.props.tabIndex).toBe(0);
     expect(reviewEvidence.parent).toBe(commit.parent);
-    expect(textOf(renderer!.root.findByType('header'))).toContain('Save to Collection');
+    expect(textOf(commit)).toContain('Save to Collection');
     expect(commit.findByType(PressingSelectionSummary).props).toMatchObject({
-      compact: true, choice: { releaseId: 410, pressing: { catalogNumber: 'PL-410', label: 'Go! Beat', country: 'UK', format: 'Vinyl LP' } },
+      identityOnly: true, choice: { releaseId: 410, pressing: { catalogNumber: 'PL-410', label: 'Go! Beat', country: 'UK', format: 'Vinyl LP' } },
     });
     await act(async () => renderer!.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() }));
     expect(onSave).toHaveBeenCalledExactlyOnceWith(releases[0]);
@@ -505,10 +542,10 @@ describe('saving a new catalog pressing', () => {
     await act(async () => { renderer = create(createPicker({ onSave, onSaveWithoutPressing, onClose })); });
     await act(async () => button('Compare runout markings').props.onClick());
     expect(textOf(renderer!.root)).toContain('Discogs lists no runout markings');
-    const saveWithout = 'Save without pressing to Collection';
+    const saveWithout = 'Save without pressing';
     const commit = renderer!.root.findByProps({ 'aria-label': 'Save album' });
     expect(commit.findAllByType('button').map(textOf)).toContain(saveWithout);
-    expect(textOf(commit)).toContain('Save an exact Discogs release, or save the album to Collection and identify its pressing later.');
+    expect(textOf(commit)).toContain('Save to Collection');
     await act(async () => button(saveWithout).props.onClick());
     expect(onSaveWithoutPressing).toHaveBeenCalledOnce();
     expect(onSave).not.toHaveBeenCalled();
@@ -528,12 +565,12 @@ describe('saving a new catalog pressing', () => {
     const submit = () => renderer!.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() });
     await act(async () => renderer!.root.findByProps({ type: 'radio', value: 410 }).props.onChange());
     await act(async () => select.props.onChange({ target: { value: 'CD' } }));
-    expect(button('Save pressing to Collection').props['aria-disabled']).toBe(true);
-    expect(button('Save without pressing to Collection').props['aria-disabled']).toBe(false);
+    expect(button('Save pressing').props['aria-disabled']).toBe(true);
+    expect(button('Save without pressing').props['aria-disabled']).toBe(false);
     await act(async () => submit());
     expect(onSave).not.toHaveBeenCalled();
     await act(async () => button('Show selected pressing in All media').props.onClick());
-    expect(button('Save pressing to Collection').props['aria-disabled']).toBe(false);
+    expect(button('Save pressing').props['aria-disabled']).toBe(false);
     await act(async () => submit());
     expect(onSave).toHaveBeenCalledExactlyOnceWith(choices[0]);
   });

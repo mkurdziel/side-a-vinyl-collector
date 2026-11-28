@@ -124,7 +124,7 @@ describe('album image uploads', () => {
     await act(async () => renderer!.root.findByProps({ 'aria-label': 'Review pressings for Dummy in Collection' })
       .props.onClick({ currentTarget: opener }));
     const picker = renderer!.root.findByType('form');
-    const withoutPressing = picker.findAllByType('button').find(button => button.children.join('') === 'Save without pressing to Collection')!;
+    const withoutPressing = picker.findByProps({ 'aria-label': 'Save without pressing to Collection' });
     await act(async () => withoutPressing.props.onClick());
     expect(picker.findByProps({ role: 'alert' }).children).toEqual(['This album is already saved.']);
     expect(focused).toHaveBeenLastCalledWith('Open saved album');
@@ -185,6 +185,9 @@ describe('album image uploads', () => {
     await act(async () => renderer!.root.findByProps({ 'aria-label': 'Review pressings for Dummy' }).props.onClick());
     const click = async (label: string) => act(async () => renderer!.root.findAllByType('button')
       .find(button => button.children.join('') === label)!.props.onClick());
+    const candidate = renderer!.root.findByProps({ type: 'radio', value: 1 });
+    expect(candidate.props.checked).toBe(false);
+    await act(async () => candidate.props.onChange());
     await click('Use this pressing');
     await click('Confirm pressing');
     expect(onSavePressing).toHaveBeenCalledExactlyOnceWith(copy, 1);

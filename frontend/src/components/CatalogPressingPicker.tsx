@@ -86,11 +86,10 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
   return (
     <ModalDialog labelledBy={headingId} onClose={close} returnFocusTo={opener} fallbackFocusTo={fallback}>
       <div className="rh-dialog-panel rh-pressing-review max-w-xl">
-        <header className="rh-dialog-header flex items-start justify-between gap-2 border-b border-gray-200 px-4 py-3 sm:px-6">
+        <header className="rh-dialog-header flex items-center justify-between gap-2 border-b border-gray-200 px-4 py-2 sm:px-6 sm:py-3">
           <div className="min-w-0 [overflow-wrap:anywhere]">
             <h2 id={headingId} className="text-xl font-semibold">Review pressings</h2>
-            <p className="mt-1 line-clamp-2 text-sm text-gray-600">{album.album} · {album.artist}</p>
-            <p className="mt-0.5 text-xs text-gray-600">Save to {shelf}</p>
+            <p className="rh-pressing-identity text-sm text-gray-600">{album.album} · {album.artist}</p>
           </div>
           <button type="button" className="rh-dialog-close" aria-label="Close pressing review" onClick={close} aria-disabled={!!saving}>
             <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -108,31 +107,33 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
               uncertainAction={onSaveWithoutPressing ? 'If you’re unsure, you can save without pressing below.' : undefined} />
           </div>
           <footer className="rh-pressing-review__footer grid gap-2 px-4 py-2 sm:px-6" role="group" aria-label={duplicate ? 'Saved album' : 'Save album'}>
-            {selectedWithEvidence && !duplicate && <PressingSelectionSummary compact id={selectionSummaryId} searchedNumber={searchedNumber}
-              formats={choices.map(choice => choice.pressing?.format ?? '')}
-              choice={selectedWithEvidence} />}
-            {!duplicate && <p id={saveGuidanceId} role={selectionOutsideMedia ? 'status' : undefined} className="text-xs text-gray-600">
-              {selectionOutsideMedia ? `The selected pressing is outside the ${medium} filter. Show it in All media or choose another pressing.` : onSaveWithoutPressing
-                ? `Save an exact Discogs release, or save the album to ${shelf} and identify its pressing later.`
-                : `Choose an exact Discogs release to save to ${shelf}.`}
+            {!duplicate && <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+              <p className="text-xs font-semibold text-gray-900">Save to {shelf}</p>
+              {selectedWithEvidence && <PressingSelectionSummary identityOnly id={selectionSummaryId} searchedNumber={searchedNumber}
+                choice={selectedWithEvidence} />}
+            </div>}
+            {!duplicate && selectionOutsideMedia && <p id={saveGuidanceId} role="status" className="text-xs text-gray-600">
+              The selected pressing is outside the {medium} filter. Show it in All media or choose another pressing.
             </p>}
             {saveIssue && <p id={issueId} role="alert" className="text-sm text-red-600">{saveIssue}</p>}
-            <div className="flex flex-wrap items-center justify-end gap-1.5">
-              <button type="button" className="rh-lookup-link aria-disabled:opacity-60" onClick={close}
-                aria-disabled={!!saving}>Back to results</button>
+            <div className="rh-pressing-review__actions">
+              {(duplicate || !onSaveWithoutPressing) && <button type="button" className="rh-lookup-link aria-disabled:opacity-60" onClick={close}
+                aria-disabled={!!saving}>Back to results</button>}
               {duplicate ? onOpenDuplicate && (
                 <button ref={openDuplicate} type="button" className="rh-primary-action px-3 text-sm font-semibold"
                   aria-describedby={saveIssue ? issueId : undefined} onClick={event => onOpenDuplicate(event.currentTarget)}>Open saved album</button>
               ) : (
                 <>
                   {onSaveWithoutPressing && <button type="button" className="rh-lookup-link aria-disabled:opacity-60" onClick={() => save()}
-                    aria-disabled={!!saving} aria-busy={saving === 'album'} aria-describedby={saveIssue ? issueId : saveGuidanceId}>
-                    {saving === 'album' ? `Saving album to ${shelf}…` : `Save without pressing to ${shelf}`}
+                    aria-disabled={!!saving} aria-busy={saving === 'album'} aria-describedby={saveIssue ? issueId : undefined}
+                    aria-label={saving === 'album' ? undefined : `Save without pressing to ${shelf}`}>
+                    {saving === 'album' ? 'Saving album…' : 'Save without pressing'}
                   </button>}
                   <button type="submit" className="rh-primary-action px-3 text-sm font-semibold aria-disabled:opacity-60"
                     aria-disabled={!pressing || !!saving || selectionOutsideMedia} aria-busy={saving === 'pressing'}
-                    aria-describedby={[saveIssue ? issueId : saveGuidanceId, selectedWithEvidence && selectionSummaryId].filter(Boolean).join(' ')}>
-                    {saving === 'pressing' ? `Saving pressing to ${shelf}…` : `Save pressing to ${shelf}`}
+                    aria-describedby={[saveIssue && issueId, selectionOutsideMedia && saveGuidanceId, selectedWithEvidence && selectionSummaryId].filter(Boolean).join(' ') || undefined}
+                    aria-label={saving === 'pressing' ? undefined : `Save pressing to ${shelf}`}>
+                    {saving === 'pressing' ? 'Saving pressing…' : 'Save pressing'}
                   </button>
                 </>
               )}

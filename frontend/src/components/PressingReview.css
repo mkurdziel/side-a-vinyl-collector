@@ -10,6 +10,13 @@
   flex: none;
 }
 
+.rh-pressing-identity {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .rh-pressing-review__content {
   display: flex;
   flex: 1 1 auto;
@@ -50,18 +57,16 @@
   font-weight: 400;
 }
 
-.rh-pressing-preview__find {
-  min-block-size: 44px;
-  width: 100%;
-  color: var(--rh-info-hover);
-  text-align: start;
-  text-decoration: underline;
-  text-underline-offset: 2px;
+.rh-pressing-preview__caption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.rh-pressing-preview__find .rh-pressing-preview__release {
-  display: inline-block;
-  text-decoration: inherit;
+.rh-pressing-preview__find {
+  flex: none;
+  margin-inline-start: auto;
+  white-space: nowrap;
 }
 
 .rh-pressing-difference {
@@ -86,6 +91,11 @@
   font-size: 0.875rem;
 }
 
+.rh-pressing-evidence-tools {
+  border-block-start: 1px solid var(--rh-edge);
+  padding-block-start: 6px;
+}
+
 .rh-pressing-review__footer {
   flex: none;
   max-block-size: 48vh;
@@ -96,12 +106,43 @@
   background: var(--rh-surface);
 }
 
-/* At high zoom or in a short window, let every control share one scroll region. */
-@media (max-width: 17.5rem), (max-height: 28rem) {
+.rh-pressing-review__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+@media (max-width: 25rem) {
+  .rh-pressing-review__actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, max-content));
+  }
+
+  .rh-pressing-review__actions button,
+  .rh-pressing-evidence-tools :is(button, summary) {
+    font-size: 0.8125rem;
+    line-height: 1.25;
+  }
+
+  .rh-pressing-review__actions button:nth-child(3) {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+}
+
+/* At high zoom or in the shortest windows, keep every control in reach. */
+@media (max-width: 17.5rem), (max-height: 22rem) {
   .rh-pressing-review.rh-dialog-panel {
     display: block;
     overflow: auto;
     scroll-padding-block: 12px;
+  }
+
+  .rh-pressing-review > .rh-dialog-header {
+    position: sticky;
+    inset-block-start: 0;
   }
 
   .rh-pressing-review__content {

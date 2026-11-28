@@ -19,7 +19,8 @@ import { RemovalHistory, type RemovalHistoryHandle } from './components/RemovalH
 
 type Shelf = Album['status'];
 type SortBy = 'title' | 'artist' | 'date';
-type SearchScope = 'saved' | 'catalog' | 'catalog-number' | Shelf;
+type SavedSearchScope = 'saved' | Shelf;
+type SearchScope = SavedSearchScope | 'catalog' | 'catalog-number';
 type ShelfRequest = { view: Shelf; revision: number };
 type ShelfResult = { request: ShelfRequest } & (
   { status: 'ready'; albums: Album[] } | { status: 'error' }
@@ -38,6 +39,7 @@ type LookupMode = 'name' | 'catalog-number';
 type LookupDraft = {
   query: string;
   scope: SearchScope;
+  scopeBeforeAdd?: SavedSearchScope;
   saved: SearchState;
   catalog: SearchState;
   destination: Shelf;
@@ -255,6 +257,7 @@ function App() {
   const [shelfResult, setShelfResult] = useState<ShelfResult | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchScope, setSearchScope] = useState<SearchScope>('saved');
+  const [scopeBeforeAdd, setScopeBeforeAdd] = useState<SavedSearchScope>();
   const [searchState, setSearchState] = useState<SearchState>({ status: 'idle' });
   const [catalogState, setCatalogState] = useState<SearchState>({ status: 'idle' });
   const [savedLoading, setSavedLoading] = useState(false);
@@ -306,7 +309,6 @@ function App() {
   const albumReviewRequest = useRef<AbortController>(null);
   const albumReviewOpener = useRef<HTMLButtonElement>(null);
   const lookupDrafts = useRef<Partial<Record<LookupMode, LookupDraft>>>({});
-  const scopeBeforeAdd = useRef<SearchScope>(undefined);
   const libraryVersion = useRef(0);
   const latestQuery = useRef('');
   const latestScope = useRef<SearchScope>('saved');
@@ -528,7 +530,7 @@ function App() {
       return;
     }
     lookupDrafts.current[previous] = {
-      scope: latestScope.current, query: latestQuery.current, saved: searchState, catalog: catalogState,
+      scope: latestScope.current, scopeBeforeAdd, query: latestQuery.current, saved: searchState, catalog: catalogState,
       destination: saveShelf, detected: detectedDraft, sort: searchSort.current, savedLoading, catalogLoading,
       pages: loadingMore, libraryVersion: libraryVersion.current,
     };
@@ -539,6 +541,7 @@ function App() {
     latestScope.current = scope;
     latestQuery.current = query;
     setSearchScope(scope);
+    setScopeBeforeAdd(scope === 'catalog' ? draft?.scopeBeforeAdd : undefined);
     setSearchQuery(query);
     setSaveShelf(draft?.destination ?? viewMode);
     setDetectedDraft(draft?.detected);
@@ -556,6 +559,13 @@ function App() {
       runSearch(query);
     }
     focusSearch();
+  };
+
+  const returnToShelf = () => {
+    changeSearch('');
+    if (scopeBeforeAdd || latestScope.current === 'catalog-number') changeScope(scopeBeforeAdd ?? 'saved');
+    setScopeBeforeAdd(undefined);
+    window.requestAnimationFrame(() => activeShelfButton.current?.focus());
   };
 
   const openNameSearch = (query?: string, draft?: ManualAlbumDraft, destination?: Shelf) => {
@@ -1154,6 +1164,7 @@ function App() {
                   enterKeyHint="search"
                   aria-keyshortcuts="Alt+Shift+F"
                   aria-describedby={numberSearch ? 'number-lookup-source' : undefined}
+                  aria-description={scopeBeforeAdd ? 'Add search includes your shelves and online catalogs.' : undefined}
                   className={`w-full border px-2 py-2 sm:px-3 ${searchQuery ? 'pr-11 sm:pr-12' : ''}`}
                   placeholder={numberSearch ? 'Number on the sleeve or label' : 'Album title or artist name'}
                   value={searchQuery}
@@ -1184,12 +1195,12 @@ function App() {
               </button>
             </div>
             {!numberSearch && <div className="rh-search-scope flex flex-wrap items-center gap-x-2">
-              <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">Search in</label>
+              <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">{scopeBeforeAdd ? 'Add search in' : 'Search in'}</label>
               <select
                 id="search-scope"
                 value={searchScope}
                 onChange={event => {
-                  scopeBeforeAdd.current = undefined;
+                  setScopeBeforeAdd(undefined);
                   changeScope(event.target.value as SearchScope);
                 }}
                 className="max-w-full rounded-lg border border-gray-300 px-2 text-sm"
@@ -1242,19 +1253,15 @@ function App() {
         </div>
 
         <div role="status" className="sr-only">{loadedPage?.message}</div>
-        {(searchActive || !queryLength) && (
+        {(searchActive || !queryLength || scopeBeforeAdd) && (
           <div className="rh-result-tools">
-            {searchActive && <nav className="rh-result-nav" aria-label="Search results">
-              <button type="button" onClick={() => {
-                changeSearch('');
-                const previous = scopeBeforeAdd.current;
-                scopeBeforeAdd.current = undefined;
-                if (previous || numberSearch) changeScope(previous ?? 'saved');
-                window.requestAnimationFrame(() => activeShelfButton.current?.focus());
-              }}>Back to {shelfLabel[viewMode]}</button>
-              {searchScope === 'catalog' && <a href="#saved-results-title">Saved</a>}
-              {numberShelfMatches.length > 0 && <a href="#number-saved-results-title">On your shelves</a>}
-              {catalogActive && <a href="#catalog-results-title">{numberSearch ? 'Discogs' : 'Catalogs'}</a>}
+            {(searchActive || scopeBeforeAdd) && <nav className="rh-result-nav" aria-label={searchActive ? 'Search results' : 'Add search'}>
+              <button type="button" onClick={returnToShelf}>{scopeBeforeAdd ? 'Return to' : 'Back to'} {shelfLabel[viewMode]}</button>
+              {searchActive && <>
+                {searchScope === 'catalog' && <a href="#saved-results-title">Saved</a>}
+                {numberShelfMatches.length > 0 && <a href="#number-saved-results-title">On your shelves</a>}
+                {catalogActive && <a href="#catalog-results-title">{numberSearch ? 'Discogs' : 'Catalogs'}</a>}
+              </>}
             </nav>}
             <details className="rh-search-tips">
               <summary aria-label="Search tips"><span className="hidden sm:inline">Search </span>Tips</summary>
@@ -1482,9 +1489,9 @@ function App() {
           }}
           onSearchClick={() => {
             setShowAddMenu(false);
-            const nameScope = lookupMode(latestScope.current) === 'name' ? latestScope.current : lookupDrafts.current.name?.scope;
-            if (nameScope !== 'catalog') scopeBeforeAdd.current ??= nameScope ?? 'saved';
+            const nameScope = latestScope.current === 'catalog-number' ? lookupDrafts.current.name?.scope ?? 'saved' : latestScope.current;
             changeLookupMethod('name', 'catalog');
+            if (nameScope !== 'catalog' && nameScope !== 'catalog-number') setScopeBeforeAdd(nameScope);
           }}
           onCatalogNumberClick={() => {
             setShowAddMenu(false);
