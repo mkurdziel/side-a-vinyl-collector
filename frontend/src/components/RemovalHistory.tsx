@@ -5,15 +5,18 @@ import { formatUndoDeadline } from '../services/undoDeadline';
 type AlbumDetails = Pick<Album, 'id' | 'title' | 'status'>;
 type UndoReceipt = { undoToken?: string; expiresAt?: string };
 type ShelfMove = { albumId: number; title: string; from: Album['status']; to: Album['status'] };
-type Kind = 'removal' | 'move' | 'pressing' | 'artwork';
+type Kind = 'removal' | 'move' | 'pressing' | 'artwork' | 'addition';
 type Receipt = AlbumDetails & Required<UndoReceipt> & { kind: Kind; closed?: true };
 type Entry = Receipt & { undoing?: boolean; issue?: string; tabOnly?: boolean };
+export type CatalogAdditionRecovery = Omit<Entry, 'kind' | 'closed'>;
 
 export interface RemovalHistoryHandle {
   recordRemoval: (album: AlbumDetails, result?: UndoReceipt) => void;
   recordMove: (move: ShelfMove, result?: UndoReceipt) => void;
   recordPressing: (album: AlbumDetails, result?: UndoReceipt) => void;
   recordArtwork: (album: AlbumDetails, result: Required<UndoReceipt>) => void;
+  recordAddition: (album: AlbumDetails, result: Required<UndoReceipt>) => void;
+  undoAddition: (albumId: number, undoToken: string) => Promise<boolean>;
   undoMove: (albumId: number) => Promise<boolean>;
   focusMove: (albumId: number) => void;
   forgetPressing: (albumId: number, undoToken: string) => void;
@@ -28,6 +31,8 @@ interface RemovalHistoryProps {
   onMovedBack?: (album: Album) => void;
   onPressingUndone?: (album: Album) => void;
   onArtworkUndone?: (album: Album) => void;
+  onAdditionUndone?: (album: Album) => void;
+  onAdditionsChanged?: (entries: CatalogAdditionRecovery[]) => void;
   onExternalChange?: () => void;
   fallbackFocus: RefObject<HTMLElement | null>;
 }
@@ -43,6 +48,7 @@ const actions = {
   move: { label: 'Undo move', pending: 'Moving back…', request: (id: number, token: string) => api.undoAlbumMove(id, token) },
   pressing: { label: 'Undo pressing change', pending: 'Restoring pressing…', request: (id: number, token: string) => api.undoPressing(id, token) },
   artwork: { label: 'Undo artwork change', pending: 'Restoring artwork…', request: (id: number, token: string) => api.undoCoverArt(id, token) },
+  addition: { label: 'Undo add', pending: 'Undoing add…', request: (id: number, token: string) => api.undoAlbumAddition(id, token) },
 };
 
 const deadline = (receipt: Pick<Receipt, 'expiresAt'>) => Date.parse(receipt.expiresAt);
@@ -53,7 +59,7 @@ const closedKey = (key: string) => `${key}:closed`;
 function isReceipt(value: unknown): value is Receipt {
   if (!value || typeof value !== 'object') return false;
   const entry = value as Partial<Receipt>;
-  return (entry.kind === 'removal' || entry.kind === 'move' || entry.kind === 'pressing' || entry.kind === 'artwork') &&
+  return typeof entry.kind === 'string' && Object.hasOwn(actions, entry.kind) &&
     Number.isSafeInteger(entry.id) && (entry.id ?? 0) > 0 && typeof entry.title === 'string' &&
     (entry.status === 'collection' || entry.status === 'wishlist') &&
     typeof entry.undoToken === 'string' && !!entry.undoToken && entry.undoToken.length <= 256 &&
@@ -121,6 +127,7 @@ function description(receipt: Receipt) {
   if (receipt.kind === 'move') return `“${receipt.title}” moved to ${shelfNames[receipt.status]}.`;
   if (receipt.kind === 'pressing') return `Pressing updated for “${receipt.title}”.`;
   if (receipt.kind === 'artwork') return `Artwork updated for “${receipt.title}”.`;
+  if (receipt.kind === 'addition') return `“${receipt.title}” added to ${shelfNames[receipt.status]}.`;
   return `“${receipt.title}” removed from ${shelfNames[receipt.status]}.`;
 }
 
@@ -128,10 +135,12 @@ function successMessage(receipt: Receipt, restored: Album) {
   if (receipt.kind === 'move') return `“${restored.title}” moved back to ${shelfNames[restored.status]}.`;
   if (receipt.kind === 'pressing') return `Pressing restored for “${restored.title}”.`;
   if (receipt.kind === 'artwork') return `Artwork restored for “${restored.title}”.`;
+  if (receipt.kind === 'addition') return `Add undone. “${restored.title}” is off ${shelfNames[receipt.status]}.`;
   return `“${restored.title}” restored to ${shelfNames[restored.status]}.`;
 }
 
-export function RemovalHistory({ ref, onRestored, onMovedBack, onPressingUndone, onArtworkUndone, onExternalChange, fallbackFocus }: RemovalHistoryProps) {
+export function RemovalHistory({ ref, onRestored, onMovedBack, onPressingUndone, onArtworkUndone,
+  onAdditionUndone, onAdditionsChanged, onExternalChange, fallbackFocus }: RemovalHistoryProps) {
   const [entries, setEntries] = useState<Entry[]>(() => {
     const { receipts, restoredAt } = readStorage();
     return selectReceipts(receipts, restoredAt, Date.now());
@@ -150,6 +159,7 @@ export function RemovalHistory({ ref, onRestored, onMovedBack, onPressingUndone,
   const collapsedDetailsId = useId();
   const externalChange = useRef(onExternalChange);
   useEffect(() => { externalChange.current = onExternalChange; }, [onExternalChange]);
+  useEffect(() => { onAdditionsChanged?.(entries.filter(entry => entry.kind === 'addition')); }, [entries, onAdditionsChanged]);
 
   const updateEntries = useCallback((next: Entry[]) => {
     latest.current = next;
@@ -265,7 +275,7 @@ export function RemovalHistory({ ref, onRestored, onMovedBack, onPressingUndone,
       if (kind === 'removal') nextFocus.current = { key };
       put(receipt);
       setOutcome(undefined);
-      setExpanded(true);
+      if (kind !== 'addition' || !latest.current.length) setExpanded(kind !== 'addition');
     } else if (kind === 'removal') {
       nextFocus.current = 'feedback';
       setOutcome({ message: `“${album.title}” removed from ${shelfNames[album.status]}. Undo is unavailable.` });
@@ -299,7 +309,8 @@ export function RemovalHistory({ ref, onRestored, onMovedBack, onPressingUndone,
       if (!latest.current.some(belongsTo)) return false;
       if (failure instanceof ApiError && [400, 404, 409].includes(failure.status)) {
         complete();
-        setOutcome({ message: `“${entry.title}” could not be restored. ${failure.message}`, error: true });
+        const issue = entry.kind === 'addition' ? `Couldn’t undo adding “${entry.title}”.` : `“${entry.title}” could not be restored.`;
+        setOutcome({ message: `${issue} ${failure.message}`, error: true });
         externalChange.current?.();
       } else if (deadline(entry) <= Date.now()) {
         complete();
@@ -314,7 +325,7 @@ export function RemovalHistory({ ref, onRestored, onMovedBack, onPressingUndone,
     if (!latest.current.some(belongsTo)) return false;
     complete();
     setOutcome({ message: successMessage(entry, restored) });
-    ({ removal: onRestored, move: onMovedBack, pressing: onPressingUndone, artwork: onArtworkUndone })[entry.kind]?.(restored);
+    ({ removal: onRestored, move: onMovedBack, pressing: onPressingUndone, artwork: onArtworkUndone, addition: onAdditionUndone })[entry.kind]?.(restored);
     return true;
   };
 
@@ -330,6 +341,11 @@ export function RemovalHistory({ ref, onRestored, onMovedBack, onPressingUndone,
     recordMove({ albumId, title, to }, result) { record('move', { id: albumId, title, status: to }, result); },
     recordPressing(album, result) { record('pressing', album, result); },
     recordArtwork(album, result) { record('artwork', album, result); },
+    recordAddition(album, result) { record('addition', album, result); },
+    undoAddition(albumId, undoToken) {
+      const entry = latest.current.find(item => item.kind === 'addition' && item.id === albumId && item.undoToken === undoToken);
+      return entry ? undo(entry) : Promise.resolve(false);
+    },
     undoMove(albumId) {
       const entry = latest.current.find(item => item.kind === 'move' && item.id === albumId);
       return entry ? undo(entry) : Promise.resolve(false);

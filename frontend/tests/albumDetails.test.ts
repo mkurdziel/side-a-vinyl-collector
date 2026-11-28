@@ -196,13 +196,13 @@ describe('pressing comparison evidence', () => {
     expect(radio(410).props.checked).toBe(false);
     expect(radio(430).props.checked).toBe(false);
     expect(savedSelect.props.value).toBe(1);
-    expect(getPressingDetails.mock.calls.map(([id]) => id)).toEqual([420]);
+    expect(getPressingDetails.mock.calls.map(([id]) => id)).toEqual([420, 410]);
     await act(async () => choose(430));
     expect(savedSelect.props.value).toBe(1);
     expect(values('Catalog number')).toEqual(['ALT-30', 'Checking…']);
     expect(values('Release year')).toEqual(['2017', 'Checking…']);
     expect(values('Discogs release ID')).toEqual(['430', '420']);
-    expect(getPressingDetails.mock.calls.map(([id]) => id)).toEqual([420, 430]);
+    expect(getPressingDetails.mock.calls.map(([id]) => id)).toEqual([420, 410, 430]);
     expect(getPressingDetails.mock.calls[0][1].aborted).toBe(false);
   });
 
@@ -351,7 +351,8 @@ describe('pressing comparison evidence', () => {
     expect(button('Use this pressing')).toBeUndefined();
     await act(async () => choose(410));
     await act(async () => button('Use this pressing').props.onClick());
-    expect(textOf(renderer!.root.findByProps({ role: 'group' }))).toContain('Wishlist, saved record 2');
+    const actions = renderer!.root.findByProps({ 'aria-label': 'Pressing actions' });
+    expect(textOf(actions.findByProps({ role: 'group' }))).toContain('Wishlist, saved record 2');
     await act(async () => select.props.onChange({ target: { value: '1' } }));
     expect(button('Confirm pressing')).toBeUndefined();
     expect(onSavePressing).not.toHaveBeenCalled();
@@ -416,7 +417,8 @@ describe('pressing comparison evidence', () => {
     expect(button(label)).toBeDefined();
     await act(async () => choose(410));
     await act(async () => button('Use this pressing').props.onClick());
-    expect(renderer!.root.findByProps({ role: 'group' }).findAllByType('button').map(textOf)).toContain(label);
+    const actions = renderer!.root.findByProps({ 'aria-label': 'Pressing actions' });
+    expect(actions.findByProps({ role: 'group' }).findAllByType('button').map(textOf)).toContain(label);
     await act(async () => button(label).props.onClick());
     expect(onClose).toHaveBeenCalledOnce();
     expect(onSavePressing).not.toHaveBeenCalled();
@@ -620,10 +622,11 @@ describe('pressing choices on save results', () => {
       }));
     });
     await act(async () => renderer!.root.findByType('select').props.onChange({ target: { value: 'wishlist' } }));
-    const action = `Save without pressing to Wishlist · ${source === 'catalog' ? catalogLabel : album.title}`;
+    const action = source === 'catalog' ? `Save album only to Wishlist · ${catalogLabel}` : `Save without pressing to Wishlist · ${album.title}`;
     expect(description(action)).toBe('Save the album to Wishlist and identify its pressing later. Review to confirm an exact Discogs release.');
-    await act(async () => renderer!.root.findByProps({ 'aria-label': action }).props.onClick());
-    expect(onSelect).toHaveBeenCalledExactlyOnceWith('wishlist');
+    const opener = { focus: vi.fn() };
+    await act(async () => renderer!.root.findByProps({ 'aria-label': action }).props.onClick({ currentTarget: opener }));
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith('wishlist', ...(source === 'catalog' ? [opener] : []));
     expect(onReview).not.toHaveBeenCalled();
   });
 

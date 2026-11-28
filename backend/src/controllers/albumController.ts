@@ -140,7 +140,7 @@ function parseCatalogListing(value: unknown): CatalogListing | null {
 
 export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
   const { artist: artistInput, album: albumInput, year, coverImageUrl, discogsId: releaseId, barcode, status,
-    applyCatalogReference } = req.body;
+    applyCatalogReference, allowUndo } = req.body;
   const catalogListing = parseCatalogListing(req.body.catalogListing);
   const discogsId = catalogListing ? null : releaseId;
   const artist = typeof artistInput === 'string' ? artistInput.trim() : '';
@@ -161,6 +161,9 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
   if (applyCatalogReference && releaseId != null && (catalogListing || !isDatabaseId(releaseId))) {
     throw new AppError('Choose a valid Discogs release or an album listing', 400);
   }
+  if (allowUndo !== undefined && (typeof allowUndo !== 'boolean' || (allowUndo && (!applyCatalogReference || releaseId != null || barcode)))) {
+    throw new AppError('Addition undo is available for a catalog album saved without a pressing.', 400);
+  }
 
   const client = await pool.connect();
 
@@ -169,8 +172,8 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
     await client.query(lockRemovalUndo);
 
     await lockAlbumIdentity(client, artist, discogsId || null);
-    const existing = await client.query<{ id: number }>(`
-      SELECT albums.id FROM albums JOIN artists ON artists.id = albums.artist_id
+    const existing = await client.query<Pick<AlbumWithArtist, 'id' | 'discogs_id' | 'catalog_listing'>>(`
+      SELECT albums.id, albums.discogs_id, albums.catalog_listing FROM albums JOIN artists ON artists.id = albums.artist_id
       LEFT JOIN collections ON collections.album_id = albums.id
       WHERE albums.discogs_id = $3 OR (lower(artists.name) = lower($1) AND lower(albums.title) = lower($2))
       ORDER BY (albums.discogs_id = $3) DESC NULLS LAST, (collections.album_id IS NOT NULL) DESC, albums.id
@@ -194,8 +197,8 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
       if (albumId === undefined) throw new Error('Album insert did not return an ID');
     }
 
-    const membership = await client.query(
-      'INSERT INTO collections (album_id, status) VALUES ($1, $2) ON CONFLICT (album_id) DO NOTHING',
+    const membership = await client.query<{ id: number }>(
+      'INSERT INTO collections (album_id, status) VALUES ($1, $2) ON CONFLICT (album_id) DO NOTHING RETURNING id',
       [albumId, status ?? 'collection'],
     );
     if (!membership.rowCount) {
@@ -207,6 +210,27 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
     if (applyCatalogReference && existing.rows.length) {
       await client.query('UPDATE albums SET discogs_id = $1, catalog_listing = $2 WHERE id = $3',
         [discogsId ?? null, catalogListing, albumId]);
+    }
+
+    let undo: { undoToken: string; expiresAt: string } | undefined;
+    if (allowUndo) {
+      const membershipId = membership.rows[0]?.id;
+      if (membershipId === undefined) throw new Error('Collection insert did not return an ID');
+      const undoToken = randomBytes(32).toString('base64url');
+      const previous = existing.rows[0];
+      const { rows: [receipt] } = await client.query<{ expires_at: Date }>(`
+        INSERT INTO album_addition_undo (
+          collection_id, token_digest, expected_status, expected_catalog_listing, expected_artwork_provenance,
+          previous_discogs_id, previous_catalog_listing, expires_at
+        )
+        SELECT c.id, $2, c.status, a.catalog_listing, a.cover_art_provenance, $3, $4,
+          clock_timestamp() + INTERVAL '10 minutes'
+        FROM collections c JOIN albums a ON a.id = c.album_id
+        WHERE c.id = $1
+        RETURNING expires_at
+      `, [membershipId, undoTokenDigest(undoToken), previous?.discogs_id ?? null, previous?.catalog_listing ?? null]);
+      if (!receipt) throw new Error('Could not record the album addition.');
+      undo = { undoToken, expiresAt: receipt.expires_at.toISOString() };
     }
 
     // If barcode provided, store mapping
@@ -256,7 +280,8 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
       WHERE albums.id = $1
     `, [albumId]);
 
-    res.status(201).json({ album: finalResult.rows[0] });
+    if (undo) res.set('Cache-Control', 'no-store');
+    res.status(201).json({ album: finalResult.rows[0], ...undo });
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -283,6 +308,52 @@ function checkExpectedPressing(album: AlbumWithArtist | undefined, expectedDisco
 function undoTokenDigest(token: string) {
   return createHash('sha256').update(token).digest('hex');
 }
+
+const staleAdditionUndo = 'This addition can no longer be undone. Check the current album before making another change.';
+
+export const undoAlbumAddition = asyncHandler(async (req: Request, res: Response) => {
+  const rawId = String(req.params.id);
+  const id = Number(rawId);
+  const { undoToken } = req.body ?? {};
+  if (!/^\d+$/.test(rawId) || !isDatabaseId(id) || typeof undoToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(undoToken)) {
+    throw new AppError('Choose a valid album addition to undo.', 400);
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(lockRemovalUndo);
+    const { rows: [saved] } = await client.query<AlbumWithArtist>(`${savedAlbumQuery} FOR UPDATE OF albums, collections`, [id]);
+    if (!saved) throw new AppError('This album is no longer saved.', 404);
+    const { rows: [receipt] } = await client.query<{
+      collection_id: number;
+      previous_discogs_id: number | null;
+      previous_catalog_listing: CatalogListing | null;
+    }>(`
+      DELETE FROM album_addition_undo undo USING collections c, albums a
+      WHERE c.album_id = $1 AND a.id = c.album_id AND undo.collection_id = c.id AND undo.token_digest = $2
+        AND undo.expires_at > clock_timestamp() AND c.status = undo.expected_status AND c.notes IS NULL
+        AND a.discogs_id IS NULL AND a.catalog_listing IS NOT DISTINCT FROM undo.expected_catalog_listing
+        AND a.cover_art_provenance IS NOT DISTINCT FROM undo.expected_artwork_provenance
+        AND NOT EXISTS (SELECT 1 FROM album_move_undo move WHERE move.collection_id = c.id)
+      RETURNING undo.collection_id, undo.previous_discogs_id, undo.previous_catalog_listing
+    `, [id, undoTokenDigest(undoToken)]);
+    if (!receipt) throw new AppError(staleAdditionUndo, 409);
+    if (receipt.previous_discogs_id != null || receipt.previous_catalog_listing != null || saved.catalog_listing != null) {
+      await client.query('UPDATE albums SET discogs_id = $2, catalog_listing = $3 WHERE id = $1',
+        [id, receipt.previous_discogs_id, receipt.previous_catalog_listing]);
+    }
+    await client.query('DELETE FROM collections WHERE id = $1', [receipt.collection_id]);
+    await client.query('COMMIT');
+    res.set('Cache-Control', 'no-store').json({ album: saved });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (error instanceof Error && 'code' in error && error.code === '23505') throw new AppError(staleAdditionUndo, 409);
+    throw error;
+  } finally {
+    client.release();
+  }
+});
 
 export const updateAlbumPressing = asyncHandler(async (req: Request, res: Response) => {
   const rawId = String(req.params.id);

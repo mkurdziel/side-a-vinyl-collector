@@ -62,6 +62,7 @@ app.get('/api', (req, res) => {
 app.get('/api/albums', albumController.getAllAlbums);
 app.get('/api/albums/:id', albumController.getAlbumById);
 app.post('/api/albums', albumController.addAlbum);
+app.post('/api/albums/:id/addition/undo', albumController.undoAlbumAddition);
 app.delete('/api/albums/:id', albumController.deleteAlbum);
 app.post('/api/albums/:id/removal/undo', albumController.undoAlbumRemoval);
 app.patch('/api/albums/:id/notes', albumController.updateAlbumNotes);

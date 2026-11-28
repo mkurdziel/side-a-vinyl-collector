@@ -43,6 +43,12 @@ type TestNode = ReturnType<typeof create>['root'];
 const renderedText = (node: TestNode | string): string => typeof node === 'string' ? node : node.children.map(renderedText).join('');
 const content = () => renderer.root.findAllByType('p').map(renderedText).join('\n');
 
+async function openPressingComparison(scope = renderer.root) {
+  const disclosure = scope.findAllByType('summary').find(node => renderedText(node) === 'Compare listings')?.parent;
+  if (!disclosure) throw new Error('Missing comparison disclosure');
+  await act(async () => disclosure.props.onToggle({ currentTarget: { open: true } }));
+}
+
 async function loadCollection(options?: Parameters<typeof create>[1]) {
   await act(async () => {
     renderer = create(createElement(DiscogsImporter, importerProps), options);
@@ -250,7 +256,7 @@ describe('Discogs import', () => {
     await openImportReview();
     expect(content()).toContain('1 of 3 Discogs pages loaded');
     expect(content()).toContain('This import uses titles selected from the loaded pages.');
-    expect(findButton('Import 1 title to Wishlist').props['aria-describedby']).toBe('discogs-signoff-count discogs-signoff-scope');
+    expect(findButton('Import 1 title to Wishlist').props['aria-describedby']).toBe('discogs-signoff-count discogs-signoff-coverage discogs-signoff-partial-warning');
     expect(addAlbum).not.toHaveBeenCalled();
     await act(async () => findButton('Import 1 title to Wishlist').props.onClick());
     expect(addAlbum.mock.calls.map(([album]) => [album.discogsId, album.status])).toEqual([[1, 'wishlist']]);
@@ -309,7 +315,7 @@ describe('Discogs import', () => {
     });
     await act(async () => findButton('Load next Discogs page').props.onClick());
     await act(async () => select('Roseland NYC Live'));
-    expect(renderer.root.findByProps({ id: 'discogs-selection-count' }).children.join('')).toBe('2 selected · Wishlist');
+    expect(renderedText(renderer.root.findByProps({ id: 'discogs-selection-count' }))).toBe('2 selected for Wishlist');
 
     await act(async () => renderer.unmount());
     await act(async () => { renderer = create(createElement(DiscogsImporter, { ...importerProps, open: false })); });
@@ -425,7 +431,7 @@ describe('Discogs import', () => {
     await act(async () => link?.props.onClick({ preventDefault: vi.fn() }));
     expect(reviewHeading.focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
     expect(panel.scrollTop).toBe(0);
-    expect(renderer.root.findByProps({ 'aria-label': 'Titles in this import' }).findAllByType('h4').map(node => node.children.join(''))).toEqual(['Album 30']);
+    expect(renderedText(renderer.root.findByProps({ 'aria-label': 'Titles in this import' }).findByType('summary'))).toMatch(/^Album 30.*Discogs 30$/);
     expect(findButton('Import 1 title to Collection').props.disabled).toBe(false);
     expect(addAlbum).not.toHaveBeenCalled();
     await act(async () => findButton('Back to selections').props.onClick());
@@ -443,8 +449,8 @@ describe('Discogs import', () => {
     await act(async () => remove.props.onClick());
     expect(findButton('Import 2 titles to Collection').props.disabled).toBe(false);
     const selected = renderer.root.findByProps({ 'aria-label': 'Titles in this import' });
-    expect(selected.findAllByType('h4')).toHaveLength(2);
-    expect(selected.findAllByType('h4').some(heading => heading.children.join('') === 'Dummy')).toBe(false);
+    expect(selected.findAllByType('summary')).toHaveLength(2);
+    expect(selected.findAllByType('summary').map(renderedText).some(label => label.startsWith('Dummy'))).toBe(false);
     await act(async () => findButton('Back to selections').props.onClick());
     expect(releaseChoice(1).props.checked).toBe(false);
     expect(addAlbum).not.toHaveBeenCalled();
@@ -494,7 +500,8 @@ describe('Discogs import', () => {
     expect(releaseChoice(5).props.checked).toBe(false);
     expect(content()).toContain('1 title needs your attention');
     expect(content()).toContain('4 Discogs listings across 2 titles');
-    expect(content()).toContain('1 loaded title needs a pressing choice');
+    expect(content()).toContain('1 earlier selection unresolved');
+    expect(findButton('Needs a pressing choice (1 loaded)')).toBeTruthy();
     expect(renderer.root.findAllByType('button').some(node => node.children.join('').startsWith('Select all eligible titles'))).toBe(false);
     expect(renderer.root.findByProps({ 'aria-label': 'Pressings of Dummy by Portishead' }).findAllByType('article')).toHaveLength(2);
     expect(addAlbum).not.toHaveBeenCalled();
@@ -506,6 +513,7 @@ describe('Discogs import', () => {
     const other = { ...albums[0], id: 5, discogsId: 5, pressing: { catalogNumber: 'VARIANT B', country: 'CA' } };
     importDiscogsCollection.mockResolvedValueOnce({ albums: [original, variant, other], page: 1, totalPages: 1 });
     await loadCollection();
+    await openPressingComparison();
     const pair = renderer.root.findByProps({ 'aria-label': 'Listings to compare' });
     const [first, second] = pair.findAllByType('select');
     expect(first.props.value).toBe(1);
@@ -529,7 +537,8 @@ describe('Discogs import', () => {
 
   it('reads runouts for only the compared releases and offers a safe jump to either pressing', async () => {
     const other = { ...albums[0], id: 4, discogsId: 4 };
-    importDiscogsCollection.mockResolvedValueOnce({ albums: [albums[0], other], page: 1, totalPages: 1 });
+    const third = { ...albums[0], id: 5, discogsId: 5 };
+    importDiscogsCollection.mockResolvedValueOnce({ albums: [albums[0], other, third], page: 1, totalPages: 1 });
     getPressingDetails.mockImplementation(async releaseId => ({ pressing: { matrixRunouts: [{ value: `ETCHED-${releaseId}` }] } }));
     const focus = [vi.fn(), vi.fn()];
     const inputs = focus.map(method => ({ focus: method, getBoundingClientRect: () => ({ top: 200, bottom: 216 }) }));
@@ -541,16 +550,16 @@ describe('Discogs import', () => {
       return null;
     } });
     expect(getPressingDetails).not.toHaveBeenCalled();
-    const details = renderer.root.findAllByType('details').find(node => node.findAllByType('summary')
-      .some(summary => summary.children.join('') === 'More evidence and runout marks') && !!node.props.onToggle);
-    await act(async () => details?.props.onToggle({ currentTarget: { open: true } }));
+    await openPressingComparison();
+    expect(getPressingDetails.mock.calls.map(([id]) => id)).toEqual([1, 4]);
+    await act(async () => findButton('Check pair runouts').props.onClick());
     expect(getPressingDetails.mock.calls.map(([id]) => id)).toEqual([1, 4]);
     expect(renderer.root.findAllByType('li').flatMap(node => node.children).some(child => typeof child !== 'string' && child.children.includes('ETCHED-4'))).toBe(true);
     await act(async () => findButton('Go to Discogs release 1').props.onClick());
     await act(async () => findButton('Go to Discogs release 4').props.onClick());
     expect(focus[0]).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
     expect(focus[1]).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
-    expect([1, 4].map(id => releaseChoice(id).props.checked)).toEqual([false, false]);
+    expect([1, 4, 5].map(id => releaseChoice(id).props.checked)).toEqual([false, false, false]);
     expect(addAlbum).not.toHaveBeenCalled();
   });
 
@@ -566,11 +575,11 @@ describe('Discogs import', () => {
     await act(async () => pressingButton?.props.onClick());
     expect(pressingButton?.props['aria-pressed']).toBe(true);
     expect(rail.findByProps({ id: 'discogs-page-coverage' }).findAllByType('span')[0].children.join('')).toBe('1 of 2 Discogs pages loaded');
-    expect(rail.findByProps({ id: 'discogs-selection-count' }).children.join('')).toBe('1 selected · Collection');
+    expect(renderedText(rail.findByProps({ id: 'discogs-selection-count' }))).toBe('1 selected for Collection · 1 outside filters');
     expect(rail.findAllByType('button').map(button => button.props['aria-label'])).toContain('Load next Discogs page');
     expect(renderer.root.findAllByProps({ id: 'discogs-import-release-2' })).toHaveLength(0);
     await openImportReview();
-    expect(renderer.root.findByProps({ 'aria-label': 'Titles in this import' }).findByType('h4').children.join('')).toBe('Third');
+    expect(renderedText(renderer.root.findByProps({ 'aria-label': 'Titles in this import' }).findByType('summary'))).toMatch(/^Third.*Discogs 2$/);
     await act(async () => findButton('Back to selections').props.onClick());
 
     expect(filter.props.value).toBe('portishead dummy');
@@ -581,18 +590,18 @@ describe('Discogs import', () => {
     expect(addAlbum).not.toHaveBeenCalled();
   });
 
-  it('shows fresh groups outside the signoff separately and jumps back without clearing the filter or shelf', async () => {
+  it('keeps exact decision scope beside both actions and repairs a fresh omission without clearing choices', async () => {
     const extra = { ...albums[0], id: 4, discogsId: 4 };
     const saved = { discogsId: 90, artist: 'Fixture artist', album: 'Saved title', source: 'chosen' };
     sessionStorage.setItem('side-a:discogs-import-review:v1', JSON.stringify({
-      choices: [], lastPage: 3, destination: 'wishlist', notices: [
+      choices: [{ ...albums[2], source: 'chosen' }], lastPage: 3, destination: 'wishlist', notices: [
         { choice: { discogsId: 99, artist: 'Fixture artist', album: 'Missing title', source: 'chosen' }, cause: 'unavailable' },
         { choice: saved, cause: 'saved', shelf: 'collection' },
       ],
     }));
-    importDiscogsCollection.mockResolvedValueOnce({ albums: albums.slice(0, 1), page: 1, totalPages: 3, nextPage: 2 })
-      .mockResolvedValueOnce({ albums: [albums[1]], page: 2, totalPages: 3, nextPage: 3 })
-      .mockResolvedValueOnce({ albums: [extra], page: 3, totalPages: 3 });
+    importDiscogsCollection.mockResolvedValueOnce({ albums: albums.slice(0, 1), page: 1, totalPages: 4, nextPage: 2 })
+      .mockResolvedValueOnce({ albums: albums.slice(1), page: 2, totalPages: 4, nextPage: 3 })
+      .mockResolvedValueOnce({ albums: [extra], page: 3, totalPages: 4, nextPage: 4 });
     getAlbums.mockImplementation(async shelf => ({ albums: shelf === 'collection'
       ? [{ discogs_id: 90, title: saved.album, artist_name: saved.artist, status: 'collection' }] : [] }));
     await act(async () => { renderer = create(createElement(DiscogsImporter, importerProps)); });
@@ -600,17 +609,32 @@ describe('Discogs import', () => {
     const input = renderer.root.findByProps({ id: 'discogs-import-filter' });
     await act(async () => input.props.onChange({ currentTarget: { value: 'Third' } }));
     expect(content()).toContain('0 matching titles need a pressing choice.');
-    expect(renderedText(renderer.root.findByProps({ id: 'discogs-page-coverage' }))).toContain('1 loaded title needs a pressing choice');
     await act(async () => findButton('Select all eligible matching titles (1 to add)').props.onClick());
+    const browseDock = renderer.root.findByProps({ 'aria-label': 'Discogs import controls' });
+    expect(renderedText(browseDock.findByProps({ id: 'discogs-selection-count' }))).toBe('2 selected for Wishlist · 1 outside filters');
+    expect(renderedText(browseDock.findByProps({ id: 'discogs-dock-filter-scope' }))).toContain('0 of 1 loaded titles needing a pressing choice match your filters');
+    const browseCoverage = renderedText(browseDock.findByProps({ id: 'discogs-page-coverage' }));
+    for (const scope of ['3 of 4 Discogs pages loaded', '1 title awaiting a pressing choice', '1 earlier selection unresolved']) {
+      expect(browseCoverage).toContain(scope);
+    }
+    expect(findButton('Review selection').props['aria-describedby']).toContain('discogs-dock-filter-scope');
     await openImportReview();
 
+    const signoffDock = renderer.root.findByProps({ 'aria-label': 'Confirm Discogs import' });
+    expect(renderedText(signoffDock.findByProps({ id: 'discogs-signoff-count' }))).toBe('2 selected for Wishlist · 1 outside filters');
+    expect(renderedText(signoffDock.findByProps({ id: 'discogs-signoff-coverage' }))).toBe(browseCoverage);
+    expect(renderedText(signoffDock.findByProps({ id: 'discogs-signoff-filter-scope' }))).toContain('0 of 1 loaded titles needing a pressing choice match your filters');
+    expect(findButton('Import 2 titles to Wishlist').props['aria-describedby']).toContain('discogs-signoff-filter-scope');
     const fresh = renderer.root.findByProps({ 'aria-label': 'Unselected titles with multiple pressings' });
     expect(fresh.findAllByType('summary')).toHaveLength(0);
     expect(renderedText(fresh.findByType('p'))).toBe('1 title will be left out until you choose a pressing.');
     const scope = renderer.root.findByProps({ id: 'discogs-signoff-scope' });
     expect(scope.findAllByType('p').map(renderedText)).toContain('1 earlier selection needs attention and will be left out.');
     expect(scope.findAllByType('p').map(renderedText)).toContain('1 title already saved.');
-    expect(renderer.root.findByProps({ 'aria-label': 'Titles in this import' }).findByType('h4').children.join('')).toBe('Third');
+    const selectedTitles = renderer.root.findByProps({ 'aria-label': 'Titles in this import' });
+    expect(selectedTitles.findAllByType('summary').map(renderedText)).toEqual([
+      'Third Portishead · Discogs 2', 'Roseland NYC Live Portishead · Discogs 3',
+    ]);
     const groupLink = fresh.findByProps({ 'aria-label': 'Review pressings for Dummy by Portishead' });
     await act(async () => groupLink.props.onClick({ preventDefault: vi.fn() }));
 
@@ -621,6 +645,8 @@ describe('Discogs import', () => {
     await act(async () => findButton('Return to filtered titles').props.onClick());
     expect(renderer.root.findAllByProps({ id: 'discogs-import-release-1' })).toHaveLength(0);
     expect(releaseChoice(2).props.checked).toBe(true);
+    await act(async () => findButton('Clear filters').props.onClick());
+    expect(releaseChoice(3).props.checked).toBe(true);
     expect(addAlbum).not.toHaveBeenCalled();
   });
 
@@ -685,9 +711,9 @@ describe('Discogs import', () => {
     expect(scrollPanel.scrollTop).toBe(547);
     expect(renderer.root.findByProps({ id: 'discogs-import-filter' }).props.value).toBe('fixture blue');
     expect(findButton('Needs a pressing choice (1 loaded)').props['aria-pressed']).toBe(true);
-    expect(content()).toContain('1 loaded title needs a pressing choice');
+    expect(content()).toContain('1 of 1 loaded titles needing a pressing choice match your filters');
     expect(content()).toContain('1 title matches both filters.');
-    expect(renderer.root.findByProps({ id: 'discogs-selection-count' }).children.join('')).toBe('2 selected · Wishlist');
+    expect(renderedText(renderer.root.findByProps({ id: 'discogs-selection-count' }))).toBe('2 selected for Wishlist · 2 outside filters');
     await openImportReview();
     expect(renderer.root.findByProps({ 'aria-label': 'Titles in this import' }).findAllByType('a').map(node => node.props.href))
       .toEqual(['https://www.discogs.com/release/305', 'https://www.discogs.com/release/397']);
@@ -762,7 +788,7 @@ describe('Discogs import', () => {
     expect(pressingHeading.focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
     expect(panel.scrollTop).toBe(400);
     const scope = renderer.root.findByProps({ 'aria-label': 'Pressings of Dummy by Portishead' });
-    expect(scope.findAllByType('summary').map(renderedText)).toContain('Compare listings');
+    await openPressingComparison(scope);
     expect(scope.findByType('table').findAllByType('th').map(node => node.children.map(child =>
       typeof child === 'string' ? child : child.children.join('')).join(''))).toEqual(expect.arrayContaining(['Catalog number', 'Discogs 1', 'Discogs 4']));
     expect(releaseChoice(1).props.checked).toBe(false);
@@ -774,7 +800,9 @@ describe('Discogs import', () => {
     await act(async () => returnLink.props.onClick({ preventDefault: vi.fn() }));
     expect(selectionHeading.focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
     const selectedTitles = renderer.root.findByProps({ 'aria-label': 'Titles in this import' });
-    expect(selectedTitles.findAllByType('h4').map(node => node.children.join(''))).toEqual(['Third', 'Roseland NYC Live', 'Dummy']);
+    expect(selectedTitles.findAllByType('summary').map(renderedText)).toEqual([
+      'Third Portishead · Discogs 2', 'Roseland NYC Live Portishead · Discogs 3', 'Dummy Portishead · Discogs 4',
+    ]);
     expect(selectedTitles.findAllByType('a').map(node => node.props.href)).toContain('https://www.discogs.com/release/4');
     expect(addAlbum).not.toHaveBeenCalled();
   });

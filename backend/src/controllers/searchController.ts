@@ -47,13 +47,15 @@ export const search = asyncHandler(async (req: Request, res: Response) => {
   const discogsLimit = paged ? 40 : 20;
 
   // Saved-album searches must not wait for an external provider.
-  const local = scope === 'catalog' ? [] : (await pool.query<AlbumWithArtist>(`
+  const local = scope === 'catalog' ? [] : (await pool.query<AlbumWithArtist & { match_kind: 'text' | 'approximate' }>(`
     SELECT
       albums.*,
       artists.name as artist_name,
       collections.notes,
       collections.status,
       collections.added_at,
+      CASE WHEN strpos(lower(artists.name || ' ' || albums.title), lower($1)) > 0
+        THEN 'text' ELSE 'approximate' END as match_kind,
       GREATEST(
         similarity(artists.name, $1),
         similarity(albums.title, $1)

@@ -69,22 +69,22 @@ export const AddMenu = ({
           </button>
         </div>
 
-        <div className="grid gap-4 p-4 sm:gap-5 sm:p-6">
-          <div className="grid gap-2 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-            <button ref={searchAction} type="button" className="rh-primary-action flex min-w-0 items-center gap-3 px-3 py-3 text-left sm:px-4"
+        <div className="grid gap-2 px-4 py-2.5 sm:gap-5 sm:p-6">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+            <button ref={searchAction} type="button" className="rh-primary-action flex min-w-0 items-center gap-3 px-2.5 py-2 text-left sm:px-4 sm:py-3"
               aria-label="Search by name" aria-describedby={`${menuId}-search-description`} onClick={onSearchClick}>
-              <svg className="size-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+              <svg className="hidden size-5 shrink-0 sm:block" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
               </svg>
               <span className="min-w-0">
-                <span className="block font-semibold">Search by name</span>
-                <span id={`${menuId}-search-description`} className="block text-sm">Search your shelves and online catalogs</span>
+                <span className="block text-sm font-semibold sm:text-base">Search by name</span>
+                <span id={`${menuId}-search-description`} className="sr-only text-sm sm:not-sr-only sm:block">Search your shelves and online catalogs</span>
               </span>
             </button>
-            <button type="button" className="min-w-0 rounded-xl border border-gray-300 px-3 py-3 text-left hover:bg-gray-100 sm:px-4"
+            <button type="button" className="min-w-0 rounded-xl border border-gray-300 px-2.5 py-2 text-left hover:bg-gray-100 sm:px-4 sm:py-3"
               aria-label="Add album manually" aria-describedby={`${menuId}-manual-description`} onClick={onManualClick}>
-              <span className="block font-semibold text-gray-900">Add album manually</span>
-              <span id={`${menuId}-manual-description`} className="block text-sm text-gray-600">Save the album now and identify the pressing later.</span>
+              <span className="block text-sm font-semibold text-gray-900 sm:text-base">Add album manually</span>
+              <span id={`${menuId}-manual-description`} className="sr-only text-sm text-gray-600 sm:not-sr-only sm:block">Save the album now and identify the pressing later.</span>
             </button>
           </div>
 
@@ -109,12 +109,12 @@ export const AddMenu = ({
             </div>
           )}
 
-          <section aria-labelledby={`${menuId}-clues`} className="border-t border-gray-200 pt-3">
+          <section aria-labelledby={`${menuId}-clues`} className="border-t border-gray-200 pt-2 sm:pt-3">
             <h3 id={`${menuId}-clues`} className="mb-1 text-sm font-semibold text-gray-900">Have a clue on the record?</h3>
             <ul className="grid divide-y divide-gray-200 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
               {clues.map(({ key, label, description, path, onClick }) => (
                 <li key={key} className="min-w-0">
-                  <button type="button" className="rh-lookup-link flex h-full w-full items-start gap-2 py-2 text-left"
+                  <button type="button" className="rh-lookup-link flex h-full w-full items-center gap-2 py-1 text-left sm:items-start sm:py-2"
                     aria-label={label} aria-describedby={`${menuId}-${key}-description`} onClick={onClick}>
                     <svg className="mt-0.5 size-4 shrink-0 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={path} />
