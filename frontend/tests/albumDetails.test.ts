@@ -119,7 +119,7 @@ describe('pressing comparison evidence', () => {
   const evidenceTable = () => renderer!.root.findAllByType('table')
     .find(table => textOf(table.findByType('caption')).startsWith('Catalog evidence'))!;
   const values = (label: string) => evidenceTable().findByType('tbody').findAllByType('tr')
-    .find(row => textOf(row.findByType('th')) === label)!.findAllByType('td').map(textOf);
+    .find(row => row.findByType('th').children[0] === label)!.findAllByType('td').map(textOf);
   const releaseStatuses = () => evidenceTable().findByType('thead').findAllByProps({ role: 'status' }).map(textOf);
   const button = (label: string) => renderer!.root.findAllByType('button').find(control => textOf(control) === label)!;
   const radio = (releaseId: number) => renderer!.root.findAllByType('input').find(control =>
@@ -209,7 +209,7 @@ describe('pressing comparison evidence', () => {
     expect(textOf(renderer!.root.findByType('table'))).toContain('Saved pressing 420');
     await act(async () => choose(430));
     const fields = evidenceTable().findByType('tbody').findAllByType('th').map(textOf);
-    expect(fields.slice(0, 3)).toEqual(['Country', 'Release year', 'Matrix / Runout']);
+    expect(fields.slice(0, 3)).toEqual(['CountryDiffers', 'Release yearDiffers', 'Matrix / RunoutDiffers']);
     expect(values('Matrix / Runout')[0]).toContain('S-5233 A-2');
     expect(values('Matrix / Runout')[1]).toContain('S-5233 A-1');
   });
@@ -244,8 +244,9 @@ describe('pressing comparison evidence', () => {
     const saved = { ...album, discogs_id: 420, year: 1994 };
     const updated = { ...saved, discogs_id: 430 };
     const pending = Promise.withResolvers<{ album: Album; undoToken: string }>();
+    const expiresAt = '2026-11-27T20:10:00Z';
     const onSavePressing = vi.fn().mockReturnValueOnce(pending.promise)
-      .mockResolvedValueOnce({ album: updated, undoToken: 'previous-copy' });
+      .mockResolvedValueOnce({ album: updated, undoToken: 'previous-copy', expiresAt });
     const onUndoPressing = vi.fn().mockResolvedValue(saved);
     const onClose = vi.fn();
     const outcomeFocus = vi.fn();
@@ -270,7 +271,10 @@ describe('pressing comparison evidence', () => {
     expect(reviewEvidence.props.tabIndex).toBe(0);
     expect(reviewEvidence.parent).toBe(actions.parent);
     expect(evidenceTable()).toBeDefined();
-    expect(actions.findByType(PressingSelectionSummary).props).toMatchObject({ compact: true, choice: { releaseId: 430 } });
+    const selectionSummary = actions.findByType(PressingSelectionSummary);
+    expect(selectionSummary.props).toMatchObject({ compact: true, choice: { releaseId: 430 } });
+    expect(textOf(selectionSummary)).toContain('Selected pressing');
+    expect(button('Use this pressing').props['aria-describedby']).toBe(selectionSummary.props.id);
     expect(actions.findAllByType('button').map(textOf)).toContain('Keep current pressing');
     expect(textOf(actions)).toContain('Confirmation records the exact Discogs release on your Collection entry.');
     await act(async () => button('Use this pressing').props.onClick());
@@ -305,6 +309,8 @@ describe('pressing comparison evidence', () => {
     expect(onSavePressing).toHaveBeenCalledTimes(2);
     expect(values('Discogs release ID')).toEqual(['430', '430']);
     expect(textOf(renderer!.root)).toContain('Pressing updated. Saved in Collection · Discogs release 430');
+    expect(renderer!.root.findByType('time').props.dateTime).toBe(expiresAt);
+    expect(textOf(renderer!.root.findByType('time').parent!)).toContain('here or in Recent library changes.');
     expect(outcomeFocus).toHaveBeenCalledOnce();
     expect(button('Use this pressing')).toBeUndefined();
     await act(async () => button('Undo pressing change').props.onClick());

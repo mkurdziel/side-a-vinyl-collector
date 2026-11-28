@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref, type RefObject } from 'react';
 import api, { ApiError, type Album } from '../services/api';
+import { formatUndoDeadline } from '../services/undoDeadline';
 
 type AlbumDetails = Pick<Album, 'id' | 'title' | 'status'>;
 type UndoReceipt = { undoToken?: string; expiresAt?: string };
@@ -34,7 +35,6 @@ const legacyHistoryKey = 'side-a-removal-history';
 const legacyReceiptKey = 'side-a-last-removal';
 const undoWindow = 10 * 60_000;
 const shelfNames = { collection: 'Collection', wishlist: 'Wishlist' };
-const expiryTime = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
 const actions = {
   removal: { label: 'Undo removal', pending: 'Restoring…', request: (id: number, token: string) => api.undoAlbumRemoval(id, token) },
   move: { label: 'Undo move', pending: 'Moving back…', request: (id: number, token: string) => api.undoAlbumMove(id, token) },
@@ -141,6 +141,7 @@ export function RemovalHistory({ ref, onRestored, onMovedBack, onPressingUndone,
   const undoButtons = useRef(new Map<string, HTMLButtonElement>());
   const nextFocus = useRef<{ key: string } | 'feedback' | 'toggle' | 'fallback'>(undefined);
   const listId = useId();
+  const collapsedDetailsId = useId();
   const externalChange = useRef(onExternalChange);
   useEffect(() => { externalChange.current = onExternalChange; }, [onExternalChange]);
 
@@ -217,10 +218,13 @@ export function RemovalHistory({ ref, onRestored, onMovedBack, onPressingUndone,
       const focused = latest.current.find(entry => undoButtons.current.get(receiptKey(entry)) === active);
       const before = restoreTime.current;
       refresh();
+      const restored = restoreTime.current > before;
       if (focused && !latest.current.some(entry => receiptKey(entry) === receiptKey(focused))) {
         nextFocus.current = latest.current.length ? 'toggle' : 'fallback';
+      } else if (!latest.current.length && active && (active === toggle.current || (restored && panel.current?.contains(active)))) {
+        nextFocus.current = !restored && feedback.current ? 'feedback' : 'fallback';
       }
-      if (restoreTime.current > before) setOutcome(undefined);
+      if (restored) setOutcome(undefined);
       if (event.newValue !== null || event.key === null) externalChange.current?.();
     };
     window.addEventListener?.('storage', onStorage);
@@ -363,14 +367,33 @@ export function RemovalHistory({ ref, onRestored, onMovedBack, onPressingUndone,
 
   if (!entries.length && !outcome) return null;
 
+  const available = entries.filter(entry => !entry.undoing);
+  const availableCount = available.length;
+  const nextDeadline = available.at(-1)?.expiresAt;
+  const tabOnlyCount = available.filter(entry => entry.tabOnly).length;
+  const showCollapsedDetails = !expanded && !!nextDeadline;
+
   return (
     <aside ref={panel} className="mb-4 rounded-xl border border-gray-300 bg-white px-3 py-2" aria-label="Library change recovery">
       <div className="flex flex-wrap items-center justify-between gap-x-2">
         {entries.length > 0 && (
           <button ref={toggle} type="button" className="rh-lookup-link -ml-2 text-left" aria-expanded={expanded} aria-controls={listId}
+            aria-label={`Recent library changes, ${availableCount ? `${availableCount} available to undo` : 'undo in progress'}`}
+            aria-describedby={showCollapsedDetails ? collapsedDetailsId : undefined}
             onClick={() => setExpanded(current => !current)}>
-            Recent library changes<span className="sr-only">, {entries.length} available to undo</span>
+            Recent library changes<span aria-hidden="true" className="ml-1.5 text-xs font-normal text-gray-600 tabular-nums">
+              · {availableCount ? `${availableCount} to undo` : 'Undo in progress'}
+            </span>
           </button>
+        )}
+        {showCollapsedDetails && (
+          <p id={collapsedDetailsId} className="min-w-0 pb-1 text-xs text-gray-600 tabular-nums sm:pb-0">
+            {availableCount === 1 ? 'Undo until ' : 'Next undo expires at '}
+            <time dateTime={nextDeadline}>{formatUndoDeadline(nextDeadline)}</time>
+            {tabOnlyCount > 0 && <span className="block">
+              {tabOnlyCount === availableCount ? 'This tab only.' : 'Some undos need this tab.'} Keep it open without reloading.
+            </span>}
+          </p>
         )}
         {outcome && (
           <p ref={feedback} role={outcome.error ? 'alert' : 'status'} tabIndex={-1}
@@ -381,6 +404,9 @@ export function RemovalHistory({ ref, onRestored, onMovedBack, onPressingUndone,
         {(expanded || outcome) && <button type="button" className="rh-lookup-link ml-auto" onClick={dismiss}
           aria-label="Dismiss library change notice">Dismiss</button>}
       </div>
+      {expanded && availableCount > 0 && <p className="pb-2 text-xs text-gray-600">
+        Undo each change here within 10 minutes of making it.{tabOnlyCount === 0 && ' This list is shared across tabs in this browser.'}
+      </p>}
       {entries.length > 0 && <ul id={listId} className="divide-y divide-gray-200 border-t" hidden={!expanded}>
         {entries.map(entry => {
           const action = actions[entry.kind];
@@ -391,17 +417,17 @@ export function RemovalHistory({ ref, onRestored, onMovedBack, onPressingUndone,
             <li key={key} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2">
               <div className="min-w-0 text-sm [overflow-wrap:anywhere]">
                 <p className="font-medium">{description(entry)}</p>
-                <p id={expiryId} className="text-xs text-gray-600">
-                  Undo until <time dateTime={entry.expiresAt}>{expiryTime.format(new Date(entry.expiresAt))}</time>
-                  {entry.tabOnly && <span className="block">Undo is available while this tab stays open.</span>}
-                </p>
+                {!entry.undoing && <p id={expiryId} className="text-xs text-gray-600 tabular-nums">
+                  Undo until <time dateTime={entry.expiresAt}>{formatUndoDeadline(entry.expiresAt)}</time>
+                  {entry.tabOnly && <span className="block">This tab only. Keep it open without reloading.</span>}
+                </p>}
                 {entry.issue && <p role="alert" className="mt-1 text-red-600">{entry.issue}</p>}
               </div>
               <button ref={button => {
                 if (button) undoButtons.current.set(key, button);
                 else undoButtons.current.delete(key);
               }} type="button" className="min-h-11 rounded-lg border border-gray-300 bg-gray-100 px-3 text-sm font-semibold text-gray-900 hover:bg-gray-50"
-                aria-label={`${label} · ${entry.title}`} aria-describedby={expiryId}
+                aria-label={`${label} · ${entry.title}`} aria-describedby={entry.undoing ? undefined : expiryId}
                 aria-disabled={entry.undoing} aria-busy={entry.undoing} onClick={() => void undo(entry)}>{label}</button>
             </li>
           );

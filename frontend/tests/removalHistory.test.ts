@@ -29,11 +29,11 @@ const onPressingUndone = vi.fn();
 const onExternalChange = vi.fn();
 let renderer: ReturnType<typeof create>;
 
-async function mount() {
+async function mount(options: Parameters<typeof create>[1] = {}, fallbackFocus = createRef<HTMLElement>()) {
   await act(async () => {
     renderer = create(createElement(RemovalHistory, {
-      ref: history, onRestored, onMovedBack, onPressingUndone, onExternalChange, fallbackFocus: createRef(),
-    }));
+      ref: history, onRestored, onMovedBack, onPressingUndone, onExternalChange, fallbackFocus,
+    }), options);
   });
 }
 
@@ -56,6 +56,10 @@ async function record(album: Album, duration = 600_000) {
 
 function button(name: string) {
   return renderer.root.findAllByType('button').find(node => node.props['aria-label'] === name || node.children[0] === name);
+}
+
+function collapsedDetails() {
+  return renderer.root.findByProps({ id: button('Recent library changes')!.props['aria-describedby'] });
 }
 
 beforeEach(() => {
@@ -106,8 +110,12 @@ describe('removal history', () => {
 
     await act(async () => button('Dismiss library change notice')!.props.onClick());
     expect(renderer.root.findByType('ul').props.hidden).toBe(true);
+    expect(button('Recent library changes, 2 available to undo')?.findByType('span').children.join('')).toContain('2 to undo');
+    expect(collapsedDetails().children).toContain('Next undo expires at ');
+    expect(collapsedDetails().findByType('time').props.dateTime).toBe(firstReceipt.expiresAt);
     await act(async () => button('Recent library changes')!.props.onClick());
     expect(renderer.root.findByType('ul').props.hidden).toBe(false);
+    expect(JSON.stringify(renderer.toJSON())).toContain('This list is shared across tabs in this browser.');
     await act(async () => renderer.unmount());
     session.clear();
     await mount();
@@ -126,10 +134,14 @@ describe('removal history', () => {
   it('expires each receipt separately and keeps a failed undo retryable until its deadline', async () => {
     await mount();
     await record(shelfRecord, 1_000);
-    await record(wishlistRecord, 10_000);
+    const remaining = await record(wishlistRecord, 10_000);
+    await act(async () => button('Dismiss library change notice')!.props.onClick());
     await act(async () => vi.advanceTimersByTimeAsync(1_000));
     expect(button('Undo removal · Blue Train')).toBeUndefined();
     expect(JSON.stringify(renderer.toJSON())).toContain('The undo window for “Blue Train” ended.');
+    expect(button('Recent library changes, 1 available to undo')).toBeDefined();
+    expect(collapsedDetails().findByType('time').props.dateTime).toBe(remaining.expiresAt);
+    await act(async () => button('Recent library changes')!.props.onClick());
 
     undoAlbumRemoval.mockRejectedValueOnce(new Error('Offline'))
       .mockRejectedValueOnce(new ApiError('This removal can no longer be undone.', 409));
@@ -154,6 +166,7 @@ describe('removal history', () => {
     await act(async () => button('Undo removal · Giant Steps')!.props.onClick());
     expect(onRestored).toHaveBeenNthCalledWith(1, wishlistRecord);
     expect(button('Restoring… · Blue Train')?.props['aria-busy']).toBe(true);
+    expect(button('Recent library changes, undo in progress')).toBeDefined();
 
     await act(async () => pending.resolve({ album: shelfRecord }));
     expect(onRestored).toHaveBeenNthCalledWith(2, shelfRecord);
@@ -206,6 +219,27 @@ describe('removal history', () => {
     expect(button('Undo removal · Blue Train')).toBeDefined();
   });
 
+  it('returns focus to the library when another tab consumes the final collapsed receipt', async () => {
+    const ownerDocument = { activeElement: null as object | null };
+    const toggle = { focus: vi.fn(() => { ownerDocument.activeElement = toggle; }) };
+    const fallbackFocus = createRef<HTMLElement>();
+    const focus = vi.fn();
+    fallbackFocus.current = { focus } as unknown as HTMLElement;
+    await mount({ createNodeMock: element => {
+      if (element.type === 'aside') return { ownerDocument };
+      if (element.type === 'button' && element.props['aria-controls']) return toggle;
+      return null;
+    } }, fallbackFocus);
+    const receipt = await record(shelfRecord);
+    await act(async () => button('Dismiss library change notice')!.props.onClick());
+    expect(toggle.focus).toHaveBeenCalledWith({ preventScroll: true });
+
+    const key = `side-a-library-undo:removal:${shelfRecord.id}:${receipt.undoToken}:closed`;
+    await emitStorageChange(key, JSON.stringify({ ...shelfRecord, ...receipt, kind: 'removal', closed: true }));
+    expect(renderer.toJSON()).toBeNull();
+    expect(focus).toHaveBeenCalledWith({ preventScroll: false });
+  });
+
   it('recovers separate moves and a pressing update after remounting the history', async () => {
     await mount();
     const expiry = { expiresAt: new Date(Date.now() + 600_000).toISOString() };
@@ -254,8 +288,13 @@ describe('removal history', () => {
   it('offers tab-only undo and explains its scope when browser persistence is blocked', async () => {
     vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new DOMException('Blocked', 'SecurityError'); });
     await mount();
-    await record(shelfRecord);
-    expect(JSON.stringify(renderer.toJSON())).toContain('Undo is available while this tab stays open.');
+    const receipt = await record(shelfRecord);
+    expect(JSON.stringify(renderer.toJSON())).toContain('This tab only. Keep it open without reloading.');
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('This list is shared across tabs in this browser.');
+    await act(async () => button('Dismiss library change notice')!.props.onClick());
+    expect(collapsedDetails().findByType('span').children.join('')).toBe('This tab only. Keep it open without reloading.');
+    expect(collapsedDetails().findByType('time').props.dateTime).toBe(receipt.expiresAt);
+    await act(async () => button('Recent library changes')!.props.onClick());
     expect(activeReceipts()).toEqual([]);
     undoAlbumRemoval.mockResolvedValueOnce({ album: shelfRecord });
     await act(async () => button('Undo removal · Blue Train')!.props.onClick());

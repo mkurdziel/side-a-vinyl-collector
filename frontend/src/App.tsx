@@ -13,6 +13,7 @@ import { SaveDestinationActions, SaveShelfSelect, type DestinationAction } from 
 import { ModalDialog } from './components/ModalDialog';
 import { ManualAlbumDialog, type ManualAlbumDraft } from './components/ManualAlbumDialog';
 import type { StoredManualAlbumDraft } from './services/manualAlbumDrafts';
+import { formatUndoDeadline } from './services/undoDeadline';
 import { CatalogPressingPicker } from './components/CatalogPressingPicker';
 import { RemovalHistory, type RemovalHistoryHandle } from './components/RemovalHistory';
 
@@ -262,7 +263,6 @@ function App() {
   const [loadingMore, setLoadingMore] = useState<Partial<Record<ResultKind, 'pending' | 'error'>>>({});
   const [loadedPage, setLoadedPage] = useState<LoadedPage>();
   const [showAddMenu, setShowAddMenu] = useState(false);
-  const [addingByName, setAddingByName] = useState(false);
   const [manualEntry, setManualEntry] = useState<{ draft: ManualAlbumDraft; shelf: Shelf; resumeDraft?: StoredManualAlbumDraft }>();
   const [detectedDraft, setDetectedDraft] = useState<ManualAlbumDraft>();
   const [pressingReview, setPressingReview] = useState<{ album: DiscogsAlbum; destination: Shelf; searchedNumber?: string }>();
@@ -306,12 +306,12 @@ function App() {
   const albumReviewRequest = useRef<AbortController>(null);
   const albumReviewOpener = useRef<HTMLButtonElement>(null);
   const lookupDrafts = useRef<Partial<Record<LookupMode, LookupDraft>>>({});
+  const scopeBeforeAdd = useRef<SearchScope>(undefined);
   const libraryVersion = useRef(0);
   const latestQuery = useRef('');
   const latestScope = useRef<SearchScope>('saved');
   const searchSort = useRef(sortBy);
   const searchInput = useRef<HTMLInputElement>(null);
-  const onlineSearchAction = useRef<HTMLButtonElement>(null);
   const pressingReviewOpener = useRef<HTMLButtonElement>(null);
   const pressingReviewFallback = useRef<HTMLElement>(null);
   const catalogHeading = useRef<HTMLHeadingElement>(null);
@@ -521,7 +521,6 @@ function App() {
   };
 
   const changeLookupMethod = (method: LookupMode, nameScope?: SearchScope) => {
-    if (method === 'catalog-number') setAddingByName(false);
     const previous = lookupMode(latestScope.current);
     if (method === previous) {
       if (nameScope) changeScope(nameScope);
@@ -983,7 +982,6 @@ function App() {
   const catalogActive = searchesCatalog(searchScope);
   const numberSearch = searchScope === 'catalog-number';
   const numberShelfMatches = numberSearch && catalogResults ? savedCatalogNumberMatches(catalogResults.discogs) : [];
-  const continueOnline = addingByName && !catalogActive;
   const catalogUnavailable = catalogState.status === 'error' || !!catalogResults?.errors?.length;
   const pressingReviewIssue = pressingReview && saveErrors[catalogKey(pressingReview.album)];
   const pressingReviewDuplicate = pressingReviewIssue?.albumId;
@@ -1190,7 +1188,10 @@ function App() {
               <select
                 id="search-scope"
                 value={searchScope}
-                onChange={event => changeScope(event.target.value as SearchScope)}
+                onChange={event => {
+                  scopeBeforeAdd.current = undefined;
+                  changeScope(event.target.value as SearchScope);
+                }}
                 className="max-w-full rounded-lg border border-gray-300 px-2 text-sm"
               >
                 <option value="saved">Collection and Wishlist</option>
@@ -1202,7 +1203,7 @@ function App() {
             {numberSearch && <p className="rh-number-scope text-xs text-gray-600" id="number-lookup-source">Looks up numbers in Discogs</p>}
               <button
                 type="button"
-                className={`${continueOnline ? secondaryButton : 'rh-primary-action'} rh-add-trigger flex shrink-0 items-center justify-center gap-1 px-2.5 py-2 text-sm font-semibold sm:gap-2 sm:px-4`}
+                className="rh-primary-action rh-add-trigger flex shrink-0 items-center justify-center gap-1 px-2.5 py-2 text-sm font-semibold sm:gap-2 sm:px-4"
                 aria-label="Add Album"
                 aria-haspopup="dialog"
                 onClick={() => setShowAddMenu(true)}
@@ -1212,11 +1213,6 @@ function App() {
                 </svg>
                 Add<span className="hidden sm:inline"> Album</span>
               </button>
-            {continueOnline && <div className="rh-online-continuation">
-              <p className="text-sm">Find records outside your shelves.</p>
-              <button ref={onlineSearchAction} type="button" className="rh-primary-action px-3 text-sm font-semibold"
-                onClick={() => openNameSearch()}>Search online catalogs</button>
-            </div>}
           </form>
         </div>
 
@@ -1250,9 +1246,10 @@ function App() {
           <div className="rh-result-tools">
             {searchActive && <nav className="rh-result-nav" aria-label="Search results">
               <button type="button" onClick={() => {
-                setAddingByName(false);
                 changeSearch('');
-                if (numberSearch) changeScope('saved');
+                const previous = scopeBeforeAdd.current;
+                scopeBeforeAdd.current = undefined;
+                if (previous || numberSearch) changeScope(previous ?? 'saved');
                 window.requestAnimationFrame(() => activeShelfButton.current?.focus());
               }}>Back to {shelfLabel[viewMode]}</button>
               {searchScope === 'catalog' && <a href="#saved-results-title">Saved</a>}
@@ -1275,7 +1272,7 @@ function App() {
             <section className="rh-saved-section" aria-labelledby="saved-results-title">
               <div className="rh-saved-heading-row mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <h2 ref={savedHeading} id="saved-results-title" tabIndex={-1} className="rh-result-heading text-lg font-semibold">Saved albums</h2>
-                {savedCount > 0 && !catalogActive && !continueOnline && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search online catalogs</button>}
+                {savedCount > 0 && !catalogActive && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search online catalogs</button>}
                 {(savedCount > 1 || results?.nextOffset !== undefined) && <SortControl sort={sortBy} onChange={changeSort} />}
               </div>
               {searchState.status === 'error' && (
@@ -1299,7 +1296,7 @@ function App() {
               </>}
               {results && savedCount === 0 && <>
                 <p role="status" className="text-sm text-gray-600 [overflow-wrap:anywhere]">No saved albums match “{searchQuery.trim()}”.</p>
-                {!catalogActive && !continueOnline && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search online catalogs</button>}
+                {!catalogActive && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search online catalogs</button>}
                 {searchScope !== 'catalog' && <button type="button" className="rh-lookup-link" onClick={() => changeLookupMethod('catalog-number')}>Search by catalog number</button>}
               </>}
             </section>
@@ -1315,7 +1312,9 @@ function App() {
                     <h3 className="text-sm font-semibold [overflow-wrap:anywhere]">{album.title}</h3>
                     <p className="text-xs text-gray-600">{album.artist_name} · {shelfLabel[album.status]}</p>
                     <p className="text-xs text-gray-600">{releaseNumberMatches
-                      ? 'Discogs lists this number for your saved release.' : 'Same album on your shelf. Check which release you own.'}</p>
+                      ? 'Discogs lists this number for your saved release.'
+                      : album.discogs_id ? 'Same album. This number is unverified for your saved release.'
+                        : 'Same album on your shelf. Its pressing is unconfirmed.'}</p>
                   </div>
                   <button type="button" className="rh-lookup-link text-left" aria-label={`Open ${savedCopyLabel(album)}`}
                     aria-haspopup="dialog" aria-disabled={loadingAlbumId === album.id}
@@ -1340,7 +1339,7 @@ function App() {
               {hasNewCatalogAlbums && <SaveShelfSelect label="Save new matches to" value={saveShelf} onChange={setSaveShelf} />}
             </div>
             {!!catalogCount && (numberSearch || hasNewCatalogAlbums) && <p className="rh-catalog-guidance text-sm text-gray-600">{numberSearch
-              ? 'Several releases can share a number. Compare the details on your copy before confirming a pressing.'
+              ? <>{numberShelfMatches.length === 0 && 'These matches aren’t linked to albums on your shelves. '}Several releases can share a number. Compare your copy before confirming a pressing.</>
               : 'You can save an album now and identify its pressing later.'}</p>}
             {catalogLoading && !catalogUnavailable && <p role="status" className="mb-3 text-sm text-gray-600">{numberSearch ? 'Looking up the number in Discogs…' : 'Searching catalogs…'}</p>}
             {catalogUnavailable && (
@@ -1483,11 +1482,9 @@ function App() {
           }}
           onSearchClick={() => {
             setShowAddMenu(false);
-            changeLookupMethod('name');
-            setAddingByName(true);
-            if (latestQuery.current.trim().length >= 2 && !searchesCatalog(latestScope.current)) {
-              window.requestAnimationFrame(() => onlineSearchAction.current?.focus());
-            }
+            const nameScope = lookupMode(latestScope.current) === 'name' ? latestScope.current : lookupDrafts.current.name?.scope;
+            if (nameScope !== 'catalog') scopeBeforeAdd.current ??= nameScope ?? 'saved';
+            changeLookupMethod('name', 'catalog');
           }}
           onCatalogNumberClick={() => {
             setShowAddMenu(false);
@@ -1610,6 +1607,7 @@ function App() {
             {detailBackToMatches && detailMove?.albumId === selectedAlbum.id && (
               <div className="rh-detail-move-feedback">
                 <p role="status" className="text-sm font-medium">Moved to {shelfLabel[detailMove.to]}.</p>
+                <p className="text-xs text-gray-600">Undo until <time dateTime={detailMove.expiresAt}>{formatUndoDeadline(detailMove.expiresAt)}</time>.</p>
                 {detailMove.issue && <p role="alert" className="text-sm text-red-600">{detailMove.issue}</p>}
                 <button type="button" className="rh-lookup-link"
                   aria-disabled={detailMove.undoing} aria-busy={detailMove.undoing} onClick={() => void undoDetailMove(detailMove)}>
