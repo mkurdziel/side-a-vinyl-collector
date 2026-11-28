@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from 'react';
 import { Toaster, toast } from 'react-hot-toast';
 import api, { ApiError, type Album, type DiscogsAlbum, type SavedTitleMatch, type SearchResult, getCoverArtUrl, isExactSavedMatch } from './services/api';
 import { applyLookupShelfEdits, catalogAlbumReference, catalogRecordLabel, catalogSaveReference, catalogSource, listingEvidence, savedCopyLabel, type LookupShelfEdits } from './albumDisplay';
@@ -16,11 +16,10 @@ import type { StoredManualAlbumDraft } from './services/manualAlbumDrafts';
 import { formatUndoDeadline } from './services/undoDeadline';
 import { CatalogPressingPicker } from './components/CatalogPressingPicker';
 import { RemovalHistory, type RemovalHistoryHandle } from './components/RemovalHistory';
+import { lookupMode, readSearchSession, writeSearchSession, type AddSearchOrigin, type LookupAnchor, type LookupMode, type LookupNavigation, type NameSearchScope, type ResultKind, type SearchScope } from './services/searchSession';
 
 type Shelf = Album['status'];
 type SortBy = 'title' | 'artist' | 'date';
-type SavedSearchScope = 'saved' | Shelf;
-type SearchScope = SavedSearchScope | 'catalog' | 'catalog-number';
 type ShelfRequest = { view: Shelf; revision: number };
 type ShelfResult = { request: ShelfRequest } & (
   { status: 'ready'; albums: Album[] } | { status: 'error' }
@@ -28,31 +27,26 @@ type ShelfResult = { request: ShelfRequest } & (
 type SearchState =
   | { status: 'idle' | 'pending' | 'error' }
   | { status: 'ready'; results: SearchResult };
-type ResultKind = 'saved' | 'catalog';
 type SearchRequest = { controller: AbortController; timer?: number };
 type SaveAction = DestinationAction | 'remove';
 type ShelfMove = { albumId: number; title: string; from: Shelf; to: Shelf };
 type DetailMove = ShelfMove & { expiresAt: string; issue?: string; undoing?: boolean };
 type SaveIssue = { message: string; albumId?: number; stale?: boolean };
-type LoadedPage = { target: string; message: string; trigger?: HTMLButtonElement };
-type LookupMode = 'name' | 'catalog-number';
-type LookupDraft = {
-  query: string;
-  scope: SearchScope;
-  scopeBeforeAdd?: SavedSearchScope;
+type LoadedPage = { target: string; message: string; trigger?: HTMLButtonElement; resuming?: boolean };
+type LookupCache = {
   saved: SearchState;
   catalog: SearchState;
-  destination: Shelf;
   detected?: ManualAlbumDraft;
   sort: SortBy;
   savedLoading: boolean;
   catalogLoading: boolean;
   pages: Partial<Record<ResultKind, 'pending' | 'error'>>;
+  offsets: Record<ResultKind, number>;
   libraryVersion: number;
 };
+type LookupDraft = LookupNavigation & { cache?: LookupCache };
 type AlbumReview = { album: Album; status: 'pending' | 'error' | 'ready'; choices: LookupPressing[]; removed?: boolean };
 
-const lookupMode = (scope: SearchScope): LookupMode => scope === 'catalog-number' ? 'catalog-number' : 'name';
 const catalogIdentity = (value: string) => value.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
 const shelves: Shelf[] = ['collection', 'wishlist'];
@@ -124,7 +118,24 @@ function savedCatalogNumberMatches(matches: DiscogsAlbum[]) {
 
 const savedAlbumKey = (id: number) => `saved:${id}`;
 const savedResultTarget = (id: number) => `saved-result-${id}`;
+const numberSavedResultTarget = (id: number) => `number-saved-result-${id}`;
 const catalogResultTarget = (album: DiscogsAlbum) => `catalog-result-${encodeURIComponent(catalogKey(album))}`;
+
+function appendSearchPage(data: SearchResult, page: SearchResult) {
+  const localIds = new Set(data.local.map(album => album.id));
+  const catalogKeys = new Set(data.discogs.map(catalogKey));
+  const newSaved = page.local.filter(album => !localIds.has(album.id));
+  const newCatalog = page.discogs.filter(album => !catalogKeys.has(catalogKey(album)));
+  return { newSaved, newCatalog, results: { ...page, local: [...data.local, ...newSaved], discogs: [...data.discogs, ...newCatalog] } };
+}
+
+function hasSearchAnchor(results: SearchResult, anchor: LookupAnchor) {
+  if (anchor.kind === 'saved') return results.local.some(album => savedResultTarget(album.id) === anchor.target);
+  if (anchor.target.startsWith('number-saved-result-')) {
+    return savedCatalogNumberMatches(results.discogs).some(({ album }) => numberSavedResultTarget(album.id) === anchor.target);
+  }
+  return results.discogs.some(album => catalogResultTarget(album) === anchor.target);
+}
 
 function draftForSearch(query: string, detected?: ManualAlbumDraft): ManualAlbumDraft {
   const text = query.trim();
@@ -253,16 +264,18 @@ function ShelfActions({ album, detailed = false, pending, issue, loadingAlbumId,
 }
 
 function App() {
-  const [shelfRequest, setShelfRequest] = useState<ShelfRequest>({ view: 'collection', revision: 0 });
+  const [initialSession] = useState(readSearchSession);
+  const initialLookup = initialSession?.drafts[initialSession.mode];
+  const [shelfRequest, setShelfRequest] = useState<ShelfRequest>({ view: initialSession?.shelf ?? 'collection', revision: 0 });
   const [shelfResult, setShelfResult] = useState<ShelfResult | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchScope, setSearchScope] = useState<SearchScope>('saved');
-  const [scopeBeforeAdd, setScopeBeforeAdd] = useState<SavedSearchScope>();
+  const [searchQuery, setSearchQuery] = useState(initialLookup?.query ?? '');
+  const [searchScope, setSearchScope] = useState<SearchScope>(initialLookup?.scope ?? 'saved');
+  const [addOrigin, setAddOrigin] = useState<AddSearchOrigin | undefined>(initialSession?.addOrigin);
   const [searchState, setSearchState] = useState<SearchState>({ status: 'idle' });
   const [catalogState, setCatalogState] = useState<SearchState>({ status: 'idle' });
   const [savedLoading, setSavedLoading] = useState(false);
   const [catalogLoading, setCatalogLoading] = useState(false);
-  const [saveShelf, setSaveShelf] = useState<Shelf>('collection');
+  const [saveShelf, setSaveShelf] = useState<Shelf>(initialLookup?.destination ?? initialSession?.shelf ?? 'collection');
   const [loadingMore, setLoadingMore] = useState<Partial<Record<ResultKind, 'pending' | 'error'>>>({});
   const [loadedPage, setLoadedPage] = useState<LoadedPage>();
   const [showAddMenu, setShowAddMenu] = useState(false);
@@ -299,8 +312,13 @@ function App() {
   const [artworkRevisions, setArtworkRevisions] = useState<Partial<Record<number, string>>>({});
   const [libraryArtworkRevision, setLibraryArtworkRevision] = useState<number>();
   const [sortBy, setSortBy] = useState<SortBy>(() => {
-    const saved = localStorage.getItem('albumSortBy');
-    return saved === 'artist' || saved === 'date' ? saved : 'title';
+    try {
+      const saved = localStorage.getItem('albumSortBy');
+      if (saved === 'artist' || saved === 'date') return saved;
+    } catch {
+      // The default sort is available without browser storage.
+    }
+    return 'title';
   });
   const inFlightSaves = useRef(new Set<string>());
   const openingSavedAlbum = useRef(false);
@@ -308,10 +326,12 @@ function App() {
   const pageRequests = useRef<Partial<Record<ResultKind, AbortController>>>({});
   const albumReviewRequest = useRef<AbortController>(null);
   const albumReviewOpener = useRef<HTMLButtonElement>(null);
-  const lookupDrafts = useRef<Partial<Record<LookupMode, LookupDraft>>>({});
+  const lookupDrafts = useRef<Partial<Record<LookupMode, LookupDraft>>>({ ...initialSession?.drafts });
+  const lookupAnchor = useRef(initialSession?.anchor);
+  const resultOffsets = useRef<Record<ResultKind, number>>({ saved: 0, catalog: 0 });
   const libraryVersion = useRef(0);
-  const latestQuery = useRef('');
-  const latestScope = useRef<SearchScope>('saved');
+  const latestQuery = useRef(initialLookup?.query ?? '');
+  const latestScope = useRef<SearchScope>(initialLookup?.scope ?? 'saved');
   const searchSort = useRef(sortBy);
   const searchInput = useRef<HTMLInputElement>(null);
   const pressingReviewOpener = useRef<HTMLButtonElement>(null);
@@ -319,6 +339,7 @@ function App() {
   const catalogHeading = useRef<HTMLHeadingElement>(null);
   const savedHeading = useRef<HTMLHeadingElement>(null);
   const activeShelfButton = useRef<HTMLButtonElement>(null);
+  const returnFocusShelf = useRef<Shelf>(undefined);
   const removalHistory = useRef<RemovalHistoryHandle>(null);
 
   const viewMode = shelfRequest.view;
@@ -328,7 +349,11 @@ function App() {
     : null;
 
   useEffect(() => {
-    localStorage.setItem('albumSortBy', sortBy);
+    try {
+      localStorage.setItem('albumSortBy', sortBy);
+    } catch {
+      // Sorting stays available for the current page.
+    }
   }, [sortBy]);
 
   useEffect(() => {
@@ -355,20 +380,26 @@ function App() {
     return () => { active = false; };
   }, []);
 
-  useEffect(() => () => {
-    for (const request of Object.values(searchRequests.current)) cancelSearch(request);
-    for (const request of Object.values(pageRequests.current)) request.abort();
-    albumReviewRequest.current?.abort();
-  }, []);
-
   useLayoutEffect(() => {
+    if (loadedPage?.resuming) {
+      if (savedLoading || catalogLoading) return;
+      const doc = searchInput.current?.ownerDocument;
+      if (doc && doc.activeElement === doc.body) doc.getElementById(loadedPage.target)?.focus();
+      return;
+    }
     if (!loadedPage?.trigger) return;
     const { target, trigger } = loadedPage;
     const doc = trigger.ownerDocument;
     if (doc.activeElement === trigger || (!trigger.isConnected && doc.activeElement === doc.body)) {
       doc.getElementById(target)?.focus();
     }
-  }, [loadedPage]);
+  }, [loadedPage, savedLoading, catalogLoading]);
+
+  useLayoutEffect(() => {
+    if (returnFocusShelf.current !== viewMode || searchQuery || addOrigin) return;
+    returnFocusShelf.current = undefined;
+    activeShelfButton.current?.focus();
+  }, [addOrigin, searchQuery, viewMode]);
 
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
@@ -394,8 +425,8 @@ function App() {
       : api.search(query, signal, kind, searchShelf(scope), offset, sort)
   );
 
-  const runSearch = (value: string, { delay = 0, keepResults = false, only, retryFrom }: {
-    delay?: number; keepResults?: boolean; only?: ResultKind; retryFrom?: HTMLButtonElement;
+  const runSearch = (value: string, { delay = 0, keepResults = false, only, retryFrom, resumeAt }: {
+    delay?: number; keepResults?: boolean; only?: ResultKind; retryFrom?: HTMLButtonElement; resumeAt?: LookupAnchor;
   } = {}) => {
     const query = value.trim();
     const scope = latestScope.current;
@@ -406,6 +437,7 @@ function App() {
       delete searchRequests.current[kind];
       pageRequests.current[kind]?.abort();
       delete pageRequests.current[kind];
+      resultOffsets.current[kind] = 0;
     }
     setLoadingMore(current => only && query.length >= 2 ? { ...current, [only]: undefined } : {});
     setLoadedPage(undefined);
@@ -433,7 +465,23 @@ function App() {
 
       const fetchResults = async () => {
         try {
-          const results = await searchResults(query, request.controller.signal, kind, scope, 0, sort);
+          let results = await searchResults(query, request.controller.signal, kind, scope, 0, sort);
+          if (resumeAt?.kind === kind) {
+            // Rebuild a small window of previously viewed pages without retaining their contents.
+            for (let page = 0; page < 4 && !request.controller.signal.aborted && !hasSearchAnchor(results, resumeAt); page++) {
+              const offset = results.nextOffset;
+              if (offset === undefined || offset > resumeAt.throughOffset || results.errors?.length) break;
+              const next = await searchResults(query, request.controller.signal, kind, scope, offset, sort).catch(() => undefined);
+              if (!next || next.errors?.length || request.controller.signal.aborted) break;
+              results = appendSearchPage(results, next).results;
+              resultOffsets.current[kind] = offset;
+            }
+            if (!request.controller.signal.aborted && hasSearchAnchor(results, resumeAt)) {
+              setLoadedPage({ target: resumeAt.target, message: 'Search resumed at your last result.', resuming: true });
+            } else if (lookupAnchor.current === resumeAt && !request.controller.signal.aborted) {
+              lookupAnchor.current = undefined;
+            }
+          }
           if (request.controller.signal.aborted) return;
           if (!results.errors?.length && retryFrom && retryFrom.ownerDocument.activeElement === retryFrom) {
             const heading = kind === 'catalog' ? catalogHeading : savedHeading;
@@ -466,27 +514,19 @@ function App() {
       const page = await searchResults(latestQuery.current.trim(), request.signal, kind, scope, offset, searchSort.current);
       if (request.signal.aborted) return;
       if (page.errors?.length) throw new Error('Search continuation unavailable');
-      const localIds = new Set(data.local.map(album => album.id));
-      const catalogKeys = new Set(data.discogs.map(catalogKey));
-      const newSaved = page.local.filter(album => !localIds.has(album.id));
-      const newCatalog = page.discogs.filter(album => !catalogKeys.has(catalogKey(album)));
+      const { newSaved, newCatalog } = appendSearchPage(data, page);
       const count = kind === 'saved' ? newSaved.length : newCatalog.length;
       const target = kind === 'saved'
         ? (newSaved[0] ? savedResultTarget(newSaved[0].id) : 'saved-results-title')
         : (newCatalog[0] ? catalogResultTarget(newCatalog[0]) : 'catalog-results-title');
       const stillFocused = trigger?.ownerDocument.activeElement === trigger;
+      resultOffsets.current[kind] = offset;
       setLoadedPage({ target, trigger: stillFocused ? trigger : undefined,
         message: count ? `Loaded ${count} more ${kind} ${count === 1 ? 'match' : 'matches'}.` : `No more ${kind} matches on this page.` });
       setResults(current => {
         if (current.status !== 'ready' || current.results.nextOffset !== offset) return current;
-        return {
-          status: 'ready',
-          results: {
-            ...page,
-            local: [...current.results.local, ...newSaved],
-            discogs: [...current.results.discogs, ...newCatalog],
-          },
-        };
+        return { status: 'ready', results: { ...page,
+          local: [...current.results.local, ...newSaved], discogs: [...current.results.discogs, ...newCatalog] } };
       });
       setLoadingMore(current => ({ ...current, [kind]: undefined }));
     } catch {
@@ -497,6 +537,7 @@ function App() {
   };
 
   const changeSearch = (value: string) => {
+    lookupAnchor.current = undefined;
     latestQuery.current = value;
     setSearchQuery(value);
     if (!value.trim()) setDetectedDraft(undefined);
@@ -512,6 +553,7 @@ function App() {
     const previous = latestScope.current;
     if (searchesCatalog(scope) && (!searchesCatalog(previous) || destination)) setSaveShelf(destination ?? viewMode);
     if (previous === scope) return;
+    lookupAnchor.current = undefined;
     latestScope.current = scope;
     setSearchScope(scope);
     const only = (previous === 'saved' && scope === 'catalog') || (previous === 'catalog' && scope === 'saved') ? 'catalog' : undefined;
@@ -522,38 +564,45 @@ function App() {
     window.requestAnimationFrame(() => searchInput.current?.focus());
   };
 
-  const changeLookupMethod = (method: LookupMode, nameScope?: SearchScope) => {
+  const parkLookupDraft = (mode: LookupMode) => {
+    lookupDrafts.current[mode] = {
+      scope: latestScope.current, query: latestQuery.current, destination: saveShelf,
+      cache: { saved: searchState, catalog: catalogState, detected: detectedDraft,
+        sort: searchSort.current, savedLoading, catalogLoading, pages: loadingMore,
+        offsets: { ...resultOffsets.current }, libraryVersion: libraryVersion.current },
+    };
+  };
+
+  const changeLookupMethod = (method: LookupMode, nameScope?: NameSearchScope) => {
     const previous = lookupMode(latestScope.current);
     if (method === previous) {
       if (nameScope) changeScope(nameScope);
       focusSearch();
       return;
     }
-    lookupDrafts.current[previous] = {
-      scope: latestScope.current, scopeBeforeAdd, query: latestQuery.current, saved: searchState, catalog: catalogState,
-      destination: saveShelf, detected: detectedDraft, sort: searchSort.current, savedLoading, catalogLoading,
-      pages: loadingMore, libraryVersion: libraryVersion.current,
-    };
+    parkLookupDraft(previous);
+    lookupAnchor.current = undefined;
     runSearch(''); // Cancel requests for the method being parked, including pagination.
     const draft = lookupDrafts.current[method];
+    const cache = draft?.cache;
     const scope = nameScope ?? draft?.scope ?? (method === 'name' ? 'saved' : 'catalog-number');
     const query = draft?.query ?? '';
     latestScope.current = scope;
     latestQuery.current = query;
     setSearchScope(scope);
-    setScopeBeforeAdd(scope === 'catalog' ? draft?.scopeBeforeAdd : undefined);
     setSearchQuery(query);
-    setSaveShelf(draft?.destination ?? viewMode);
-    setDetectedDraft(draft?.detected);
+    setSaveShelf(draft?.scope === scope ? draft.destination : viewMode);
+    setDetectedDraft(cache?.detected);
     setSaveErrors({});
-    if (draft && draft.libraryVersion === libraryVersion.current && draft.scope === scope && draft.sort === searchSort.current) {
-      setSearchState(draft.saved);
-      setCatalogState(draft.catalog);
+    if (cache && cache.libraryVersion === libraryVersion.current && draft.scope === scope && cache.sort === searchSort.current) {
+      resultOffsets.current = { ...cache.offsets };
+      setSearchState(cache.saved);
+      setCatalogState(cache.catalog);
       for (const kind of resultKinds) {
-        const wasLoading = kind === 'saved' ? draft.savedLoading : draft.catalogLoading;
-        const previousState = kind === 'saved' ? draft.saved : draft.catalog;
+        const wasLoading = kind === 'saved' ? cache.savedLoading : cache.catalogLoading;
+        const previousState = kind === 'saved' ? cache.saved : cache.catalog;
         if (wasLoading) runSearch(query, { only: kind, keepResults: previousState.status === 'ready' });
-        else if (draft.pages[kind] === 'error') setLoadingMore(current => ({ ...current, [kind]: 'error' }));
+        else if (cache.pages[kind] === 'error') setLoadingMore(current => ({ ...current, [kind]: 'error' }));
       }
     } else if (query.trim().length >= 2) {
       runSearch(query);
@@ -562,11 +611,98 @@ function App() {
   };
 
   const returnToShelf = () => {
+    returnFocusShelf.current = addOrigin?.shelf ?? viewMode;
+    if (addOrigin || latestScope.current === 'catalog-number') {
+      if (addOrigin && latestScope.current === 'catalog-number') parkLookupDraft('catalog-number');
+      const scope = addOrigin?.scope ?? 'saved';
+      latestScope.current = scope;
+      setSearchScope(scope);
+      if (addOrigin) {
+        setSaveShelf(addOrigin.destination);
+        showShelf(addOrigin.shelf);
+      }
+    }
     changeSearch('');
-    if (scopeBeforeAdd || latestScope.current === 'catalog-number') changeScope(scopeBeforeAdd ?? 'saved');
-    setScopeBeforeAdd(undefined);
-    window.requestAnimationFrame(() => activeShelfButton.current?.focus());
+    setAddOrigin(undefined);
   };
+
+  const startAddSearch = (method: LookupMode) => {
+    if (!addOrigin) {
+      const scope = latestScope.current;
+      const parked = lookupDrafts.current.name;
+      const nameScope = scope === 'catalog-number' ? parked?.scope ?? 'saved' : scope;
+      setAddOrigin({ shelf: viewMode, scope: nameScope === 'catalog-number' ? 'saved' : nameScope,
+        destination: scope === 'catalog-number' ? parked?.destination ?? viewMode : saveShelf });
+    }
+    changeLookupMethod(method, method === 'name' ? 'catalog' : undefined);
+  };
+
+  const anchorAt = (element?: HTMLElement | null): LookupAnchor | undefined => {
+    const kind = element?.dataset.lookupResult;
+    const target = element?.dataset.lookupTarget;
+    if (target && (kind === 'saved' || kind === 'catalog')) return { kind, target, throughOffset: resultOffsets.current[kind] };
+  };
+
+  const persistLookup = () => {
+    const mode = lookupMode(searchScope);
+    const drafts: Partial<Record<LookupMode, LookupNavigation>> = {};
+    for (const method of ['name', 'catalog-number'] as const) {
+      const draft = lookupDrafts.current[method];
+      if (draft) drafts[method] = { scope: draft.scope, query: draft.query, destination: draft.destination };
+    }
+    drafts[mode] = { scope: searchScope, query: searchQuery, destination: saveShelf };
+    writeSearchSession({ mode, drafts, shelf: viewMode, addOrigin, anchor: lookupAnchor.current });
+  };
+
+  const rememberLookupResult = (target: EventTarget) => {
+    const anchor = anchorAt((target as Element).closest?.<HTMLElement>('[data-lookup-result]'));
+    if (!anchor || (lookupAnchor.current?.target === anchor.target && lookupAnchor.current.throughOffset === anchor.throughOffset)) return;
+    lookupAnchor.current = anchor;
+    persistLookup();
+  };
+
+  const persistCurrentLookup = useEffectEvent((capturePosition = false) => {
+    const doc = searchInput.current?.ownerDocument;
+    if (capturePosition && doc && !doc.querySelector('dialog[open]')) {
+      const center = window.innerHeight / 2;
+      let closest: HTMLElement | undefined;
+      let distance = Infinity;
+      for (const element of doc.querySelectorAll<HTMLElement>('[data-lookup-result]')) {
+        const rect = element.getBoundingClientRect();
+        if (rect.bottom <= 0 || rect.top >= window.innerHeight) continue;
+        const candidateDistance = Math.abs((rect.top + rect.bottom) / 2 - center);
+        if (candidateDistance >= distance) continue;
+        closest = element;
+        distance = candidateDistance;
+      }
+      lookupAnchor.current = anchorAt(closest) ?? lookupAnchor.current;
+    }
+    persistLookup();
+  });
+
+  useEffect(() => {
+    persistCurrentLookup();
+  }, [addOrigin, saveShelf, searchQuery, searchScope, viewMode]);
+
+  const requeryInitialLookup = useEffectEvent(() => {
+    if (initialLookup?.query.trim()) runSearch(initialLookup.query, { resumeAt: initialSession?.anchor });
+  });
+
+  useEffect(() => {
+    let mounted = true;
+    const searches = searchRequests.current;
+    const pages = pageRequests.current;
+    queueMicrotask(() => { if (mounted) requeryInitialLookup(); });
+    const onPageHide = () => persistCurrentLookup(true);
+    window.addEventListener?.('pagehide', onPageHide);
+    return () => {
+      mounted = false;
+      window.removeEventListener?.('pagehide', onPageHide);
+      for (const request of Object.values(searches)) cancelSearch(request);
+      for (const request of Object.values(pages)) request.abort();
+      albumReviewRequest.current?.abort();
+    };
+  }, []);
 
   const openNameSearch = (query?: string, draft?: ManualAlbumDraft, destination?: Shelf) => {
     if (latestScope.current === 'catalog-number') changeLookupMethod('name', 'catalog');
@@ -1023,7 +1159,9 @@ function App() {
         const availablePressings = catalogResults?.discogs.length ? savedPressingChoices(album, catalogResults.discogs) : [];
         const canCompare = availablePressings.some(pressing => pressing.releaseId !== album.discogs_id);
         return (
-          <article key={album.id} className={searchActive ? 'rh-saved-result' : 'rh-album-card relative flex flex-col rounded-xl border border-gray-200'}>
+          <article key={album.id} data-lookup-result={searchActive ? 'saved' : undefined}
+            data-lookup-target={searchActive ? savedResultTarget(album.id) : undefined}
+            className={searchActive ? 'rh-saved-result' : 'rh-album-card relative flex flex-col rounded-xl border border-gray-200'}>
             <div className="rh-album-cover relative flex aspect-square items-center justify-center overflow-hidden">
               <AlbumCover key={src} src={src} />
             </div>
@@ -1138,7 +1276,8 @@ function App() {
         </div>
       </header>
 
-      <main className="rh-main rh-shell mx-auto px-6 py-3 sm:py-6">
+      <main className="rh-main rh-shell mx-auto px-6 py-3 sm:py-6"
+        onClickCapture={event => rememberLookupResult(event.target)} onFocusCapture={event => rememberLookupResult(event.target)}>
         <div className="rh-command-bar" id="search-controls">
           <form
             role="search"
@@ -1153,6 +1292,15 @@ function App() {
                 <button type="button" aria-pressed={!numberSearch} onClick={() => changeLookupMethod('name')}>Album or artist</button>
                 <button type="button" aria-pressed={numberSearch} onClick={() => changeLookupMethod('catalog-number')}>Catalog number</button>
               </div>
+              <details className="rh-search-tips">
+                <summary aria-label="Search tips"><span className="hidden sm:inline">Search </span>Tips</summary>
+                <div>
+                  <p>Use Search in to choose shelves or online catalogs for name searches. Catalog-number lookup searches Discogs.</p>
+                  <p>Find the catalog number on the sleeve or label. Check the label, format, and year before confirming an exact release.</p>
+                  <p>Each artist and title has one shelf entry. Save the album first if you still need to identify its pressing.</p>
+                  <p className="rh-keyboard-tip">Focus search with <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd>.</p>
+                </div>
+              </details>
             </div>
             <label htmlFor="album-search" className="sr-only">{numberSearch ? 'Search catalog number' : 'Search by album or artist'}</label>
             <div className="rh-query-controls flex min-w-0 gap-1.5 sm:gap-2">
@@ -1164,7 +1312,7 @@ function App() {
                   enterKeyHint="search"
                   aria-keyshortcuts="Alt+Shift+F"
                   aria-describedby={numberSearch ? 'number-lookup-source' : undefined}
-                  aria-description={scopeBeforeAdd ? 'Add search includes your shelves and online catalogs.' : undefined}
+                  aria-description={addOrigin && searchScope === 'catalog' ? 'Add search includes your shelves and online catalogs.' : undefined}
                   className={`w-full border px-2 py-2 sm:px-3 ${searchQuery ? 'pr-11 sm:pr-12' : ''}`}
                   placeholder={numberSearch ? 'Number on the sleeve or label' : 'Album title or artist name'}
                   value={searchQuery}
@@ -1195,14 +1343,11 @@ function App() {
               </button>
             </div>
             {!numberSearch && <div className="rh-search-scope flex flex-wrap items-center gap-x-2">
-              <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">{scopeBeforeAdd ? 'Add search in' : 'Search in'}</label>
+              <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">{addOrigin ? 'Add search in' : 'Search in'}</label>
               <select
                 id="search-scope"
                 value={searchScope}
-                onChange={event => {
-                  setScopeBeforeAdd(undefined);
-                  changeScope(event.target.value as SearchScope);
-                }}
+                onChange={event => changeScope(event.target.value as SearchScope)}
                 className="max-w-full rounded-lg border border-gray-300 px-2 text-sm"
               >
                 <option value="saved">Collection and Wishlist</option>
@@ -1253,25 +1398,16 @@ function App() {
         </div>
 
         <div role="status" className="sr-only">{loadedPage?.message}</div>
-        {(searchActive || !queryLength || scopeBeforeAdd) && (
+        {(searchActive || addOrigin) && (
           <div className="rh-result-tools">
-            {(searchActive || scopeBeforeAdd) && <nav className="rh-result-nav" aria-label={searchActive ? 'Search results' : 'Add search'}>
-              <button type="button" onClick={returnToShelf}>{scopeBeforeAdd ? 'Return to' : 'Back to'} {shelfLabel[viewMode]}</button>
+            <nav className="rh-result-nav" aria-label={searchActive ? 'Search results' : 'Add search'}>
+              <button type="button" onClick={returnToShelf}>{addOrigin ? 'Return to' : 'Back to'} {shelfLabel[addOrigin?.shelf ?? viewMode]}</button>
               {searchActive && <>
                 {searchScope === 'catalog' && <a href="#saved-results-title">Saved</a>}
                 {numberShelfMatches.length > 0 && <a href="#number-saved-results-title">On your shelves</a>}
                 {catalogActive && <a href="#catalog-results-title">{numberSearch ? 'Discogs' : 'Catalogs'}</a>}
               </>}
-            </nav>}
-            <details className="rh-search-tips">
-              <summary aria-label="Search tips"><span className="hidden sm:inline">Search </span>Tips</summary>
-              <div>
-                <p>Use Search in to choose shelves or online catalogs for name searches. Catalog-number lookup searches Discogs.</p>
-                <p>Find the catalog number on the sleeve or label. Check the label, format, and year before confirming an exact release.</p>
-                <p>Each artist and title has one shelf entry. Save the album first if you still need to identify its pressing.</p>
-                <p className="rh-keyboard-tip">Focus search with <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd>.</p>
-              </div>
-            </details>
+            </nav>
           </div>
         )}
 
@@ -1314,9 +1450,9 @@ function App() {
             <h2 id="number-saved-results-title" className="rh-result-heading mb-2 text-lg font-semibold">On your shelves</h2>
             <ul className="rh-number-saved-list">
               {numberShelfMatches.map(({ album, releaseNumberMatches }) => (
-                <li key={album.id}>
+                <li key={album.id} data-lookup-result="catalog" data-lookup-target={numberSavedResultTarget(album.id)}>
                   <div className="min-w-0">
-                    <h3 className="text-sm font-semibold [overflow-wrap:anywhere]">{album.title}</h3>
+                    <h3 id={numberSavedResultTarget(album.id)} tabIndex={-1} className="rh-result-heading text-sm font-semibold [overflow-wrap:anywhere]">{album.title}</h3>
                     <p className="text-xs text-gray-600">{album.artist_name} · {shelfLabel[album.status]}</p>
                     <p className="text-xs text-gray-600">{releaseNumberMatches
                       ? 'Discogs lists this number for your saved release.'
@@ -1388,7 +1524,8 @@ function App() {
                     const hasPressings = source?.kind === 'pressing' || !!album.pressingChoices?.length;
                     const pressingLabel = [album.pressing?.catalogNumber, album.pressing?.format, album.pressing?.country].filter(Boolean).join(' · ');
                     return (
-                      <article key={key} className="rh-album-card rh-catalog-card rounded-xl border border-gray-200">
+                      <article key={key} data-lookup-result="catalog" data-lookup-target={catalogResultTarget(album)}
+                        className="rh-album-card rh-catalog-card rounded-xl border border-gray-200">
                         <div className="rh-album-cover rh-catalog-cover flex aspect-square items-center justify-center overflow-hidden">
                           <AlbumCover key={album.coverImageUrl} src={album.coverImageUrl} />
                         </div>
@@ -1489,13 +1626,11 @@ function App() {
           }}
           onSearchClick={() => {
             setShowAddMenu(false);
-            const nameScope = latestScope.current === 'catalog-number' ? lookupDrafts.current.name?.scope ?? 'saved' : latestScope.current;
-            changeLookupMethod('name', 'catalog');
-            if (nameScope !== 'catalog' && nameScope !== 'catalog-number') setScopeBeforeAdd(nameScope);
+            startAddSearch('name');
           }}
           onCatalogNumberClick={() => {
             setShowAddMenu(false);
-            changeLookupMethod('catalog-number');
+            startAddSearch('catalog-number');
           }}
           onManualClick={() => {
             setShowAddMenu(false);

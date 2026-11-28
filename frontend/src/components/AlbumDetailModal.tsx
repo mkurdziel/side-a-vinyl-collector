@@ -1,5 +1,4 @@
 import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { toast } from 'react-hot-toast';
 import api, { type Album, type PressingDetails, type SearchCoverArtResult, getCoverArtUrl } from '../services/api';
 import { savedCatalogSource, savedCopyLabel } from '../albumDisplay';
 import { ModalDialog } from './ModalDialog';
@@ -15,6 +14,8 @@ interface AlbumDetailModalProps {
 }
 
 type PressingResult = { status: 'loading' | 'failed' } | { status: 'ready'; pressing: PressingDetails | null };
+type ArtworkOperation = { kind: 'search' | 'save' };
+type ArtworkNotice = 'empty' | 'failed' | 'updated';
 
 function SavedPressingEvidence({ releaseId, heading }: { releaseId: number; heading: RefObject<HTMLHeadingElement | null> }) {
   const [attempt, setAttempt] = useState(0);
@@ -76,10 +77,15 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
   const [candidates, setCandidates] = useState<SearchCoverArtResult[]>([]);
   const [imageDimensions, setImageDimensions] = useState<Record<string, string>>({});
   const [savingArtwork, setSavingArtwork] = useState(false);
+  const [artworkNotice, setArtworkNotice] = useState<ArtworkNotice>();
+  const [artworkSaveFailed, setArtworkSaveFailed] = useState(false);
   const [failedCoverUrl, setFailedCoverUrl] = useState('');
   const savedPressingHeadingId = useId();
+  const artworkNoticeId = useId();
+  const artworkChooserId = useId();
   const savedPressingHeading = useRef<HTMLHeadingElement>(null);
   const artworkButtonRef = useRef<HTMLButtonElement>(null);
+  const artworkOperation = useRef<ArtworkOperation | undefined>(undefined);
   const coverVersion = currentAlbum.local_cover_path ? `?v=${encodeURIComponent(currentAlbum.local_cover_path)}` : '';
   const coverUrl = getCoverArtUrl(currentAlbum.id) + coverVersion;
 
@@ -88,44 +94,77 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
   if (receivedAlbum !== album) {
     setReceivedAlbum(album);
     setCurrentAlbum(album);
+    if (receivedAlbum.id !== album.id) {
+      setShowSelectionModal(false);
+      setRefetching(false);
+      setSavingArtwork(false);
+      setArtworkNotice(undefined);
+      setArtworkSaveFailed(false);
+    }
   }
 
+  useEffect(() => () => { artworkOperation.current = undefined; }, [album.id]);
+
   const handleSearchArtwork = async () => {
+    if (artworkOperation.current) return;
+    const operation: ArtworkOperation = { kind: 'search' };
+    artworkOperation.current = operation;
     setRefetching(true);
+    setArtworkNotice(undefined);
     try {
       const data = await api.searchCoverArt(currentAlbum.id);
-      
-      if (data.results && data.results.length > 0) {
-        setCandidates(data.results);
+      if (artworkOperation.current !== operation) return;
+      const seen = new Set([currentAlbum.cover_image_url]);
+      const alternatives = (data.results ?? []).filter(candidate => {
+        if (seen.has(candidate.url)) return false;
+        seen.add(candidate.url);
+        return true;
+      });
+      if (alternatives.length) {
+        setCandidates(alternatives);
         setImageDimensions({});
+        setArtworkSaveFailed(false);
         setShowSelectionModal(true);
       } else {
-        toast.error('No cover art found');
+        setArtworkNotice('empty');
       }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not find cover art. Try again.');
+    } catch {
+      if (artworkOperation.current === operation) setArtworkNotice('failed');
     } finally {
-      setRefetching(false);
+      if (artworkOperation.current === operation) {
+        artworkOperation.current = undefined;
+        setRefetching(false);
+      }
     }
   };
 
-  const handleSelectArtwork = async (candidate: SearchCoverArtResult) => {
-    if (savingArtwork) return;
+  const closeArtworkPicker = () => {
+    if (artworkOperation.current?.kind === 'save') return;
+    setShowSelectionModal(false);
+  };
 
+  const handleSelectArtwork = async (candidate: SearchCoverArtResult) => {
+    if (artworkOperation.current) return;
+    const operation: ArtworkOperation = { kind: 'save' };
+    artworkOperation.current = operation;
     setSavingArtwork(true);
+    setArtworkSaveFailed(false);
     try {
-      toast.loading('Updating artwork…', { id: 'update-art' });
       const data = await api.updateCoverArt(currentAlbum.id, candidate.url, candidate.source);
+      if (artworkOperation.current !== operation) return;
       const updatedAlbum = { ...currentAlbum, ...data.album };
 
-      toast.success('Artwork updated', { id: 'update-art' });
       setCurrentAlbum(updatedAlbum);
+      setArtworkNotice('updated');
       setShowSelectionModal(false);
       onRefresh(updatedAlbum);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not update the artwork. Try another cover.', { id: 'update-art' });
+    } catch {
+      if (artworkOperation.current === operation) setArtworkSaveFailed(true);
     } finally {
-      setSavingArtwork(false);
+      if (artworkOperation.current === operation) {
+        artworkOperation.current = undefined;
+        setSavingArtwork(false);
+      }
     }
   };
 
@@ -149,6 +188,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
 
   const source = savedCatalogSource(currentAlbum);
   const pressingId = source?.kind === 'pressing' ? currentAlbum.discogs_id : undefined;
+  const retryArtwork = artworkNotice === 'failed' || artworkNotice === 'empty';
   return (
     <ModalDialog labelledBy="album-details-title" onClose={onClose} returnFocusTo={returnFocusTo}>
       <div className="rh-dialog-panel max-w-2xl">
@@ -230,44 +270,61 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
             )}
           </dl>
 
-          <button ref={artworkButtonRef} type="button" onClick={handleSearchArtwork} disabled={refetching}
-            className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-gray-300 px-3 text-sm font-semibold text-gray-900 hover:bg-gray-100 disabled:opacity-60">
-            {refetching ? <><span className="rh-action-spinner" aria-hidden="true" />Searching for artwork…</> : 'Find different artwork'}
-          </button>
+          <div className="grid justify-items-start gap-2">
+            <button ref={artworkButtonRef} type="button" onClick={handleSearchArtwork} aria-disabled={refetching}
+              aria-busy={refetching} aria-describedby={artworkNotice ? artworkNoticeId : undefined}
+              className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-gray-300 px-3 text-sm font-semibold text-gray-900 hover:bg-gray-100 aria-disabled:opacity-60">
+              {refetching ? <><span className="rh-action-spinner" aria-hidden="true" />Searching for artwork…</>
+                : retryArtwork ? 'Retry artwork search' : 'Find different artwork'}
+            </button>
+            {artworkNotice && <p id={artworkNoticeId} role={artworkNotice === 'failed' ? 'alert' : 'status'}
+              className={`text-sm ${artworkNotice === 'failed' ? 'text-red-600' : 'text-gray-600'}`}>
+              {artworkNotice === 'failed' ? 'Couldn’t search for artwork. Try again.'
+                : artworkNotice === 'empty' ? 'No different cover art found.' : 'Artwork updated.'}
+            </p>}
+          </div>
         </div>
       </div>
 
       {showSelectionModal && (
-        <ModalDialog labelledBy="choose-cover-title" onClose={() => setShowSelectionModal(false)} returnFocusTo={artworkButtonRef}>
+        <ModalDialog labelledBy={artworkChooserId} onClose={closeArtworkPicker} returnFocusTo={artworkButtonRef}>
           <div className="rh-dialog-panel max-w-4xl flex flex-col">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-              <h2 id="choose-cover-title" className="text-xl font-bold text-gray-900">Choose cover art</h2>
-              <button 
-                onClick={() => setShowSelectionModal(false)}
-                className="rh-dialog-close"
-                aria-label="Close cover chooser"
-              >
-                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+            <div className="rh-dialog-header flex flex-none flex-wrap items-center justify-between gap-x-2 border-b border-gray-200 px-4 py-2 sm:px-6">
+              <h2 id={artworkChooserId} className="text-xl font-bold text-gray-900">Choose cover art</h2>
+              <button type="button" onClick={closeArtworkPicker} aria-disabled={savingArtwork}
+                className="rh-lookup-link aria-disabled:opacity-60">Keep current artwork</button>
             </div>
-            
-            <div className="p-4 sm:p-6 overflow-y-auto">
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                {candidates.map((candidate, index) => {
-                  const key = `${candidate.source}-${candidate.id}-${index}`;
+
+            <div className="min-h-0 space-y-3 overflow-y-auto p-4 sm:p-6">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-gray-200 pb-3 text-sm">
+                {failedCoverUrl !== coverUrl && <img src={coverUrl} alt="" className="size-12 rounded object-cover"
+                  onError={() => setFailedCoverUrl(coverUrl)} />}
+                <p className="font-medium">{failedCoverUrl === coverUrl ? 'Current artwork unavailable' : 'Current artwork'}</p>
+              </div>
+              {savingArtwork && <p role="status" className="text-sm text-gray-600">Updating artwork…</p>}
+              {artworkSaveFailed && <p role="alert" className="text-sm text-red-600">Couldn’t update the artwork. Choose a cover to try again.</p>}
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
+                {candidates.map(candidate => {
+                  const key = candidate.url;
                   const dimensions = imageDimensions[key];
                   const failed = dimensions === 'Unavailable';
+                  const repeatedTitle = candidates.some(other => other !== candidate && other.source === candidate.source
+                    && other.title.trim().toLowerCase() === candidate.title.trim().toLowerCase());
+                  const reference = repeatedTitle ? `Release ${candidate.id}` : undefined;
+                  const shortReference = reference && candidate.source === 'MusicBrainz'
+                    ? `Release ${String(candidate.id).slice(0, 8)}` : reference;
+                  const evidence = [candidate.year, dimensions && !failed ? `${dimensions} px` : undefined, reference].filter(Boolean);
+                  const accessibleName = [`Use ${candidate.title} cover from ${candidate.source}`, ...evidence].join(', ');
 
                   return (
                     <button
                       type="button"
                       key={key}
-                      className="group cursor-pointer relative"
-                      disabled={savingArtwork || failed}
-                      onClick={() => handleSelectArtwork(candidate)}
-                      aria-label={`Use ${candidate.title} cover from ${candidate.source}`}
+                      className="group min-w-0 cursor-pointer rounded-lg text-left disabled:cursor-default aria-disabled:cursor-default"
+                      disabled={failed}
+                      aria-disabled={savingArtwork || undefined}
+                      onClick={() => { if (!failed) void handleSelectArtwork(candidate); }}
+                      aria-label={accessibleName}
                     >
                       <span className="block aspect-square overflow-hidden rounded-lg border border-gray-300 bg-gray-100 group-hover:border-purple-500">
                         {failed ? (
@@ -286,13 +343,14 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
                           />
                         )}
                       </span>
-                      <span className="block pt-2 text-left">
-                        <span className="block text-sm font-medium text-gray-900 break-words">{candidate.title}</span>
-                        <span className="block text-xs text-gray-400">{candidate.source}{candidate.year ? ` · ${candidate.year}` : ''}</span>
-                        {!failed && dimensions && <span className="block text-xs text-gray-400">{dimensions}</span>}
+                      <span className="block pt-2 [overflow-wrap:anywhere]">
+                        <span className="block text-sm font-medium text-gray-900">{candidate.title}</span>
+                        <span className="block text-xs text-gray-600">{candidate.source}{candidate.year ? ` · ${candidate.year}` : ''}</span>
+                        {!failed && dimensions && <span className="block text-xs text-gray-600">{dimensions} px</span>}
+                        {shortReference && <span title={reference} className="block text-xs text-gray-600">{shortReference}</span>}
                         {failed ? null : (
                           <span className="mt-1 block text-sm font-medium text-purple-700">
-                            {savingArtwork ? 'Updating…' : 'Use this cover'}
+                            Use this cover
                           </span>
                         )}
                       </span>

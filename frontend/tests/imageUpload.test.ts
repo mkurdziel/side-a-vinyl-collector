@@ -96,7 +96,7 @@ describe('album image uploads', () => {
     addAlbum.mockResolvedValueOnce({ album: { ...savedAlbum, discogs_id: 2, status: 'wishlist' } });
     await upload(coverFile, 'wishlist');
     const opener = { isConnected: true };
-    await act(async () => renderer!.root.findAllByProps({ 'aria-label': 'Review pressings for Dummy in Wishlist' })[0]
+    await act(async () => renderer!.root.findAllByProps({ 'aria-label': 'Choose a pressing to add · Dummy · Wishlist' })[0]
       .props.onClick({ currentTarget: opener }));
     const picker = renderer!.root.findByType('form');
     const submit = () => act(async () => picker.props.onSubmit({ preventDefault: vi.fn() }));
@@ -121,7 +121,7 @@ describe('album image uploads', () => {
     props.onOpenSaved.mockResolvedValueOnce('opened');
     await upload(coverFile);
     const opener = { isConnected: true };
-    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Review pressings for Dummy in Collection' })
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Choose a pressing to add · Dummy · Collection' })
       .props.onClick({ currentTarget: opener }));
     const picker = renderer!.root.findByType('form');
     const withoutPressing = picker.findByProps({ 'aria-label': 'Save without pressing to Collection' });
@@ -163,14 +163,14 @@ describe('album image uploads', () => {
     });
     props.onOpenSaved.mockResolvedValueOnce('opened');
     await upload({ name: 'cover.jpg', type: 'image/jpeg', size: 1024 });
-    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Review pressings for Dummy' }).props.onClick());
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Compare with saved album · Dummy' }).props.onClick());
     const opener = { isConnected: true };
     const copy = renderer!.root.findByProps({ 'aria-label': 'Open saved album · Dummy by Portishead, Wishlist, 1994, Discogs release 20' });
     await act(async () => copy.props.onClick({ currentTarget: opener }));
     expect(props.onOpenSaved).toHaveBeenCalledExactlyOnceWith(23, opener, true);
     await act(async () => renderer!.root.findByProps({ 'aria-label': 'Close pressing review' }).props.onClick());
     expect(renderer!.root.findByProps({ alt: 'Uploaded cover' })).toBeDefined();
-    expect(renderer!.root.findByProps({ 'aria-label': 'Review pressings for Dummy' })).toBeDefined();
+    expect(renderer!.root.findByProps({ 'aria-label': 'Compare with saved album · Dummy' })).toBeDefined();
     expect(props.onClose).not.toHaveBeenCalled();
   });
 
@@ -182,7 +182,7 @@ describe('album image uploads', () => {
       inWishlist: true, existingMatch: 'title', titleMatches: [copy],
     }] });
     await upload({ name: 'cover.jpg', type: 'image/jpeg', size: 1024 }, 'collection', onSavePressing);
-    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Review pressings for Dummy' }).props.onClick());
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Compare with saved album · Dummy' }).props.onClick());
     const click = async (label: string) => act(async () => renderer!.root.findAllByType('button')
       .find(button => button.children.join('') === label)!.props.onClick());
     const candidate = renderer!.root.findByProps({ type: 'radio', value: 1 });

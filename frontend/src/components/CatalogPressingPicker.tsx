@@ -112,8 +112,9 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
               {selectedWithEvidence && <PressingSelectionSummary identityOnly id={selectionSummaryId} searchedNumber={searchedNumber}
                 choice={selectedWithEvidence} />}
             </div>}
-            {!duplicate && selectionOutsideMedia && <p id={saveGuidanceId} role="status" className="text-xs text-gray-600">
-              The selected pressing is outside the {medium} filter. Show it in All media or choose another pressing.
+            {!duplicate && (!pressing || selectionOutsideMedia) && <p id={saveGuidanceId} role="status" className="text-xs text-gray-600">
+              {selectionOutsideMedia ? `The selected pressing is outside the ${medium} filter. Show it in All media or choose another pressing.`
+                : 'Choose a pressing to save it.'}
             </p>}
             {saveIssue && <p id={issueId} role="alert" className="text-sm text-red-600">{saveIssue}</p>}
             <div className="rh-pressing-review__actions">
@@ -131,7 +132,7 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
                   </button>}
                   <button type="submit" className="rh-primary-action px-3 text-sm font-semibold aria-disabled:opacity-60"
                     aria-disabled={!pressing || !!saving || selectionOutsideMedia} aria-busy={saving === 'pressing'}
-                    aria-describedby={[saveIssue && issueId, selectionOutsideMedia && saveGuidanceId, selectedWithEvidence && selectionSummaryId].filter(Boolean).join(' ') || undefined}
+                    aria-describedby={[saveIssue && issueId, (!pressing || selectionOutsideMedia) && saveGuidanceId, selectedWithEvidence && selectionSummaryId].filter(Boolean).join(' ') || undefined}
                     aria-label={saving === 'pressing' ? undefined : `Save pressing to ${shelf}`}>
                     {saving === 'pressing' ? 'Saving pressing…' : 'Save pressing'}
                   </button>

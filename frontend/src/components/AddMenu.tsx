@@ -133,7 +133,8 @@ export const AddMenu = ({
         <div className="border-t border-gray-200 px-4 py-1 sm:px-6">
           {discogsConfigured ? (
             <button type="button" className="min-h-11 rounded-lg px-2 text-sm text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-              aria-description={`Import into your ${viewMode}.`} onClick={onImportClick}>Import from Discogs</button>
+              aria-description={`Default destination is ${viewMode === 'wishlist' ? 'Wishlist' : 'Collection'}. You can change it before importing.`}
+              onClick={onImportClick}>Import from Discogs</button>
           ) : (
             <details className="min-w-0">
               <summary className="min-h-11 cursor-pointer content-center rounded-lg px-2 text-sm text-gray-600 hover:bg-gray-100 hover:text-gray-900">
