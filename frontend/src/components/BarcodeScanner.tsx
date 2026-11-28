@@ -25,6 +25,7 @@ const barcodePattern = /^(?:[0-9]{8}|[0-9]{12,14})$/;
 
 interface BarcodeScannerProps {
   onClose: () => void;
+  onBack?: () => void;
   onSuccess: () => void;
   onSearchByName: (query?: string, draft?: ManualAlbumDraft) => void;
   onManual: (draft?: ManualAlbumDraft) => void;
@@ -36,7 +37,7 @@ interface BarcodeScannerProps {
 }
 
 export const BarcodeScanner = ({
-  onClose, onSuccess, onSearchByName, onManual, onMoveSaved, onUndoMove, onOpenSaved, lookupShelfEdits, viewMode,
+  onClose, onBack, onSuccess, onSearchByName, onManual, onMoveSaved, onUndoMove, onOpenSaved, lookupShelfEdits, viewMode,
 }: BarcodeScannerProps) => {
   const [lookup, setLookup] = useState<Lookup>({ status: 'scanning' });
   const [cameraEnabled, setCameraEnabled] = useState(false);
@@ -208,6 +209,8 @@ export const BarcodeScanner = ({
         </div>
 
         <div className="p-4 overflow-y-auto">
+          {onBack && <button type="button" className="rh-lookup-link mb-2" disabled={!!saving || undoing}
+            onClick={() => { if (!saveInProgress.current) onBack(); }}>Back to add methods</button>}
           {!scannedResult && lookup.status !== 'saved' && (
             <>
               <form className="mb-2" noValidate onSubmit={event => {

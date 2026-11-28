@@ -5,19 +5,22 @@ import musicbrainzService, { type MusicBrainzAlbum } from '../services/musicbrai
 import { annotateCatalogMembership } from '../services/catalogMembership';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import type { AlbumWithArtist, DiscogsAlbum } from '../types';
-import { canExpandArtist, matchesCatalogArtist, rankCatalogMatches } from '../services/catalogRelevance';
+import { canExpandArtist, catalogNameKey, matchesCatalogArtist, rankCatalogMatches } from '../services/catalogRelevance';
 
 type CatalogAlbum = (DiscogsAlbum & { source: 'discogs' })
   | (MusicBrainzAlbum & { source: 'musicbrainz'; discogsListing?: never });
 
 export const search = asyncHandler(async (req: Request, res: Response) => {
-  const { q, scope, shelf, sort, offset: rawOffset } = req.query;
+  const { q, scope, shelf, sort, offset: rawOffset, by } = req.query;
 
   if (typeof q !== 'string' || !q.trim()) {
     throw new AppError('Search query is required', 400);
   }
   if (scope !== undefined && scope !== 'saved' && scope !== 'catalog') {
     throw new AppError('Invalid search scope', 400);
+  }
+  if (by !== undefined && (by !== 'catalog-number' || scope !== 'catalog')) {
+    throw new AppError('Catalog-number lookup requires catalog search', 400);
   }
   if (shelf !== undefined && shelf !== 'collection' && shelf !== 'wishlist') {
     throw new AppError('Invalid search shelf', 400);
@@ -30,6 +33,10 @@ export const search = asyncHandler(async (req: Request, res: Response) => {
   }
 
   const query = q.trim();
+  const byCatalogNumber = by === 'catalog-number';
+  if (byCatalogNumber && !catalogNameKey(query)) {
+    throw new AppError('Enter a catalog number', 400);
+  }
   const paged = rawOffset !== undefined;
   const offset = Number(rawOffset ?? 0);
   const savedPageSize = 20;
@@ -95,11 +102,14 @@ export const search = asyncHandler(async (req: Request, res: Response) => {
     }
   };
 
-  const expandArtist = canExpandArtist(query);
+  const expandArtist = !byCatalogNumber && canExpandArtist(query);
   const discogsEnabled = discogsService.isEnabled();
+  if (byCatalogNumber && !discogsEnabled) errors.push('Discogs catalog-number lookup is unavailable.');
   const [discogsTitles, discogsArtist, musicBrainzArtist] = await Promise.all([
     discogsEnabled ? fromProvider(async () => {
-      const releases = await discogsService.searchByQuery(query, discogsLimit);
+      const releases = byCatalogNumber
+        ? await discogsService.searchByCatalogNumber(query, discogsLimit)
+        : await discogsService.searchByQuery(query, discogsLimit);
       if (releases.length === discogsLimit) catalogSampled = true;
       return releases.map(release => ({ ...release, discogsListing: 'release', source: 'discogs' }));
     }, 'Discogs') : [],
@@ -119,7 +129,7 @@ export const search = asyncHandler(async (req: Request, res: Response) => {
     }, 'MusicBrainz') : [],
   ]);
 
-  const ranked = rankCatalogMatches(query, [...discogsTitles, ...discogsArtist, ...musicBrainzArtist]);
+  const ranked = rankCatalogMatches(query, [...discogsTitles, ...discogsArtist, ...musicBrainzArtist], byCatalogNumber);
   try {
     const discogs = await annotateCatalogMembership(ranked.slice(offset, offset + catalogPageSize));
     return res.json({

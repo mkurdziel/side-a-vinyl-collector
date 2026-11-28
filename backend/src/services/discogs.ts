@@ -4,6 +4,17 @@ import { RateLimiter } from '../utils/rateLimit';
 import type { DiscogsAlbum, DiscogsSearchResponse, PressingDetails } from '../types';
 import { AppError } from '../middleware/errorHandler';
 
+const joinPressingValues = (values: unknown[]): string | undefined => [...new Set(values.filter(
+  (value): value is string => typeof value === 'string' && Boolean(value.trim()),
+).map(value => value.trim()))].join(' · ') || undefined;
+
+const catalogNumbers = (values: unknown[]) => joinPressingValues(values.filter(
+  value => typeof value === 'string' && value.trim().toLowerCase() !== 'none',
+));
+
+const masterId = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+
 class DiscogsService {
   private client: AxiosInstance;
   private rateLimiter: RateLimiter;
@@ -102,28 +113,40 @@ class DiscogsService {
   }
 
   async searchByQuery(query: string, limit: number = 20): Promise<DiscogsAlbum[]> {
-    const cacheKey = `search:${query}:${limit}`;
+    return this.searchDatabaseReleases({ q: query }, `search:v2:${query}:${limit}`, limit);
+  }
+
+  async searchByCatalogNumber(catalogNumber: string, limit: number = 20): Promise<DiscogsAlbum[]> {
+    return this.searchDatabaseReleases({ catno: catalogNumber }, `catno:v1:${catalogNumber}:${limit}`, limit);
+  }
+
+  private async searchDatabaseReleases(
+    search: { q: string } | { catno: string }, cacheKey: string, limit: number,
+  ): Promise<DiscogsAlbum[]> {
     const cached = await this.getCached<DiscogsAlbum[]>(cacheKey);
     if (cached) return cached;
 
     try {
       const result = await this.rateLimiter.execute(async () => {
         const response = await this.client.get<DiscogsSearchResponse>('/database/search', {
-          params: { q: query, type: 'release', per_page: limit }
+          params: { ...search, type: 'release', per_page: limit }
         });
         return response.data;
       });
 
-      const albums = result.results.map(release => this.parseDiscogsRelease(release));
+      const albums = result.results.map(release => ({
+        ...this.parseDiscogsRelease(release),
+        pressing: this.parseSearchPressing(release),
+      }));
       await this.setCache(cacheKey, albums);
       return albums;
     } catch (error) {
-      this.logError('Discogs query search error:', error);
+      this.logError('Discogs release search error:', error);
       this.throwSearchError(error, 'Failed to search Discogs');
     }
   }
 
-  async getRelease(releaseId: number): Promise<DiscogsAlbum | null> {
+  async getRelease(releaseId: number, { reportUnavailable = false } = {}): Promise<DiscogsAlbum | null> {
     const cacheKey = `release:v2:${releaseId}`;
     const cached = await this.getCached<DiscogsAlbum>(cacheKey);
     if (cached) return cached;
@@ -140,6 +163,10 @@ class DiscogsService {
       return album;
     } catch (error) {
       this.logError(`Discogs get release ${releaseId} error:`, error);
+      const notFound = axios.isAxiosError(error) && error.response?.status === 404;
+      if (reportUnavailable && !notFound) {
+        this.throwSearchError(error, 'Could not load Discogs release details');
+      }
       return null;
     }
   }
@@ -198,7 +225,7 @@ class DiscogsService {
   }
 
   async getArtistReleases(artistId: number, limit: number = 20): Promise<DiscogsAlbum[]> {
-    const cacheKey = `artist_releases:v3:${artistId}:${limit}`;
+    const cacheKey = `artist_releases:v4:${artistId}:${limit}`;
     const cached = await this.getCached<DiscogsAlbum[]>(cacheKey);
     if (cached) return cached;
 
@@ -240,6 +267,8 @@ class DiscogsService {
           coverImageUrl,
           discogsId: release.type === 'release' ? release.id : 0,
           discogsListing: release.type === 'master' || release.type === 'release' ? release.type : undefined,
+          masterId: masterId(release.type === 'master' ? release.id : release.master_id),
+          pressing: release.type === 'release' ? this.parseSearchPressing(release) : undefined,
         });
         
         if (albums.length >= limit) break;
@@ -326,19 +355,27 @@ class DiscogsService {
       year,
       coverImageUrl,
       discogsId,
+      masterId: masterId(release.master_id),
     };
   }
 
+  private parseSearchPressing(release: { catno?: unknown; label?: unknown; format?: unknown; country?: unknown }): PressingDetails | undefined {
+    const pressing = {
+      catalogNumber: catalogNumbers([release.catno].flat()),
+      label: joinPressingValues([release.label].flat()),
+      format: joinPressingValues([release.format].flat()),
+      country: joinPressingValues([release.country]),
+    };
+    return Object.values(pressing).some(Boolean) ? pressing : undefined;
+  }
+
   private parsePressingDetails(release: { labels?: unknown; formats?: unknown; country?: unknown }): PressingDetails {
-    const join = (values: unknown[]) => [...new Set(values.filter(
-      (value): value is string => typeof value === 'string' && Boolean(value.trim()),
-    ).map(value => value.trim()))].join(' · ') || undefined;
     const labels: Array<{ name?: unknown; catno?: unknown } | null> = Array.isArray(release.labels) ? release.labels : [];
     const formats: Array<{ name?: unknown; descriptions?: unknown } | null> = Array.isArray(release.formats) ? release.formats : [];
     return {
-      format: join(formats.map(format => join([format?.name, ...(Array.isArray(format?.descriptions) ? format.descriptions : [])]))),
-      label: join(labels.map(label => label?.name)),
-      catalogNumber: join(labels.map(label => label?.catno).filter(value => typeof value === 'string' && value.trim().toLowerCase() !== 'none')),
+      format: joinPressingValues(formats.map(format => joinPressingValues([format?.name, ...(Array.isArray(format?.descriptions) ? format.descriptions : [])]))),
+      label: joinPressingValues(labels.map(label => label?.name)),
+      catalogNumber: catalogNumbers(labels.map(label => label?.catno)),
       country: typeof release.country === 'string' ? release.country : undefined,
     };
   }

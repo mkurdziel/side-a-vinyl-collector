@@ -133,15 +133,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, shelfActions, back
           {shelfActions && <div className="border-t border-gray-200 pt-3">{shelfActions}</div>}
 
           <dl className="grid grid-cols-2 gap-3 border-t border-gray-200 pt-4">
-            <div>
-              <dt className="text-sm font-medium text-gray-700">First saved</dt>
-              <dd className="text-sm text-gray-600">{formatDate(currentAlbum.added_at)}</dd>
-            </div>
-            <div>
-              <dt className="text-sm font-medium text-gray-700">Cover image source</dt>
-              <dd className="text-sm text-gray-600">{artworkSource}</dd>
-            </div>
-            <div>
+            <div className="min-w-0 [overflow-wrap:anywhere]">
               <dt className="text-sm font-medium text-gray-700">Saved pressing</dt>
               <dd className="text-sm text-gray-600">
                 {source?.kind !== 'pressing' && <p>Pressing unconfirmed</p>}
@@ -152,6 +144,19 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, shelfActions, back
                   </a>
                 ) : null}
               </dd>
+            </div>
+            <div className="min-w-0 [overflow-wrap:anywhere]">
+              <dt className="text-sm font-medium text-gray-700">Cover image source</dt>
+              <dd className="text-sm text-gray-600">
+                <p>{artworkSource}</p>
+                {!currentAlbum.cover_art_fetched && (
+                  <p className="mt-1"><span className="font-medium text-amber-600">Unverified artwork.</span> A fallback image may be shown until Side A finds a cover or you choose one.</p>
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-sm font-medium text-gray-700">First saved</dt>
+              <dd className="text-sm text-gray-600">{formatDate(currentAlbum.added_at)}</dd>
             </div>
             {currentAlbum.notes && (
               <div className="col-span-full min-w-0">

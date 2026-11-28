@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
+import type { DiscogsAlbum } from '../../src/types';
 
-const { query, searchByQuery, searchArtist, getArtistReleases, mbEnabled, mbArtist, mbReleases } = vi.hoisted(() => ({
+const { query, searchByQuery, searchByCatalogNumber, searchArtist, getArtistReleases, mbEnabled, mbArtist, mbReleases } = vi.hoisted(() => ({
   query: vi.fn(),
   searchByQuery: vi.fn(),
+  searchByCatalogNumber: vi.fn(),
   searchArtist: vi.fn(),
   getArtistReleases: vi.fn(),
   mbEnabled: vi.fn(),
@@ -17,6 +19,7 @@ vi.mock('../../src/services/discogs', () => ({
     searchArtist,
     getArtistReleases,
     searchByQuery,
+    searchByCatalogNumber,
   },
 }));
 vi.mock('../../src/services/musicbrainz', () => ({
@@ -34,9 +37,9 @@ const catalogAlbum = { id: 101, discogsId: 101, artist: 'John Coltrane', album: 
 const savedAlbum = { id: 1, artist_name: 'John Coltrane', title: 'Giant Steps', status: 'wishlist' };
 type Membership = { existingAlbumId: number | null; inCollection: boolean; inWishlist: boolean; existingMatch?: string };
 
-function searchCatalog(): Promise<{ discogs: Membership[] }> {
+function searchCatalog(params: Record<string, string> = { q: 'Coltrane' }): Promise<{ discogs: (DiscogsAlbum & Membership)[] }> {
   return new Promise((resolve, reject) => {
-    const req = { query: { q: 'Coltrane' } } as unknown as Request;
+    const req = { query: params } as unknown as Request;
     const res = { json: resolve } as unknown as Response;
     search(req, res, reject);
   });
@@ -105,6 +108,66 @@ describe('search result membership', () => {
     expect(result.discogs.map(album => album.id)).toEqual([912, 901]);
     expect(searchArtist).not.toHaveBeenCalled();
     expect(mbArtist).not.toHaveBeenCalled();
+  });
+
+  it('preserves a normalized catalog number match in a regular catalog search', async () => {
+    const matching = { ...catalogAlbum, pressing: { catalogNumber: 'ALT 12 · SD-1311', format: 'Vinyl · LP' } };
+    searchByQuery.mockResolvedValue([catalogAlbum, matching]);
+    query.mockResolvedValue({ rows: [] });
+
+    const result = await searchCatalog({ q: 'sd 1311', scope: 'catalog', offset: '0' });
+
+    expect(result.discogs).toMatchObject([{
+      id: matching.id,
+      catalogNumberMatch: 'exact',
+      pressing: matching.pressing,
+      pressingChoices: [{ id: matching.id, catalogNumberMatch: 'exact' }],
+    }]);
+    expect(searchByCatalogNumber).not.toHaveBeenCalled();
+  });
+
+  it('uses only the catalog-number lookup and distinguishes missing from contradictory evidence', async () => {
+    const edition = (id: number, catalogNumber?: string) => ({
+      ...catalogAlbum, id, discogsId: id, pressing: { catalogNumber },
+    });
+    searchByCatalogNumber.mockResolvedValue([
+      edition(100, 'none'),
+      edition(101, 'SD 1311'),
+      edition(102, 'SD 13110'),
+      edition(0, 'SD 1311'),
+    ]);
+    query.mockResolvedValue({ rows: [] });
+    mbEnabled.mockReturnValue(true);
+
+    const result = await searchCatalog({ q: 'SD-1311', scope: 'catalog', by: 'catalog-number', offset: '0' });
+
+    expect(searchByCatalogNumber).toHaveBeenCalledExactlyOnceWith('SD-1311', 40);
+    expect(searchByQuery).not.toHaveBeenCalled();
+    expect(searchArtist).not.toHaveBeenCalled();
+    expect(mbArtist).not.toHaveBeenCalled();
+    expect(result.discogs).toMatchObject([{
+      id: 101, catalogNumberMatch: 'exact',
+      pressingChoices: [{ id: 101, catalogNumberMatch: 'exact' }, { id: 100, catalogNumberMatch: 'unverified' }],
+    }]);
+  });
+
+  it('returns one catalog row with a bounded list of distinct release choices and annotates membership once', async () => {
+    const primary = { ...catalogAlbum, masterId: 23, pressing: { catalogNumber: 'SD 1311' } };
+    const otherEditions = Array.from({ length: 10 }, (_, index) => ({
+      ...primary, id: 102 + index, discogsId: 102 + index,
+    }));
+    searchByQuery.mockResolvedValue([primary, primary, { ...primary, id: 0, discogsId: 0 }, ...otherEditions]);
+    query.mockResolvedValue({ rows: [{ ...savedAlbum, discogs_id: primary.discogsId }] });
+
+    const result = await searchCatalog({ q: 'Giant Steps', scope: 'catalog', offset: '0' });
+
+    expect(query).toHaveBeenCalledOnce();
+    expect(result.discogs).toHaveLength(1);
+    const match = result.discogs[0]!;
+    expect(match).toMatchObject({ id: primary.id, masterId: 23, existingMatch: 'release', inWishlist: true });
+    expect(match.pressingChoices?.map(choice => choice.id)).toEqual([101, 102, 103, 104, 105, 106, 107, 108]);
+    expect(match.pressingChoices?.[0]).not.toHaveProperty('pressingChoices');
+    expect(match.pressingChoices?.[0]).not.toHaveProperty('existingMatch');
   });
 
   it('rejects unrelated provider matches and does not expand an unrelated artist', async () => {

@@ -3,18 +3,19 @@ import { act, create } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Album, DiscogsAlbum, SearchResult } from '../src/services/api';
 
-const { getAlbum, getAlbums, getPressingDetails, search, addAlbum, updateStatus, deleteAlbum } = vi.hoisted(() => ({
+const { getAlbum, getAlbums, getPressingDetails, search, searchCatalogNumber, addAlbum, updateStatus, deleteAlbum } = vi.hoisted(() => ({
   getAlbum: vi.fn(),
   getAlbums: vi.fn(),
   getPressingDetails: vi.fn(),
   search: vi.fn(),
+  searchCatalogNumber: vi.fn(),
   addAlbum: vi.fn(),
   updateStatus: vi.fn(),
   deleteAlbum: vi.fn(),
 }));
 vi.mock('../src/services/api', async importOriginal => ({
   ...await importOriginal<typeof import('../src/services/api')>(),
-  default: { getAlbum, getAlbums, getPressingDetails, search, addAlbum, updateStatus, deleteAlbum, checkDiscogsConfig: async () => ({ configured: true }) },
+  default: { getAlbum, getAlbums, getPressingDetails, search, searchCatalogNumber, addAlbum, updateStatus, deleteAlbum, checkDiscogsConfig: async () => ({ configured: true }) },
   getCoverArtUrl: (id: number) => `/api/cover-art/${id}`,
 }));
 vi.mock('react-hot-toast', () => ({
@@ -26,6 +27,8 @@ vi.mock('../src/components/SettingsModal', () => ({ SettingsModal: () => null })
 import App from '../src/App';
 import { AddMenu } from '../src/components/AddMenu';
 import { ImageUploader } from '../src/components/ImageUploader';
+import { CatalogPressingPicker } from '../src/components/CatalogPressingPicker';
+import { PressingComparison } from '../src/components/PressingComparison';
 
 const saved: Album = {
   id: 1,
@@ -53,7 +56,7 @@ async function editSearch(value: string) {
   });
 }
 
-async function chooseScope(value: 'saved' | 'shelf' | 'catalog') {
+async function chooseScope(value: 'saved' | 'collection' | 'wishlist' | 'catalog' | 'catalog-number') {
   await act(async () => renderer.root.findByProps({ id: 'search-scope' }).props.onChange({ target: { value } }));
 }
 
@@ -143,7 +146,7 @@ describe('library and catalog search', () => {
     expect(button('Add to Wishlist · Giant Steps by John Coltrane')).toBeUndefined();
     const saveDefault = renderer.root.findByProps({ id: 'catalog-save-shelf' });
     expect(button('Wishlist')).toBeUndefined();
-    expect(search).toHaveBeenCalledTimes(3);
+    expect(search).toHaveBeenCalledTimes(2);
     expect(saveDefault.props.value).toBe('collection');
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Coltrane');
     await act(async () => discovery.resolve({ local: [], discogs: [catalog] }));
@@ -163,18 +166,17 @@ describe('library and catalog search', () => {
     expect(status.findByType('span').children.join('')).toBe('1 album in Wishlist');
   });
 
-  it('filters This shelf searches when the user changes shelves', async () => {
+  it('filters separate shelf scopes without clearing the query or changing the browse shelf', async () => {
     search.mockResolvedValue({ local: [], discogs: [] });
     await renderLibrary();
-    await chooseScope('shelf');
+    await chooseScope('collection');
     await editSearch('Coltrane');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
     expect(search).toHaveBeenLastCalledWith('Coltrane', expect.any(AbortSignal), 'saved', 'collection', 0, 'title');
-    await act(async () => button('Back to Collection').props.onClick());
-    await act(async () => button('Wishlist').props.onClick());
-    await editSearch('Coltrane');
-    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    await chooseScope('wishlist');
     expect(search).toHaveBeenLastCalledWith('Coltrane', expect.any(AbortSignal), 'saved', 'wishlist', 0, 'title');
+    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Coltrane');
+    expect(button('Back to Collection')).toBeDefined();
   });
 
   it('keeps a catalog save bound to its original shelf when the default changes', async () => {
@@ -198,8 +200,8 @@ describe('library and catalog search', () => {
     expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status: 'wishlist' }));
     await act(async () => add.resolve({ album: { ...saved, id: 2, title: 'Giant Steps' } }));
     expect(button('Open Giant Steps by John Coltrane, Wishlist, saved record 2')).toBeDefined();
-    expect(button('Open saved album · Giant Steps by John Coltrane')).toBe(addButton);
-    expect(renderer.root.findByProps({ className: 'rh-saved-outcome' }).children.join('')).toBe('Saved in Wishlist · Pressing unconfirmed');
+    expect(button('Open saved album · Giant Steps by John Coltrane, Wishlist, saved record 2')).toBe(addButton);
+    expect(renderer.root.findByProps({ className: 'rh-saved-outcome' }).children.join('')).toBe('Album saved in Wishlist · Saved pressing unconfirmed');
     expect(button('Add to Collection · Giant Steps by John Coltrane')).toBeUndefined();
   });
 
@@ -261,7 +263,7 @@ describe('library and catalog search', () => {
 
     expect(moveButtons()).toHaveLength(0);
     expect(button('Open Giant Steps by John Coltrane, Collection, saved record 42')).toBeDefined();
-    expect(renderer.root.findByProps({ className: 'rh-saved-outcome' }).children.join('')).toBe('Saved in Collection');
+    expect(renderer.root.findByProps({ className: 'rh-saved-outcome' }).children.join('')).toBe('This pressing saved in Collection');
     expect(getAlbums).toHaveBeenCalledTimes(2);
 
     await act(async () => button('Undo').props.onClick());
@@ -406,7 +408,8 @@ describe('library and catalog search', () => {
     await editSearch('Giant Steps');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
     await act(async () => button('Compare pressings for Giant Steps by John Coltrane').props.onClick());
-    await act(async () => button('Open saved album · Giant Steps by John Coltrane, Wishlist, saved record 1')
+    await act(async () => renderer.root.findByType(PressingComparison)
+      .findByProps({ 'aria-label': 'Open saved album · Giant Steps by John Coltrane, Wishlist, saved record 1' })
       .props.onClick({ currentTarget: { isConnected: true } }));
     expect(JSON.stringify(renderer.toJSON())).toContain('is no longer saved.');
     expect(JSON.stringify(renderer.toJSON())).not.toContain('Retry opening saved copy');
@@ -464,7 +467,7 @@ describe('library and catalog search', () => {
 
     await act(async () => moreSaved.resolve({ local: [{ ...saved, id: 7, title: 'Stale page' }], discogs: [] }));
     await act(async () => sorted.resolve({ local: [saved], discogs: [] }));
-    expect(status.children.join('')).toBe('Showing 1 saved match, sorted by artist name.');
+    expect(status.children.join('')).toBe('1 saved match.');
     expect(savedSection.findByProps({ 'aria-busy': false })).toBeDefined();
     expect(JSON.stringify(renderer.toJSON())).not.toContain('Stale page');
   });
@@ -518,5 +521,44 @@ describe('library and catalog search', () => {
     expect(button('Retry catalogs')).toBeUndefined();
     expect(button('Open A Love Supreme by John Coltrane, Wishlist, saved record 22')).toBeDefined();
     expect(button('Load more saved albums')).toBeDefined();
+  });
+
+  it('uses the explicit identifier lookup and only saves the edition the collector chose', async () => {
+    const first = { ...catalog, discogsListing: 'release' as const, pressing: { catalogNumber: 'ABC-123' } };
+    const second = { ...first, id: 102, discogsId: 102, pressing: { catalogNumber: 'ABC-123', format: 'Vinyl' } };
+    searchCatalogNumber.mockResolvedValue({ local: [], discogs: [{ ...first, pressingChoices: [first, second], catalogNumberMatch: 'exact' }] });
+    addAlbum.mockResolvedValue({ album: { ...saved, title: catalog.album, status: 'collection', discogs_id: 102 } });
+    await renderLibrary();
+    await chooseScope('catalog-number');
+    await editSearch('ABC-123');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(search).not.toHaveBeenCalled();
+    expect(searchCatalogNumber).toHaveBeenCalledExactlyOnceWith('ABC-123', expect.any(AbortSignal), 0);
+    expect(JSON.stringify(renderer.toJSON())).toContain('Catalog number matches');
+
+    await act(async () => button('Check pressings for Giant Steps by John Coltrane, Discogs release 101')
+      .props.onClick({ currentTarget: { closest: () => null } }));
+    const picker = renderer.root.findByType(CatalogPressingPicker);
+    expect(addAlbum).not.toHaveBeenCalled();
+    expect(picker.findAllByType('input')).toHaveLength(2);
+    await act(async () => picker.findByProps({ value: 102 }).props.onChange());
+    await act(async () => picker.findByType('form').props.onSubmit({ preventDefault: () => {} }));
+    expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ discogsId: 102, status: 'collection' }));
+  });
+
+  it('saves a catalog match as an album unless the collector chose a pressing', async () => {
+    search.mockImplementation(async (_query, _signal, kind) => ({ local: [], discogs: kind === 'catalog'
+      ? [{ ...catalog, discogsListing: 'release', masterId: 60, year: 2019 }] : [] }));
+    addAlbum.mockResolvedValue({ album: { ...saved, title: catalog.album, status: 'collection' } });
+    await renderLibrary();
+    await chooseScope('catalog');
+    await editSearch('Giant Steps');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    await act(async () => button('Add to Collection · Giant Steps by John Coltrane, 2019, Discogs release 101').props.onClick());
+    expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      status: 'collection', catalogListing: { source: 'discogs', kind: 'master', id: 60 },
+    }));
+    expect(addAlbum.mock.lastCall?.[0].discogsId).toBeUndefined();
+    expect(addAlbum.mock.lastCall?.[0].year).toBeUndefined();
   });
 });

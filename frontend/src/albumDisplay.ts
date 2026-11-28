@@ -66,6 +66,12 @@ export function catalogSaveReference(album: DiscogsAlbum): { discogsId?: number;
   return album.discogsListing === 'release' && discogsReleaseSource(album.discogsId) ? { discogsId: album.discogsId } : {};
 }
 
+export function catalogAlbumReference(album: DiscogsAlbum): ReturnType<typeof catalogSaveReference> {
+  if (album.discogsListing !== 'release') return catalogSaveReference(album);
+  return album.masterId && Number.isSafeInteger(album.masterId) && album.masterId > 0
+    ? { catalogListing: { source: 'discogs', kind: 'master', id: album.masterId } } : {};
+}
+
 export function savedCatalogSource(album: Pick<Album, 'catalog_listing' | 'discogs_id'>): CatalogSource | undefined {
   const listing = album.catalog_listing;
   if (listing?.source === 'discogs' && listing.kind === 'master') {
