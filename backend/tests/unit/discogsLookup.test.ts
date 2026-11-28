@@ -33,22 +33,37 @@ afterEach(() => {
 
 describe('Discogs catalog results', () => {
   it('filters by catno and keeps summarized pressing evidence in the versioned cache', async () => {
-    get.mockResolvedValueOnce({ data: { results: [
+    get.mockResolvedValueOnce({ data: { pagination: { page: 1, pages: 2 }, results: [
       { id: 11, title: 'Artist - Album', master_id: 31, catno: 'ABC 123', label: ['Red Label'], format: ['Vinyl', 'LP'], country: 'UK' },
       { id: 12, title: 'Artist - Album', master_id: 0, catno: 'none', format: ['Vinyl'] },
     ] } });
 
-    const results = await discogs.searchByCatalogNumber('ABC-123', 40);
+    const sample = await discogs.searchReleaseSample({ catno: 'ABC-123' }, 40);
 
     expect(get).toHaveBeenCalledExactlyOnceWith('/database/search', {
       params: { catno: 'ABC-123', type: 'release', per_page: 40 },
     });
-    expect(getCached).toHaveBeenCalledExactlyOnceWith('discogs:catno:v1:ABC-123:40');
-    expect(setCached).toHaveBeenCalledExactlyOnceWith('discogs:catno:v1:ABC-123:40', expect.any(Number), JSON.stringify(results));
-    expect(results).toMatchObject([
+    expect(getCached).toHaveBeenCalledExactlyOnceWith('discogs:catno:v2:ABC-123:40');
+    expect(setCached).toHaveBeenCalledExactlyOnceWith('discogs:catno:v2:ABC-123:40', expect.any(Number), JSON.stringify(sample));
+    expect(sample.hasMore).toBe(true);
+    expect(sample.albums).toMatchObject([
       { discogsId: 11, masterId: 31, pressing: { catalogNumber: 'ABC 123', label: 'Red Label', format: 'Vinyl · LP', country: 'UK' } },
       { discogsId: 12, masterId: undefined, pressing: { catalogNumber: undefined, format: 'Vinyl' } },
     ]);
+  });
+
+  it('retains all editions from an artist release page and marks it complete from Discogs pagination', async () => {
+    get.mockResolvedValueOnce({ data: { pagination: { page: 1, pages: 1 }, releases: [
+      { id: 41, type: 'master', title: 'Album', artist: 'Artist' },
+      ...Array.from({ length: 9 }, (_, index) => ({
+        id: index + 51, type: 'release', title: 'Album', artist: 'Artist',
+      })),
+    ] } });
+
+    const sample = await discogs.getArtistReleases(31, 5);
+
+    expect(sample.albums.map(album => album.id)).toEqual([41, 51, 52, 53, 54, 55, 56, 57, 58, 59]);
+    expect(sample.hasMore).toBe(false);
   });
 });
 

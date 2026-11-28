@@ -6,6 +6,7 @@ import storageService from '../services/storage';
 import { ZipArchive } from 'archiver';
 import AdmZip from 'adm-zip';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
+import { readCoverArtProvenance } from '../services/coverArtProvenance';
 
 type Row = Record<string, unknown> & { id: number };
 
@@ -34,6 +35,9 @@ function readBackup(zipPath: string) {
     const data = JSON.parse(zip.readAsText('data.json'));
     const artists = readRows(data.artists);
     const albums = readRows(data.albums);
+    for (const album of albums) {
+      album.cover_art_provenance = readCoverArtProvenance(album.cover_art_provenance, album.cover_image_url) ?? null;
+    }
     const collections = readRows(data.collections ?? (data.version === '1.2' ? undefined : []));
     const hasBarcodes = data.barcodes !== undefined;
     const barcodes = readRows(hasBarcodes || data.version === '1.2' ? data.barcodes : []);

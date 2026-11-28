@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS albums (
     title VARCHAR(255) NOT NULL,
     year INTEGER,
     cover_image_url TEXT,
+    cover_art_provenance JSONB,
     discogs_id INTEGER UNIQUE,
     musicbrainz_id UUID,
     local_cover_path TEXT,

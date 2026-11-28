@@ -9,6 +9,8 @@ import { canExpandArtist, catalogNameKey, matchesCatalogArtist, rankCatalogMatch
 
 type CatalogAlbum = (DiscogsAlbum & { source: 'discogs' })
   | (MusicBrainzAlbum & { source: 'musicbrainz'; discogsListing?: never });
+type CatalogSample = { albums: CatalogAlbum[]; hasMore: boolean };
+const emptySample: CatalogSample = { albums: [], hasMore: false };
 
 export const search = asyncHandler(async (req: Request, res: Response) => {
   const { q, scope, shelf, sort, offset: rawOffset, by } = req.query;
@@ -43,7 +45,6 @@ export const search = asyncHandler(async (req: Request, res: Response) => {
   const savedPageSize = 20;
   const catalogPageSize = 30;
   const discogsLimit = paged ? 40 : 20;
-  let catalogSampled = false;
 
   // Saved-album searches must not wait for an external provider.
   const local = scope === 'catalog' ? [] : (await pool.query<AlbumWithArtist>(`
@@ -87,7 +88,7 @@ export const search = asyncHandler(async (req: Request, res: Response) => {
 
   const errors: string[] = [];
 
-  const fromProvider = async (searchProvider: () => Promise<CatalogAlbum[]>, serviceName: string) => {
+  const fromProvider = async (searchProvider: () => Promise<CatalogSample>, serviceName: string) => {
     let timeoutId: NodeJS.Timeout | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(() => reject(new Error(`${serviceName} search timed out after 5 seconds`)), 5000);
@@ -98,7 +99,7 @@ export const search = asyncHandler(async (req: Request, res: Response) => {
       const message = error instanceof Error ? error.message : `${serviceName} search failed`;
       console.error(message);
       errors.push(message);
-      return [];
+      return emptySample;
     } finally {
       clearTimeout(timeoutId);
     }
@@ -109,37 +110,38 @@ export const search = asyncHandler(async (req: Request, res: Response) => {
   if (byCatalogNumber && !discogsEnabled) errors.push('Discogs catalog-number lookup is unavailable.');
   const [discogsTitles, discogsArtist, musicBrainzArtist] = await Promise.all([
     discogsEnabled ? fromProvider(async () => {
-      const releases = byCatalogNumber
-        ? await discogsService.searchByCatalogNumber(query, discogsLimit)
-        : await discogsService.searchByQuery(query, discogsLimit);
-      if (releases.length === discogsLimit) catalogSampled = true;
-      return releases.map(release => ({ ...release, discogsListing: 'release', source: 'discogs' }));
-    }, 'Discogs') : [],
+      const { albums, hasMore } = await discogsService.searchReleaseSample(byCatalogNumber ? { catno: query } : { q: query }, discogsLimit);
+      return { albums: albums.map(release => ({ ...release, discogsListing: 'release', source: 'discogs' })), hasMore };
+    }, 'Discogs') : emptySample,
     discogsEnabled && expandArtist ? fromProvider(async () => {
       const artist = await discogsService.searchArtist(query);
-      if (!artist || !matchesCatalogArtist(query, artist.title)) return [];
-      const releases = await discogsService.getArtistReleases(artist.id, discogsLimit);
-      if (releases.length === discogsLimit) catalogSampled = true;
-      return releases.map(release => ({ ...release, artist: release.artist || artist.title, source: 'discogs' }));
-    }, 'Discogs artist') : [],
+      if (!artist || !matchesCatalogArtist(query, artist.title)) return emptySample;
+      const { albums, hasMore } = await discogsService.getArtistReleases(artist.id, discogsLimit);
+      return { albums: albums.map(release => ({ ...release, artist: release.artist || artist.title, source: 'discogs' })), hasMore };
+    }, 'Discogs artist') : emptySample,
     musicbrainzService.isEnabled() && expandArtist ? fromProvider(async () => {
       const artist = await musicbrainzService.searchArtist(query);
-      if (!artist || !matchesCatalogArtist(query, artist.name)) return [];
+      if (!artist || !matchesCatalogArtist(query, artist.name)) return emptySample;
       const albums = await musicbrainzService.getArtistReleaseGroups(artist.id, artist.name, 20);
-      if (albums.length === 20) catalogSampled = true;
-      return albums.map(album => ({ ...album, source: 'musicbrainz' }));
-    }, 'MusicBrainz') : [],
+      return { albums: albums.map(album => ({ ...album, source: 'musicbrainz' })), hasMore: albums.length === 20 };
+    }, 'MusicBrainz') : emptySample,
   ]);
 
-  const ranked = rankCatalogMatches(query, [...discogsTitles, ...discogsArtist, ...musicBrainzArtist], byCatalogNumber);
+  const pressingSampled = discogsTitles.hasMore || discogsArtist.hasMore;
+  const ranked = rankCatalogMatches(query, [...discogsTitles.albums, ...discogsArtist.albums, ...musicBrainzArtist.albums], byCatalogNumber);
   try {
-    const discogs = await annotateCatalogMembership(ranked.slice(offset, offset + catalogPageSize));
+    const matches = ranked.slice(offset, offset + catalogPageSize).map(album =>
+      pressingSampled && 'pressingChoices' in album && album.pressingChoices?.length ? {
+        ...album, pressingSampled,
+        pressingChoices: album.pressingChoices.map(choice => ({ ...choice, pressingSampled })),
+      } : album);
+    const discogs = await annotateCatalogMembership(matches);
     return res.json({
       local,
       discogs, // The client uses this field for both catalog providers.
       errors,
       ...(paged ? {
-        catalogSampled,
+        catalogSampled: pressingSampled || musicBrainzArtist.hasMore,
         ...(ranked.length > offset + catalogPageSize ? { nextOffset: offset + catalogPageSize } : {}),
       } : {}),
     });

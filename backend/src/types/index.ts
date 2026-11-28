@@ -10,6 +10,14 @@ export type CatalogListing =
   | { source: 'discogs'; kind: 'master'; id: number }
   | { source: 'musicbrainz'; kind: 'release-group'; id: string };
 
+export interface CoverArtProvenance {
+  source: 'Discogs' | 'MusicBrainz';
+  url: string;
+  releaseId?: string | number;
+  title?: string;
+  year?: number;
+}
+
 export interface PressingDetails {
   format?: string;
   label?: string;
@@ -27,6 +35,7 @@ export interface Album {
   title: string;
   year?: number;
   cover_image_url?: string;
+  cover_art_provenance?: CoverArtProvenance | null;
   discogs_id?: number;
   catalog_listing?: CatalogListing | null;
   musicbrainz_id?: string;
@@ -74,6 +83,7 @@ export interface DiscogsAlbum {
   pressing?: PressingDetails;
   catalogNumberMatch?: CatalogNumberMatch;
   pressingChoices?: DiscogsAlbum[];
+  pressingSampled?: boolean;
 }
 
 export interface DiscogsSearchResponse {

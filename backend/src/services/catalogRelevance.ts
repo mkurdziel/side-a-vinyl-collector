@@ -8,7 +8,6 @@ type CatalogCandidate = {
   pressing?: PressingDetails;
 };
 type RankedCandidate<T> = T & { catalogNumberMatch?: CatalogNumberMatch };
-const maxPressingChoices = 8;
 
 const words = (value: string): string[] =>
   value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
@@ -74,19 +73,18 @@ export function rankCatalogMatches<T extends CatalogCandidate>(query: string, al
   }).sort((a, b) => b.score - a.score
     || Number(b.album.discogsListing === 'release') - Number(a.album.discogsListing === 'release'));
 
-  const groups = new Map<string, { primary: RankedCandidate<T>; choices: RankedCandidate<T>[] }>();
+  const groups = new Map<string, { primary: RankedCandidate<T>; choices: Map<number, RankedCandidate<T>> }>();
   for (const { album, isRelease } of ranked) {
     const identity = JSON.stringify([catalogNameKey(album.artist), catalogNameKey(album.album)]);
     let group = groups.get(identity);
     if (!group) {
-      group = { primary: album, choices: [] };
+      group = { primary: album, choices: new Map() };
       groups.set(identity, group);
     }
-    if (isRelease && group.choices.length < maxPressingChoices
-      && !group.choices.some(choice => choice.discogsId === album.discogsId)) {
-      group.choices.push(album);
+    if (isRelease && album.discogsId !== undefined && !group.choices.has(album.discogsId)) {
+      group.choices.set(album.discogsId, album);
     }
   }
   return [...groups.values()].map(({ primary, choices }) =>
-    choices.length ? { ...primary, pressingChoices: choices } : primary);
+    choices.size ? { ...primary, pressingChoices: [...choices.values()] } : primary);
 }

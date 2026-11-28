@@ -57,7 +57,7 @@ describe('pressing candidate evidence', () => {
     const chooser = renderer!.root.findByType('fieldset');
     expect(textOf(chooser.findByProps({ id: chooser.props['aria-labelledby'] }))).toBe('Choose a pressing');
     expect(textOf(chooser)).toContain('Example only · Discogs 21');
-    expect(textOf(chooser)).toContain('Same number. Check the marks just inside the last track.');
+    expect(textOf(chooser)).toContain('Same number. Look for etched or stamped marks just inside the last track.');
     expect(textOf(chooser)).not.toContain('Check your copy’s country.');
     expect(chooser.findAllByType('table')).toHaveLength(0);
     await toggleComparison();
@@ -68,6 +68,45 @@ describe('pressing candidate evidence', () => {
     expect(evidenceRows.map(textOf)).toEqual(['Release countryDiffersUSCanada', 'FormatVinylVinyl', 'MixStereoUnlisted']);
     expect(evidenceRows.map(row => row.props.className)).toEqual(['rh-evidence-priority', undefined, undefined]);
     expect(renderer!.root.findAllByProps({ type: 'radio' }).every(radio => !radio.props.checked)).toBe(true);
+  });
+
+  it('opens runout evidence directly from the same-number clue without selecting the example', async () => {
+    const onSelect = vi.fn();
+    const focusRunouts = vi.fn();
+    const focusExample = vi.fn();
+    const querySelector = vi.fn(() => ({ focus: focusExample }));
+    getPressingDetails.mockImplementation(async (releaseId: number) => ({
+      pressing: { matrixRunouts: [{ value: `ETCH-${releaseId}` }] },
+    }));
+    await act(async () => {
+      renderer = create(createElement(CandidatePicker, {
+        choices: [
+          { releaseId: 31, pressing: { catalogNumber: 'ABC-123', format: 'Vinyl · LP' } },
+          { releaseId: 32, pressing: { catalogNumber: 'ABC-123', format: 'Vinyl · LP' } },
+        ],
+        onSelect,
+      }), { createNodeMock: node => {
+        if (node.type === 'h3' && node.props.children === 'Runout marks on these pressings') return { focus: focusRunouts };
+        if (node.type === 'ul') return { querySelector };
+        return null;
+      } });
+    });
+
+    const shortcut = button('Check runout marks');
+    expect(shortcut.props['aria-expanded']).toBe(false);
+    expect(getPressingDetails).not.toHaveBeenCalled();
+    await act(async () => shortcut.props.onClick());
+    expect(button('Compare evidence').props['aria-expanded']).toBe(true);
+    expect(shortcut.props['aria-expanded']).toBe(true);
+    expect(focusRunouts).toHaveBeenCalledOnce();
+    expect(getPressingDetails.mock.calls.map(([releaseId]) => releaseId)).toEqual([31, 32]);
+    expect(textOf(renderer!.root)).toContain('ETCH-32');
+
+    await act(async () => button('Find example in list · Discogs 32').props.onClick());
+    expect(querySelector).toHaveBeenCalledExactlyOnceWith('input[value="32"]');
+    expect(focusExample).toHaveBeenCalledOnce();
+    expect(renderer!.root.findAllByProps({ type: 'radio' }).every(radio => !radio.props.checked)).toBe(true);
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it('shows a listed physical difference beside the first pressing choices', async () => {
@@ -193,9 +232,12 @@ describe('pressing candidate evidence', () => {
     await act(async () => {
       renderer = create(createElement(CandidatePicker, { choices: matching, selectedId: 2, onSelect }));
     });
+    expect(renderer!.root.findAllByType('select')).toHaveLength(0);
+    await toggleComparison();
     const mediumFilter = renderer!.root.findByType('select');
     expect(mediumFilter.findAllByType('option').map(textOf)).toEqual(['All media', 'Vinyl', 'Cassette', 'CD']);
-    await toggleComparison();
+    expect(renderer!.root.findAll(node => node === mediumFilter || node.props.id === mediumFilter.props['aria-controls'])
+      .map(node => node.type)).toEqual(['select', 'ul']);
     await act(async () => button('Pin').props.onClick());
     await act(async () => mediumFilter.props.onChange({ target: { value: 'CD' } }));
     expect(radios()).toEqual([4, 5]);
@@ -228,8 +270,8 @@ describe('pressing candidate evidence', () => {
     const picker = (reviewKey: string, choices = matching, selectedId?: number) =>
       createElement(CandidatePicker, { choices, reviewKey, onSelect, selectedId });
     await act(async () => { renderer = create(picker('album-and-number')); });
-    await act(async () => renderer!.root.findByType('select').props.onChange({ target: { value: 'Vinyl' } }));
     await toggleComparison();
+    await act(async () => renderer!.root.findByType('select').props.onChange({ target: { value: 'Vinyl' } }));
     await act(async () => button('Pin').props.onClick());
     await act(async () => button('Check runout markings').props.onClick());
     await act(async () => button('More pressings').props.onClick());
@@ -253,7 +295,7 @@ describe('pressing candidate evidence', () => {
     expect(textOf(button('Go to 1 pinned pressing'))).toContain('1 pinned');
     await act(async () => renderer!.update(picker('different-album')));
     expect(radios()).toEqual([1, 2, 3]);
-    expect(renderer!.root.findByType('select').props.value).toBe('');
+    expect(renderer!.root.findAllByType('select')).toHaveLength(0);
     expect(button('Compare evidence').props['aria-expanded']).toBe(false);
     expect(textOf(button('Compare evidence'))).toBe('Compare evidence');
   });

@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 import type { DiscogsAlbum } from '../../src/types';
 
-const { query, searchByQuery, searchByCatalogNumber, searchArtist, getArtistReleases, mbEnabled, mbArtist, mbReleases } = vi.hoisted(() => ({
+const { query, searchByQuery, searchReleaseSample, searchArtist, getArtistReleases, mbEnabled, mbArtist, mbReleases } = vi.hoisted(() => ({
   query: vi.fn(),
   searchByQuery: vi.fn(),
-  searchByCatalogNumber: vi.fn(),
+  searchReleaseSample: vi.fn(),
   searchArtist: vi.fn(),
   getArtistReleases: vi.fn(),
   mbEnabled: vi.fn(),
@@ -19,7 +19,7 @@ vi.mock('../../src/services/discogs', () => ({
     searchArtist,
     getArtistReleases,
     searchByQuery,
-    searchByCatalogNumber,
+    searchReleaseSample,
   },
 }));
 vi.mock('../../src/services/musicbrainz', () => ({
@@ -37,7 +37,7 @@ const catalogAlbum = { id: 101, discogsId: 101, artist: 'John Coltrane', album: 
 const savedAlbum = { id: 1, artist_name: 'John Coltrane', title: 'Giant Steps', status: 'wishlist' };
 type Membership = { existingAlbumId: number | null; inCollection: boolean; inWishlist: boolean; existingMatch?: string };
 
-function searchCatalog(params: Record<string, string> = { q: 'Coltrane' }): Promise<{ discogs: (DiscogsAlbum & Membership)[] }> {
+function searchCatalog(params: Record<string, string> = { q: 'Coltrane' }): Promise<{ discogs: (DiscogsAlbum & Membership)[]; catalogSampled?: boolean }> {
   return new Promise((resolve, reject) => {
     const req = { query: params } as unknown as Request;
     const res = { json: resolve } as unknown as Response;
@@ -48,6 +48,7 @@ function searchCatalog(params: Record<string, string> = { q: 'Coltrane' }): Prom
 beforeEach(() => {
   vi.resetAllMocks();
   searchByQuery.mockResolvedValue([catalogAlbum]);
+  searchReleaseSample.mockResolvedValue({ albums: [catalogAlbum], hasMore: false });
   searchArtist.mockResolvedValue(null);
   mbEnabled.mockReturnValue(false);
 });
@@ -62,7 +63,7 @@ describe('search result membership', () => {
 
     expect(query).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('collections.status = $2'), ['Coltrane', 'wishlist', 20, 0, null, false]);
     expect(result).toEqual({ local: [savedAlbum], discogs: [], errors: [] });
-    expect(searchByQuery).not.toHaveBeenCalled();
+    expect(searchReleaseSample).not.toHaveBeenCalled();
   });
 
   it('uses the requested saved offset and only returns a continuation when another row exists', async () => {
@@ -74,19 +75,20 @@ describe('search result membership', () => {
     expect(query).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('LIMIT $3 OFFSET $4'), ['Coltrane', null, 21, 20, 'artist', false]);
     expect(result.local).toHaveLength(20);
     expect(result.nextOffset).toBe(40);
-    expect(searchByQuery).not.toHaveBeenCalled();
+    expect(searchReleaseSample).not.toHaveBeenCalled();
   });
 
   it('returns the next catalog matches from the same provider window', async () => {
-    searchByQuery.mockResolvedValueOnce(Array.from({ length: 40 }, (_, id) => ({
+    const albums = Array.from({ length: 40 }, (_, id) => ({
       ...catalogAlbum, id, discogsId: id, album: `Test album ${id}`,
-    })));
+    }));
+    searchReleaseSample.mockResolvedValueOnce({ albums, hasMore: true });
     query.mockResolvedValue({ rows: [] });
     const result = await new Promise<{ discogs: { id: number }[]; catalogSampled: boolean; nextOffset?: number }>((resolve, reject) => {
       const req = { query: { q: 'Coltrane', scope: 'catalog', offset: '30' } } as unknown as Request;
       search(req, { json: resolve } as unknown as Response, reject);
     });
-    expect(searchByQuery).toHaveBeenCalledExactlyOnceWith('Coltrane', 40);
+    expect(searchReleaseSample).toHaveBeenCalledExactlyOnceWith({ q: 'Coltrane' }, 40);
     expect(result.discogs.map(album => album.id)).toEqual([30, 31, 32, 33, 34, 35, 36, 37, 38, 39]);
     expect(result.catalogSampled).toBe(true);
     expect(result.nextOffset).toBeUndefined();
@@ -95,11 +97,12 @@ describe('search result membership', () => {
   it('ranks the exact numeric title above partial matches and skips artist expansions', async () => {
     const taylorSwift = { id: 912, discogsId: 912, artist: 'Taylor Swift', album: '1989' };
     mbEnabled.mockReturnValue(true);
-    searchByQuery.mockResolvedValue([
+    const albums = [
       { id: 900, discogsId: 900, artist: '1989', album: 'The Right Life' },
       { id: 901, discogsId: 901, artist: 'Croatian Amor', album: '1989 Is Croatian Amor' },
       taylorSwift,
-    ]);
+    ];
+    searchReleaseSample.mockResolvedValue({ albums, hasMore: false });
     query.mockResolvedValue({ rows: [] });
     const result = await new Promise<{ discogs: { id: number }[] }>((resolve, reject) => {
       search({ query: { q: '1989', scope: 'catalog', offset: '0' } } as unknown as Request,
@@ -112,7 +115,7 @@ describe('search result membership', () => {
 
   it('preserves a normalized catalog number match in a regular catalog search', async () => {
     const matching = { ...catalogAlbum, pressing: { catalogNumber: 'ALT 12 · SD-1311', format: 'Vinyl · LP' } };
-    searchByQuery.mockResolvedValue([catalogAlbum, matching]);
+    searchReleaseSample.mockResolvedValue({ albums: [catalogAlbum, matching], hasMore: false });
     query.mockResolvedValue({ rows: [] });
 
     const result = await searchCatalog({ q: 'sd 1311', scope: 'catalog', offset: '0' });
@@ -123,26 +126,26 @@ describe('search result membership', () => {
       pressing: matching.pressing,
       pressingChoices: [{ id: matching.id, catalogNumberMatch: 'exact' }],
     }]);
-    expect(searchByCatalogNumber).not.toHaveBeenCalled();
+    expect(searchReleaseSample).toHaveBeenCalledExactlyOnceWith({ q: 'sd 1311' }, 40);
   });
 
   it('uses only the catalog-number lookup and distinguishes missing from contradictory evidence', async () => {
     const edition = (id: number, catalogNumber?: string) => ({
       ...catalogAlbum, id, discogsId: id, pressing: { catalogNumber },
     });
-    searchByCatalogNumber.mockResolvedValue([
+    const albums = [
       edition(100, 'none'),
       edition(101, 'SD 1311'),
       edition(102, 'SD 13110'),
       edition(0, 'SD 1311'),
-    ]);
+    ];
+    searchReleaseSample.mockResolvedValue({ albums, hasMore: false });
     query.mockResolvedValue({ rows: [] });
     mbEnabled.mockReturnValue(true);
 
     const result = await searchCatalog({ q: 'SD-1311', scope: 'catalog', by: 'catalog-number', offset: '0' });
 
-    expect(searchByCatalogNumber).toHaveBeenCalledExactlyOnceWith('SD-1311', 40);
-    expect(searchByQuery).not.toHaveBeenCalled();
+    expect(searchReleaseSample).toHaveBeenCalledExactlyOnceWith({ catno: 'SD-1311' }, 40);
     expect(searchArtist).not.toHaveBeenCalled();
     expect(mbArtist).not.toHaveBeenCalled();
     expect(result.discogs).toMatchObject([{
@@ -151,21 +154,28 @@ describe('search result membership', () => {
     }]);
   });
 
-  it('returns one catalog row with a bounded list of distinct release choices and annotates membership once', async () => {
+  it.each([
+    { q: 'Giant Steps', hasMore: false },
+    { q: 'SD-1311', by: 'catalog-number', hasMore: true },
+  ])('keeps all unique pressing choices in one result for $q', async ({ q, by, hasMore }) => {
     const primary = { ...catalogAlbum, masterId: 23, pressing: { catalogNumber: 'SD 1311' } };
     const otherEditions = Array.from({ length: 10 }, (_, index) => ({
       ...primary, id: 102 + index, discogsId: 102 + index,
     }));
-    searchByQuery.mockResolvedValue([primary, primary, { ...primary, id: 0, discogsId: 0 }, ...otherEditions]);
+    const albums = [primary, primary, { ...primary, id: 0, discogsId: 0 }, ...otherEditions];
+    searchReleaseSample.mockResolvedValue({ albums, hasMore });
     query.mockResolvedValue({ rows: [{ ...savedAlbum, discogs_id: primary.discogsId }] });
 
-    const result = await searchCatalog({ q: 'Giant Steps', scope: 'catalog', offset: '0' });
+    const result = await searchCatalog({ q, scope: 'catalog', offset: '0', ...(by && { by }) });
 
     expect(query).toHaveBeenCalledOnce();
     expect(result.discogs).toHaveLength(1);
     const match = result.discogs[0]!;
     expect(match).toMatchObject({ id: primary.id, masterId: 23, existingMatch: 'release', inWishlist: true });
-    expect(match.pressingChoices?.map(choice => choice.id)).toEqual([101, 102, 103, 104, 105, 106, 107, 108]);
+    expect(match.pressingChoices?.map(choice => choice.id)).toEqual([primary.id, ...otherEditions.map(choice => choice.id)]);
+    expect(result.catalogSampled).toBe(hasMore);
+    expect(match.pressingSampled).toBe(hasMore ? true : undefined);
+    expect(match.pressingChoices?.every(choice => choice.pressingSampled === (hasMore ? true : undefined))).toBe(true);
     expect(match.pressingChoices?.[0]).not.toHaveProperty('pressingChoices');
     expect(match.pressingChoices?.[0]).not.toHaveProperty('existingMatch');
   });
@@ -174,7 +184,7 @@ describe('search result membership', () => {
     mbEnabled.mockReturnValue(true);
     searchArtist.mockResolvedValue({ id: 42, title: 'Croatian Amor' });
     mbArtist.mockResolvedValue({ id: 'no-match', name: 'Dan Gibson' });
-    searchByQuery.mockResolvedValue([{ id: 19, discogsId: 19, artist: 'Dan Gibson', album: 'Ocean Surf' }]);
+    searchReleaseSample.mockResolvedValue({ albums: [{ id: 19, discogsId: 19, artist: 'Dan Gibson', album: 'Ocean Surf' }], hasMore: false });
     const result = await new Promise<{ discogs: unknown[]; errors: unknown[] }>((resolve, reject) => {
       search({ query: { q: 'zzzxqv-047-no-record', scope: 'catalog' } } as unknown as Request,
         { json: resolve } as unknown as Response, reject);
@@ -188,8 +198,8 @@ describe('search result membership', () => {
   it('expands an exact artist despite accents and Discogs disambiguation', async () => {
     const album = { id: 38, discogsId: 38, artist: '', album: 'Renaissance', discogsListing: 'release' };
     searchArtist.mockResolvedValue({ id: 42, title: 'Beyoncé (2)' });
-    getArtistReleases.mockResolvedValue([album]);
-    searchByQuery.mockResolvedValue([]);
+    getArtistReleases.mockResolvedValue({ albums: [album], hasMore: false });
+    searchReleaseSample.mockResolvedValue({ albums: [], hasMore: false });
     query.mockResolvedValue({ rows: [] });
     const result = await new Promise<{ discogs: unknown[] }>((resolve, reject) => {
       search({ query: { q: 'Beyonce', scope: 'catalog' } } as unknown as Request,

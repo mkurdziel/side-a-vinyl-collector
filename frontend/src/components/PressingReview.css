@@ -85,10 +85,11 @@
   background: var(--rh-active-wash);
 }
 
-.rh-pressing-example__find {
-  flex: none;
+.rh-pressing-example__action {
+  flex: 0 0 auto;
   margin-inline-start: auto;
-  white-space: nowrap;
+  max-inline-size: 39%;
+  text-wrap: balance;
 }
 
 .rh-pressing-tools {
@@ -150,7 +151,7 @@
   }
 
   .rh-pressing-review__actions button,
-  .rh-pressing-example__find,
+  .rh-pressing-example__action,
   .rh-pressing-compare,
   .rh-pressing-evidence-tools :is(button, summary) {
     font-size: 0.8125rem;

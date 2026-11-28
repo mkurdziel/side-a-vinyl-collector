@@ -238,6 +238,7 @@ describe('pressing comparison evidence', () => {
     await act(async () => choose(410));
     await act(async () => button('Use this pressing').props.onClick());
     expect(button('Confirm pressing')).toBeDefined();
+    await act(async () => button('Compare evidence').props.onClick());
     await act(async () => renderer!.root.findByType('select').props.onChange({ target: { value: 'CD' } }));
     expect(button('Confirm pressing')).toBeUndefined();
     expect(button('Use this pressing')).toBeUndefined();
@@ -576,6 +577,7 @@ describe('saving a new catalog pressing', () => {
     await act(async () => {
       renderer = create(createPicker({ album: { ...choices[0], pressingChoices: choices }, onSave, onSaveWithoutPressing }));
     });
+    await act(async () => button('Compare evidence').props.onClick());
     const select = renderer!.root.findByType('select');
     const submit = () => renderer!.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() });
     await act(async () => renderer!.root.findByProps({ type: 'radio', value: 410 }).props.onChange());

@@ -4,6 +4,7 @@ import pool from '../config/database';
 import storageService from '../services/storage';
 import musicbrainzService from '../services/musicbrainz';
 import discogsService from '../services/discogs';
+import { readCoverArtProvenance } from '../services/coverArtProvenance';
 
 /**
  * Serve cover art image for an album
@@ -95,7 +96,8 @@ export const fetchOfficialCoverArt = asyncHandler(async (req: Request, res: Resp
     await pool.query(
       `UPDATE albums
        SET musicbrainz_id = $1, cover_image_url = $2, local_cover_path = NULL,
-           cover_art_fetched = TRUE
+           cover_art_fetched = TRUE,
+           cover_art_provenance = CASE WHEN cover_image_url = $2 THEN cover_art_provenance END
        WHERE id = $3`,
       [mbAlbum.mbid, mbAlbum.coverImageUrl, id]
     );
@@ -116,8 +118,8 @@ export const fetchOfficialCoverArt = asyncHandler(async (req: Request, res: Resp
         const localPath = await storageService.saveCoverArt(imageBuffer, album.id, album.cover_image_url);
 
         await pool.query(
-          'UPDATE albums SET local_cover_path = $1 WHERE id = $2',
-          [localPath, id]
+          'UPDATE albums SET local_cover_path = $1 WHERE id = $2 AND cover_image_url = $3 AND local_cover_path IS NULL',
+          [localPath, id, album.cover_image_url]
         );
       } catch (error) {
         console.error('Failed to cache Discogs cover art:', error);
@@ -218,19 +220,23 @@ export const searchCoverArt = asyncHandler(async (req: Request, res: Response) =
  */
 export const updateCoverArt = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
-  const { url, source } = req.body;
+  const { url, source, provenance } = req.body;
 
-  if (!url) {
+  if (typeof url !== 'string' || !url.trim()) {
     throw new AppError('Image URL is required', 400);
   }
+
+  const artwork = provenance && typeof provenance === 'object' && !Array.isArray(provenance)
+    ? readCoverArtProvenance({ ...provenance, source, url }, url) : undefined;
+  if (provenance != null && !artwork) throw new AppError('Choose valid artwork release details.', 400);
 
   // If from Discogs or other external, we should cache it locally
   // If from MusicBrainz (Archive), we can link directly or cache. Caching is safer.
   
   let localPath;
   try {
-    const imageBuffer = await musicbrainzService.downloadCoverArt(url as string);
-    localPath = await storageService.saveCoverArt(imageBuffer, parseInt(String(id)), url as string);
+    const imageBuffer = await musicbrainzService.downloadCoverArt(url);
+    localPath = await storageService.saveCoverArt(imageBuffer, parseInt(String(id)), url);
   } catch (error) {
     console.error('Failed to download/cache image:', error);
     // Be lenient? No, if we can't download it, we probably shouldn't set it if we rely on local serving.
@@ -239,10 +245,11 @@ export const updateCoverArt = asyncHandler(async (req: Request, res: Response) =
   }
 
   await pool.query(
-    `UPDATE albums 
-     SET cover_image_url = $1, local_cover_path = $2, cover_art_fetched = TRUE 
+    `UPDATE albums
+     SET cover_image_url = $1, local_cover_path = $2, cover_art_fetched = TRUE,
+         cover_art_provenance = COALESCE($4::jsonb, CASE WHEN cover_image_url = $1 THEN cover_art_provenance END)
      WHERE id = $3`,
-    [url, localPath, id]
+    [url, localPath, id, artwork ?? null]
   );
 
   // Return updated album

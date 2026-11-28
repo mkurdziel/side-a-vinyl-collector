@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { discogsPressingSearch } from '../albumDisplay';
 import { usePressingPreparation } from '../hooks/usePressingPreparation';
 import type { Album, DiscogsAlbum, PressingDetails } from '../services/api';
 import { catalogNumberKey, matchesPressingMedium, withPressingEvidence } from '../services/pressingEvidence';
@@ -26,6 +27,7 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
   const issueId = useId();
   const saveGuidanceId = useId();
   const selectionSummaryId = useId();
+  const sampleNoticeId = useId();
   const openDuplicate = useRef<HTMLButtonElement>(null);
   const evidenceRegion = useRef<HTMLDivElement>(null);
   const saveInProgress = useRef(false);
@@ -47,6 +49,7 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
   const pressing = releases.find(release => release.discogsId === selectedId);
   const selectedChoice = choices.find(choice => choice.releaseId === selectedId);
   const selectedWithEvidence = selectedChoice && withPressingEvidence(selectedChoice, evidence[selectedChoice.releaseId]);
+  const morePressingsUrl = album.pressingSampled ? discogsPressingSearch(album.artist, album.album, searchedNumber) : undefined;
   const selectionOutsideMedia = !!selectedWithEvidence && !matchesPressingMedium(selectedWithEvidence, medium);
   const shelf = destination === 'collection' ? 'Collection' : 'Wishlist';
   const saveIssue = unexpectedIssue ?? issue;
@@ -108,6 +111,7 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
           <div ref={evidenceRegion} className="rh-pressing-review__evidence px-4 py-2 sm:px-6 sm:py-4" role="region" aria-label="Pressing evidence" tabIndex={0}>
             <PressingCandidates choices={choices} searchedNumber={searchedNumber} selectedId={selectedId}
               onSelect={setSelectedId} onReadEvidence={recordEvidence} disabled={!!saving || duplicate} preparation={preparation}
+              morePressingsUrl={morePressingsUrl}
               uncertainAction={onSaveWithoutPressing ? 'If you’re unsure, you can save without pressing below.' : undefined} />
           </div>
           <footer className="rh-pressing-review__footer grid gap-2 px-4 py-2 sm:px-6" role="group" aria-label={duplicate ? 'Saved album' : 'Save album'}>
@@ -120,6 +124,7 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
               {selectionOutsideMedia ? `The selected pressing is outside the ${medium} filter. Show it in All media or choose another pressing.`
                 : 'Choose a pressing to save it.'}
             </p>}
+            {morePressingsUrl && pressing && !duplicate && <p id={sampleNoticeId} className="text-xs text-gray-600">Only part of the Discogs results are shown.</p>}
             {saveIssue && <p id={issueId} role="alert" className="text-sm text-red-600">{saveIssue}</p>}
             <div className="rh-pressing-review__actions">
               {(duplicate || !onSaveWithoutPressing) && <button type="button" className="rh-lookup-link aria-disabled:opacity-60" onClick={close}
@@ -136,7 +141,8 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
                   </button>}
                   <button type="submit" className="rh-primary-action px-3 text-sm font-semibold aria-disabled:opacity-60"
                     aria-disabled={!pressing || !!saving || selectionOutsideMedia} aria-busy={saving === 'pressing'}
-                    aria-describedby={[saveIssue && issueId, (!pressing || selectionOutsideMedia) && saveGuidanceId, selectedWithEvidence && selectionSummaryId].filter(Boolean).join(' ') || undefined}
+                    aria-describedby={[saveIssue && issueId, (!pressing || selectionOutsideMedia) && saveGuidanceId,
+                      selectedWithEvidence && selectionSummaryId, morePressingsUrl && pressing && sampleNoticeId].filter(Boolean).join(' ') || undefined}
                     aria-label={saving === 'pressing' ? undefined : `Save pressing to ${shelf}`}>
                     {saving === 'pressing' ? 'Saving pressing…' : 'Save pressing'}
                   </button>

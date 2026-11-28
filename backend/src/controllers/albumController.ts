@@ -32,7 +32,7 @@ async function fetchMusicBrainzCoverArt(
         `UPDATE albums
          SET musicbrainz_id = $1, cover_image_url = $2, local_cover_path = NULL,
              cover_art_fetched = TRUE
-         WHERE id = $3`,
+         WHERE id = $3 AND cover_art_provenance IS NULL`,
         [mbAlbum.mbid, mbAlbum.coverImageUrl, albumId]
       );
     } else {
@@ -54,8 +54,8 @@ async function fetchMusicBrainzCoverArt(
           const localPath = await storageService.saveCoverArt(imageBuffer, albumId, existingCoverUrl);
 
           await pool.query(
-            'UPDATE albums SET local_cover_path = $1 WHERE id = $2',
-            [localPath, albumId]
+            'UPDATE albums SET local_cover_path = $1 WHERE id = $2 AND cover_image_url = $3 AND local_cover_path IS NULL',
+            [localPath, albumId, existingCoverUrl]
           );
 
           console.log(`✓ Cached fallback cover art locally for ${artist} - ${album}`);
@@ -228,8 +228,8 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
         const localPath = await storageService.saveCoverArt(imageBuffer, albumId, coverImageUrl);
 
         await pool.query(
-          'UPDATE albums SET local_cover_path = $1, cover_art_fetched = TRUE WHERE id = $2',
-          [localPath, albumId]
+          'UPDATE albums SET local_cover_path = $1, cover_art_fetched = TRUE WHERE id = $2 AND cover_image_url = $3 AND local_cover_path IS NULL',
+          [localPath, albumId, coverImageUrl]
         );
       } catch (error) {
         console.error(`Failed to cache Discogs cover art for album ${albumId}:`, error);

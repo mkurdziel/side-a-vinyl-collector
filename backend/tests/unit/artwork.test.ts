@@ -69,7 +69,7 @@ describe('automatic artwork on import', () => {
     musicbrainz.searchAndGetCoverArt.mockResolvedValue(officialAlbum);
     await invoke(addAlbum, body);
     expect(query).toHaveBeenCalledWith(
-      expect.stringMatching(/local_cover_path = NULL,[\s\S]*cover_art_fetched = TRUE/),
+      expect.stringMatching(/local_cover_path = NULL,[\s\S]*cover_art_fetched = TRUE[\s\S]*AND cover_art_provenance IS NULL/),
       ['mbid', officialUrl, 42],
     );
     expect(musicbrainz.downloadCoverArt).not.toHaveBeenCalled();
@@ -80,7 +80,7 @@ describe('automatic artwork on import', () => {
       musicbrainz.searchAndGetCoverArt.mockResolvedValue(result);
       await invoke(addAlbum, body);
       await vi.waitFor(() => expect(query).toHaveBeenCalledWith(
-        'UPDATE albums SET local_cover_path = $1 WHERE id = $2', ['42_fallback.jpg', 42],
+        'UPDATE albums SET local_cover_path = $1 WHERE id = $2 AND cover_image_url = $3 AND local_cover_path IS NULL', ['42_fallback.jpg', 42, fallbackUrl],
       ));
       expectNoFetchedWrite();
       if (result) {
@@ -103,8 +103,8 @@ describe('automatic artwork on import', () => {
     musicbrainz.isEnabled.mockReturnValue(false);
     await invoke(addAlbum, body);
     expect(query).toHaveBeenCalledWith(
-      'UPDATE albums SET local_cover_path = $1, cover_art_fetched = TRUE WHERE id = $2',
-      ['42_fallback.jpg', 42],
+      'UPDATE albums SET local_cover_path = $1, cover_art_fetched = TRUE WHERE id = $2 AND cover_image_url = $3 AND local_cover_path IS NULL',
+      ['42_fallback.jpg', 42, fallbackUrl],
     );
     expect(musicbrainz.searchAndGetCoverArt).not.toHaveBeenCalled();
   });
@@ -133,7 +133,7 @@ describe('explicit artwork refresh', () => {
     await invoke(fetchOfficialCoverArt);
     expectNoFetchedWrite();
     expect(query).toHaveBeenCalledWith(
-      'UPDATE albums SET local_cover_path = $1 WHERE id = $2', ['42_fallback.jpg', '42'],
+      'UPDATE albums SET local_cover_path = $1 WHERE id = $2 AND cover_image_url = $3 AND local_cover_path IS NULL', ['42_fallback.jpg', '42', fallbackUrl],
     );
     musicbrainz.searchAndGetCoverArt.mockResolvedValue(officialAlbum);
     await invoke(fetchOfficialCoverArt);
@@ -206,7 +206,28 @@ describe('artwork candidates and manual selection', () => {
   it('still marks successfully saved manual selections fetched', async () => {
     await invoke(updateCoverArt, { url: fallbackUrl, source: 'Discogs' });
     expect(query).toHaveBeenCalledWith(
-      expect.stringContaining('cover_art_fetched = TRUE'), [fallbackUrl, '42_fallback.jpg', '42'],
+      expect.stringContaining('cover_art_fetched = TRUE'), [fallbackUrl, '42_fallback.jpg', '42', null],
     );
+  });
+
+  it('stores optional selected artwork metadata separately from the album release', async () => {
+    await invoke(updateCoverArt, { url: fallbackUrl, source: 'Discogs', provenance: { releaseId: 401, title: ' Dummy UK ', year: 1994 } });
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('cover_art_provenance ='), [
+      fallbackUrl, '42_fallback.jpg', '42', { source: 'Discogs', url: fallbackUrl, releaseId: 401, title: 'Dummy UK', year: 1994 },
+    ]);
+    expect(query.mock.calls[0]?.[0]).not.toContain('discogs_id');
+  });
+
+  it.each([
+    { source: 'Other', provenance: {} },
+    { source: 'Discogs', provenance: { releaseId: '401' } },
+    { source: 'MusicBrainz', provenance: { releaseId: 'not-a-release-id' } },
+    { source: 'Discogs', provenance: { year: 1.5 } },
+    { source: 'Discogs', provenance: { title: ['An album'] } },
+    { source: 'Discogs', provenance: [] },
+  ])('rejects invalid optional artwork details before downloading (%j)', async body => {
+    await expect(invoke(updateCoverArt, { url: fallbackUrl, ...body })).rejects.toMatchObject({ statusCode: 400 });
+    expect(musicbrainz.downloadCoverArt).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
   });
 });

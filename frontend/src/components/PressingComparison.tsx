@@ -3,7 +3,7 @@ import { usePressingPreparation } from '../hooks/usePressingPreparation';
 import { ApiError, type DiscogsAlbum, type PressingDetails, type SavedTitleMatch } from '../services/api';
 import { catalogNumberKey, createPressingDetailsLoader, matchesPressingMedium, pressingFormatFacts, withPressingEvidence } from '../services/pressingEvidence';
 import { formatUndoDeadline } from '../services/undoDeadline';
-import { discogsReleaseSource, savedCatalogSource, savedCopyContext, savedCopyLabel, type CatalogSource } from '../albumDisplay';
+import { discogsPressingSearch, discogsReleaseSource, savedCatalogSource, savedCopyContext, savedCopyLabel, type CatalogSource } from '../albumDisplay';
 import { ModalDialog } from './ModalDialog';
 import { PressingCandidates, PressingSelectionSummary, type PressingCandidate } from './PressingCandidates';
 import './PressingReview.css';
@@ -21,6 +21,7 @@ export interface LookupPressing {
   source?: CatalogSource;
   pressing?: PressingDetails;
   catalogNumberMatch?: DiscogsAlbum['catalogNumberMatch'];
+  pressingSampled?: boolean;
 }
 
 interface PressingComparisonProps {
@@ -179,6 +180,7 @@ export function PressingComparison({
   const undoDeadlineId = useId();
   const removalId = useId();
   const savedEvidenceId = useId();
+  const sampleNoticeId = useId();
   const [selectedId, setSelectedId] = useState<number>();
   const [candidateId, setCandidateId] = useState<number>();
   const [candidateEvidence, setCandidateEvidence] = useState<Partial<Record<number, PressingDetails>>>({});
@@ -226,6 +228,8 @@ export function PressingComparison({
   const activeLookup = previewCandidate ?? (candidates.length === 0 ? lookup : undefined);
   const catalogArtist = candidate?.artist ?? lookup?.artist ?? candidates[0]?.artist;
   const selected = availableCopies.find(copy => copy.id === selectedId) ?? availableCopies[0];
+  const morePressingsUrl = lookup?.pressingSampled || candidates.some(choice => choice.pressingSampled)
+    ? discogsPressingSearch(catalogArtist ?? selected?.artist_name, title, searchedNumber) : undefined;
   const savedSource = selected ? savedCatalogSource(selected) : undefined;
   const lookupRelease = previewCandidate?.releaseId;
   const lookupSource = activeLookup?.source ?? discogsReleaseSource(lookupRelease);
@@ -568,6 +572,7 @@ export function PressingComparison({
                 disabled={busy || lookupPending} preparation={preparation} onChangeMedium={() => setSaveSelection(undefined)}
                 uncertainAction={offerKeepPressing ? (savedRelease ? 'If you’re unsure, keep the current pressing.' : 'If you’re unsure, leave the pressing unconfirmed.') : undefined}
                 loadDetails={loadPressingDetails} onReadEvidence={recordCandidateEvidence}
+                morePressingsUrl={morePressingsUrl}
                 savedComparison={savedComparison} />
             </div>}
             <div>
@@ -595,6 +600,7 @@ export function PressingComparison({
               {savedReleaseChanged && <p ref={changedNotice} tabIndex={-1} role="status" className="text-sm text-gray-600">
                 {alreadySaved ? 'The saved copy was updated and now matches this pressing.' : 'The saved pressing changed. Open Compare evidence to check the update before confirming again.'}
               </p>}
+              {morePressingsUrl && candidate && <p id={sampleNoticeId} className="text-xs text-gray-600">Only part of the Discogs results are shown.</p>}
               {saveStatus && candidate ? (
                 <div className="grid gap-2" role="group" aria-labelledby={savePromptId}>
                   <p id={savePromptId} ref={savePrompt} tabIndex={-1} className="text-sm font-medium">
@@ -612,7 +618,8 @@ export function PressingComparison({
                     {keepPressing}
                     <button ref={confirmSave} type="button" className="rh-primary-action px-3 text-sm font-semibold"
                       aria-disabled={busy} aria-busy={saveStatus === 'saving'}
-                      aria-describedby={saveStatus === 'failed' ? `${saveErrorId} ${selectionSummaryId}` : selectionSummaryId}
+                      aria-describedby={[saveStatus === 'failed' && saveErrorId, selectionSummaryId,
+                        morePressingsUrl && sampleNoticeId].filter(Boolean).join(' ')}
                       onClick={() => void save()}>
                       {saveStatus === 'saving' ? 'Saving pressing…' : saveStatus === 'failed'
                         ? (saveSelection?.changeSelection ? 'Review selection' : 'Retry saving pressing') : 'Confirm pressing'}
@@ -628,7 +635,8 @@ export function PressingComparison({
                   <div className="rh-pressing-review__actions">
                     {keepPressing}
                     {candidate && !lookupPending && !alreadySaved && !selectionOutsideMedia && <button ref={saveTrigger} type="button"
-                      className="rh-primary-action px-3 text-sm font-semibold" aria-disabled={busy} aria-describedby={selectionSummaryId}
+                      className="rh-primary-action px-3 text-sm font-semibold" aria-disabled={busy}
+                      aria-describedby={morePressingsUrl ? `${selectionSummaryId} ${sampleNoticeId}` : selectionSummaryId}
                       onClick={() => {
                         if (!busy) setSaveSelection({ copyId: selected.id, releaseId: candidate.releaseId,
                           previousRelease: selected.discogs_id, status: 'confirming' });
