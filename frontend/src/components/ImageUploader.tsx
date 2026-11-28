@@ -10,6 +10,7 @@ import type { ManualAlbumDraft } from './ManualAlbumDialog';
 
 interface ImageUploaderProps {
   onClose: () => void;
+  onBack?: () => void;
   onSuccess: () => void;
   onSearchByName: (query?: string, draft?: ManualAlbumDraft) => void;
   onManual: (draft?: ManualAlbumDraft) => void;
@@ -19,7 +20,7 @@ interface ImageUploaderProps {
   viewMode: 'collection' | 'wishlist';
 }
 
-export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onManual, onMoveSaved, onOpenSaved, lookupShelfEdits, viewMode }: ImageUploaderProps) => {
+export const ImageUploader = ({ onClose, onBack, onSuccess, onSearchByName, onManual, onMoveSaved, onOpenSaved, lookupShelfEdits, viewMode }: ImageUploaderProps) => {
   const [analyzing, setAnalyzing] = useState(false);
   const [matches, setMatches] = useState<DiscogsAlbum[]>([]);
   const [imagePreview, setImagePreview] = useState<string>('');
@@ -178,6 +179,8 @@ export const ImageUploader = ({ onClose, onSuccess, onSearchByName, onManual, on
         </div>
 
         <div className="space-y-4">
+          {onBack && <button type="button" className="rh-lookup-link" disabled={!!saving}
+            onClick={() => { if (!saveInProgress.current) onBack(); }}>Back to add methods</button>}
           <input ref={fileInput} id="cover-photo-file" type="file" accept="image/*,.heic,.heif"
             onChange={handleFileChange} disabled={analyzing || !!saving} className="sr-only"
             tabIndex={imagePreview ? -1 : undefined} aria-label="Choose a cover photo" />

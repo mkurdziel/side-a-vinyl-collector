@@ -80,6 +80,10 @@ export interface DiscogsAlbum {
   year?: number;
   coverImageUrl?: string;
   discogsId: number;
+  masterId?: number;
+  pressing?: PressingDetails;
+  pressingChoices?: DiscogsAlbum[];
+  catalogNumberMatch?: 'exact' | 'unverified';
   discogsListing?: 'release' | 'master';
   source?: 'musicbrainz' | 'discogs';
   mbid?: string;
@@ -184,6 +188,11 @@ class ApiService {
     if (shelf) params.set('shelf', shelf);
     if (offset !== undefined) params.set('offset', String(offset));
     if (sort && scope === 'saved') params.set('sort', sort);
+    return this.request(`/api/search?${params}`, { signal });
+  }
+
+  searchCatalogNumber(query: string, signal: AbortSignal, offset: number): Promise<SearchResult> {
+    const params = new URLSearchParams({ q: query, scope: 'catalog', by: 'catalog-number', offset: String(offset) });
     return this.request(`/api/search?${params}`, { signal });
   }
 

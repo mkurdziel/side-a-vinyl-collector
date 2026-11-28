@@ -17,6 +17,8 @@ export interface PressingDetails {
   country?: string;
 }
 
+export type CatalogNumberMatch = 'exact' | 'unverified';
+
 export interface Album {
   id: number;
   artist_id: number;
@@ -66,7 +68,10 @@ export interface DiscogsAlbum {
   coverImageUrl?: string;
   discogsId: number;
   discogsListing?: 'release' | 'master';
+  masterId?: number;
   pressing?: PressingDetails;
+  catalogNumberMatch?: CatalogNumberMatch;
+  pressingChoices?: DiscogsAlbum[];
 }
 
 export interface DiscogsSearchResponse {

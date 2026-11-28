@@ -41,6 +41,21 @@ export const AddMenu = ({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 sm:p-6">
           <button
             className="rh-add-method group"
+            onClick={onSearchClick}
+          >
+            <span className="p-3 bg-blue-50 rounded-lg group-hover:bg-blue-100 transition-colors">
+              <svg className="w-6 h-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </span>
+            <span className="min-w-0">
+              <span className="block text-base font-semibold text-gray-900 mb-1">Search by name</span>
+              <span className="block text-sm text-gray-600">Find an artist or album in your library and the catalogs.</span>
+            </span>
+          </button>
+
+          <button
+            className="rh-add-method group"
             onClick={onBarcodeClick}
           >
             <span className="p-3 bg-blue-50 rounded-lg group-hover:bg-blue-100 transition-colors">
@@ -66,21 +81,6 @@ export const AddMenu = ({
             <span className="min-w-0">
               <span className="block text-base font-semibold text-gray-900 mb-1">Identify a cover</span>
               <span className="block text-sm text-gray-600">Use a photo to find matching albums.</span>
-            </span>
-          </button>
-
-          <button
-            className="rh-add-method group"
-            onClick={onSearchClick}
-          >
-            <span className="p-3 bg-blue-50 rounded-lg group-hover:bg-blue-100 transition-colors">
-              <svg className="w-6 h-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-            </span>
-            <span className="min-w-0">
-              <span className="block text-base font-semibold text-gray-900 mb-1">Search by name</span>
-              <span className="block text-sm text-gray-600">Find an artist or album in your library and the catalogs.</span>
             </span>
           </button>
 

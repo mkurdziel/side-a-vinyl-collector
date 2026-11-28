@@ -1,6 +1,6 @@
 import { useId, useRef, useState } from 'react';
 import { isExactSavedMatch, type SavedMatch, type SavedTitleMatch } from '../services/api';
-import { savedPressingLabel } from '../albumDisplay';
+import { savedCopyLabel, savedPressingLabel } from '../albumDisplay';
 import { PressingComparison, type LookupPressing, type OpenSavedAlbum } from './PressingComparison';
 
 type Shelf = 'collection' | 'wishlist';
@@ -15,6 +15,7 @@ interface SaveDestinationActionsProps {
   existingStatus?: Shelf;
   existingMatch?: SavedMatch | null;
   existingAlbumId?: number | null;
+  savedHere?: boolean;
   titleMatches?: SavedTitleMatch[];
   lookup?: LookupPressing;
   onSearch?: () => void;
@@ -24,6 +25,7 @@ interface SaveDestinationActionsProps {
   disabled?: boolean;
   onSelect: (action: DestinationAction) => void;
   onOpenSaved?: OpenSavedAlbum;
+  onReviewPressings?: (opener: HTMLButtonElement) => void;
 }
 
 interface DestinationChoice {
@@ -32,8 +34,8 @@ interface DestinationChoice {
 }
 
 export function SaveDestinationActions({
-  albumTitle, catalogLabel, preferred, existingStatus, existingMatch, existingAlbumId, titleMatches, lookup, onSearch, searchLabel,
-  openingSaved, pending, disabled, onSelect, onOpenSaved,
+  albumTitle, catalogLabel, preferred, existingStatus, existingMatch, existingAlbumId, savedHere, titleMatches, lookup, onSearch, searchLabel,
+  openingSaved, pending, disabled, onSelect, onOpenSaved, onReviewPressings,
 }: SaveDestinationActionsProps) {
   const [comparing, setComparing] = useState(false);
   const statusId = useId();
@@ -59,34 +61,48 @@ export function SaveDestinationActions({
     const name = shelfNames[destination];
     const canOpen = !!onOpenSaved && savedId != null;
     const canCompare = titleOnly && !!onOpenSaved && matches.length > 0;
+    const compareFirst = canCompare && (!savedHere || !canOpen);
     const canMove = existingStatus === 'wishlist' && existingAlbumId != null && isExactSavedMatch(existingMatch);
     const opensDialog = !!existingStatus && (canOpen || canCompare);
+    const savedRecordLabel = titleOnly && matches.length === 1 ? savedCopyLabel(matches[0]) : catalogLabel;
     const primaryLabel = !existingStatus ? (pending === destination ? `Adding to ${name}…` : `Add to ${name}`)
-      : openingSaved ? 'Opening album…' : canOpen ? 'Open saved album' : canCompare ? 'Compare pressings' : 'Saved album';
+      : compareFirst ? 'Compare pressings' : openingSaved ? 'Opening album…' : canOpen ? 'Open saved album' : 'Saved album';
+    const savedLabel = titleOnly && !savedHere ? `Title already in ${matchedShelves}`
+      : `${existingMatch === 'release' ? 'This pressing' : 'Album'} saved in ${matchedShelves}`;
+    const savedEdition = matches.length === 1 && matches[0].discogs_id
+      ? `Saved Discogs release ${matches[0].discogs_id}` : 'Saved pressing unconfirmed';
     const compare = () => setComparing(true);
     return (
       <div className="rh-destination-actions grid min-w-0 gap-1">
         <p id={statusId} role="status" className={existingStatus ? 'rh-saved-outcome' : 'sr-only'}>
-          {existingStatus && <>Saved in {matchedShelves}{titleOnly && savedPressing && ` · ${savedPressing}`}</>}
+          {existingStatus && <>{savedLabel}{titleOnly && savedPressing && ` · ${savedEdition}`}</>}
         </p>
+        {titleOnly && !savedHere && <p className="rh-album-level-hint">One saved entry per artist and title.</p>}
+        {!existingStatus && onReviewPressings && <p className="rh-album-level-hint">Add the album, or check a pressing first.</p>}
         {/* The Add control becomes the saved-record action on the same DOM node. */}
-        <button type="button" ref={canCompare && !canOpen ? compareButton : addButton}
+        <button type="button" data-catalog-primary ref={compareFirst ? compareButton : addButton}
           className={existingStatus ? 'rh-lookup-link text-left' : 'min-h-11 rounded-lg border border-gray-300 bg-gray-100 px-2 py-1.5 text-xs font-semibold text-gray-900 hover:bg-gray-50'}
-          aria-label={canCompare && !canOpen ? `Compare pressings for ${catalogLabel}` : `${primaryLabel} · ${catalogLabel}`}
+          aria-label={compareFirst ? `Compare pressings for ${catalogLabel}` : `${primaryLabel} · ${canOpen ? savedRecordLabel : catalogLabel}`}
           aria-describedby={existingStatus ? statusId : undefined}
           aria-disabled={blocked || (!!existingStatus && !opensDialog)} aria-busy={!!pending || !!openingSaved}
           aria-haspopup={opensDialog ? 'dialog' : undefined}
           onClick={event => {
             if (blocked) return;
             if (!existingStatus) onSelect(destination);
+            else if (compareFirst) compare();
             else if (canOpen) void onOpenSaved(savedId, event.currentTarget);
-            else if (canCompare) compare();
           }}>
           {primaryLabel}
         </button>
-        {canCompare && canOpen && <button ref={compareButton} type="button" className="rh-lookup-link text-left"
+        {!existingStatus && onReviewPressings && <button type="button" className="rh-lookup-link text-left"
+          aria-disabled={blocked} aria-haspopup="dialog" aria-label={`Check pressings for ${catalogLabel}`}
+          onClick={event => { if (!blocked) onReviewPressings(event.currentTarget); }}>Check pressings</button>}
+        {canCompare && !compareFirst && <button ref={compareButton} type="button" className="rh-lookup-link text-left"
           aria-disabled={blocked} aria-haspopup="dialog" aria-label={`Compare pressings for ${catalogLabel}`}
           onClick={() => { if (!blocked) compare(); }}>Compare pressings</button>}
+        {compareFirst && canOpen && <button type="button" className="rh-lookup-link text-left"
+          aria-haspopup="dialog" aria-disabled={blocked} aria-label={`Open saved album · ${savedRecordLabel}`}
+          onClick={event => { if (!blocked) void onOpenSaved(savedId, event.currentTarget); }}>{openingSaved ? 'Opening album…' : 'Open saved album'}</button>}
         {canMove && <button type="button" className="rh-lookup-link text-left"
           aria-label={`Move to Collection · ${catalogLabel}`} aria-busy={pending === 'move'} aria-disabled={blocked}
           onClick={() => { if (!blocked) onSelect('move'); }}>{pending === 'move' ? 'Moving to Collection…' : 'Move to Collection'}</button>}

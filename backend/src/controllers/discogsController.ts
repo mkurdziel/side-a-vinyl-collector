@@ -8,7 +8,7 @@ export const getPressingDetails = asyncHandler(async (req: Request, res: Respons
   if (!/^\d+$/.test(String(req.params.id)) || !Number.isSafeInteger(id) || id < 1) {
     throw new AppError('Choose a valid Discogs release ID', 400);
   }
-  const release = discogs.isEnabled() ? await discogs.getRelease(id) : null;
+  const release = discogs.isEnabled() ? await discogs.getRelease(id, { reportUnavailable: true }) : null;
   res.json({ pressing: release?.pressing ?? null });
 });
 
