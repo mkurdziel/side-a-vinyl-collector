@@ -40,9 +40,15 @@ function bulkChoicesToReview(choices: ImportReviewChoice[], titleCounts: Map<str
 
 function focusInReview(panel: HTMLElement | null, header: HTMLElement | null, target: HTMLElement | null, alignTo = target) {
   if (!target || !panel || !alignTo) return;
+  const panelTop = panel.getBoundingClientRect().top + panel.clientTop;
+  const visibleTop = panelTop + (header?.getBoundingClientRect().height ?? 0) + 12;
+  const visibleBottom = panelTop + panel.clientHeight - 12;
+  const targetBounds = target.getBoundingClientRect();
+  const preferredOffset = alignTo.getBoundingClientRect().top - visibleTop;
+  const minimumOffset = targetBounds.bottom - visibleBottom;
+  const maximumOffset = targetBounds.top - visibleTop;
+  panel.scrollTop += Math.min(maximumOffset, Math.max(minimumOffset, preferredOffset));
   target.focus({ preventScroll: true });
-  const visibleTop = header?.getBoundingClientRect().bottom ?? panel.getBoundingClientRect().top;
-  panel.scrollTop += alignTo.getBoundingClientRect().top - visibleTop - 12;
 }
 
 const pressingHeadingId = (album: ImportEntry['album']) => `discogs-import-pressings-${album.discogsId}`;
@@ -97,11 +103,12 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
   const [previousDestination, setPreviousDestination] = useState<Shelf>();
   const destination = draft?.destination ?? previousDestination ?? viewMode;
   const selectedIds = new Set(draft?.choices.map(choice => choice.discogsId));
+  const directlySelectedIds = new Set(draft?.choices.filter(choice => choice.source === 'chosen').map(choice => choice.discogsId));
   const reviewNotices = draft?.notices ?? [];
   const [activePressingReview, setActivePressingReview] = useState<string>();
   const [restoringPage, setRestoringPage] = useState<number | null>(null);
   const restoring = restoringPage !== null;
-  const [restoreFailed, setRestoreFailed] = useState(false);
+  const [reviewCheck, setReviewCheck] = useState<'ready' | 'failed' | 'canceled'>('ready');
   const [reviewStorageFailed, setReviewStorageFailed] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
   const header = useRef<HTMLDivElement>(null);
@@ -129,7 +136,7 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
       reviewFocus.current = null;
       focusInReview(panel.current, header.current, target);
     }
-  }, [draft, fetchStatus, open, pagination]);
+  }, [draft, fetchStatus, open, pagination, reviewCheck, restoringPage]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -200,10 +207,7 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
     try {
       const result = await api.importDiscogsCollection(page, AbortSignal.any([controller.signal, AbortSignal.timeout(requestTimeout)]));
       if (controller.signal.aborted) return;
-      const incomingIds = new Set(result.albums.map(album => album.discogsId));
-      const keptSelection = (loadedPages.get(page) ?? [])
-        .filter(album => selectedIds.has(album.discogsId) && !incomingIds.has(album.discogsId));
-      const pages = new Map(loadedPages).set(page, [...result.albums, ...keptSelection]);
+      const pages = new Map(loadedPages).set(page, result.albums);
       const loaded = Math.max(pagination?.page ?? 1, result.page);
       const nextPage = loaded < result.totalPages ? loaded + 1 : undefined;
       const currentDraft = draftForReview();
@@ -234,24 +238,30 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
     pageRead.current?.abort();
   };
 
-  const restoreReview = async () => {
-    const savedDraft = reviewDraft.current;
-    if (operationInProgress.current || recovery === 'checking' || !savedDraft) return;
+  const recheckReview = async () => {
+    if (operationInProgress.current || recovery === 'checking') return;
+    const savedDraft = draftForReview();
+    const controller = new AbortController();
+    const readSignal = () => AbortSignal.any([controller.signal, AbortSignal.timeout(requestTimeout)]);
+    pageRead.current = controller;
     operationInProgress.current = true;
-    setRestoreFailed(false);
+    setReviewCheck('ready');
     setRestoringPage(0);
     try {
       const library = savedDraft.choices.length || savedDraft.notices.length
-        ? await getImportLibrary(AbortSignal.timeout(requestTimeout)) : [];
+        ? await getImportLibrary(readSignal()) : [];
+      if (controller.signal.aborted) return;
       const savedByTitle = new Map(library.map(album => [importTitleKey(album.artist_name, album.title), album.status]));
       const savedByRelease = new Map(library.map(album => [album.discogs_id, album.status]));
       const pages: CollectionPages = new Map();
       setRestoringPage(1);
-      let result = await api.importDiscogsCollection(1, AbortSignal.timeout(requestTimeout));
+      let result = await api.importDiscogsCollection(1, readSignal());
+      if (controller.signal.aborted) return;
       pages.set(result.page, result.albums);
       while (result.nextPage && result.nextPage <= savedDraft.lastPage) {
         setRestoringPage(result.nextPage);
-        result = await api.importDiscogsCollection(result.nextPage, AbortSignal.timeout(requestTimeout));
+        result = await api.importDiscogsCollection(result.nextPage, readSignal());
+        if (controller.signal.aborted) return;
         pages.set(result.page, result.albums);
       }
       const getSavedShelf = (choice: Pick<DiscogsAlbum, 'discogsId' | 'artist' | 'album'>) =>
@@ -275,20 +285,22 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
       });
 
       reviewFocus.current = notices.length ? 'changes' : 'overview';
-      rememberDraft({ ...savedDraft, choices, notices, lastPage: result.page });
+      if (reviewDraft.current || result.page > 1) rememberDraft({ ...savedDraft, choices, notices, lastPage: result.page });
       setLoadedPages(pages);
       setPagination({ page: result.page, totalPages: result.totalPages, nextPage: result.nextPage });
       setFetchStatus('ready');
     } catch {
-      setRestoreFailed(true);
+      if (!controller.signal.aborted) setReviewCheck('failed');
     } finally {
+      pageRead.current = null;
+      if (controller.signal.aborted) setReviewCheck('canceled');
       operationInProgress.current = false;
       setRestoringPage(null);
     }
   };
 
   const importRecords = async (jobs: ImportEntry[], verify = false) => {
-    if (operationInProgress.current || recovery === 'checking' || recovery === 'error' || !jobs.length) return;
+    if (operationInProgress.current || recovery === 'checking' || recovery === 'error' || !jobs.length || (!verify && reviewCheck !== 'ready')) return;
     operationInProgress.current = true;
     onImportingChange(true);
     stopRequested.current = false;
@@ -433,7 +445,7 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
     setConfirmingDiscard(false);
     rememberDraft(null);
     setPreviousDestination(undefined);
-    setRestoreFailed(false);
+    setReviewCheck('ready');
     setActivePressingReview(undefined);
     setLoadedPages(new Map());
     setPagination(undefined);
@@ -484,8 +496,17 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
     focusInReview(panel.current, header.current, target);
   };
 
-  const backToImportChoices = remaining.length > 0 && <a href="#discogs-import-choices" className="rh-lookup-link inline-grid text-left"
-    onClick={event => { event.preventDefault(); jumpToReviewTarget('discogs-import-choices'); }}>Back to import choices</a>;
+  const jumpToImportControls = () => {
+    const commit = panel.current?.querySelector<HTMLButtonElement>('#discogs-import-commit');
+    if (!commit || commit.disabled) {
+      jumpToReviewTarget('discogs-import-choices');
+      return;
+    }
+    focusInReview(panel.current, header.current, commit, coverageHeading.current ?? commit);
+  };
+
+  const importChoicesLink = (label: string) => remaining.length > 0 && <a href="#discogs-import-choices" className="rh-lookup-link inline-grid text-left"
+    onClick={event => { event.preventDefault(); jumpToImportControls(); }}>{label}</a>;
 
   const renderRecord = (album: ImportEntry['album'], groupName?: string) => {
     const grouped = !!groupName;
@@ -499,6 +520,7 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
     const release = `Discogs release ${album.discogsId}`;
     const id = `discogs-import-release-${album.discogsId}`;
     const checked = selectedIds.has(album.discogsId);
+    const showImportLink = directlySelectedIds.has(album.discogsId);
     const selectionLabel = grouped ? checked ? 'Selected pressing' : 'Choose pressing' : 'Select';
     const alternativeProcessed = !entry && processedTitles.has(titleKey(album));
     return <article key={album.discogsId} className="flex min-w-0 flex-col rounded-xl border border-gray-200 bg-white">
@@ -533,13 +555,14 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
             onChange={event => chooseAlbum(album, event.currentTarget.checked)} />
           {selectionLabel}
         </label>}
+        {showImportLink && importChoicesLink('Review import choices')}
         {grouped && <div className="flex flex-wrap items-center gap-x-2">
           <a className="rh-comparison-source min-h-11 content-center text-xs" href={`https://www.discogs.com/release/${album.discogsId}`} target="_blank" rel="noreferrer">
             View on Discogs<span className="sr-only"> · release {album.discogsId} (opens in a new tab)</span>
           </a>
           {album.coverImageUrl && <img src={album.coverImageUrl} alt="" loading="lazy" className="size-8 rounded object-cover" />}
         </div>}
-        {!grouped && activePressingReview === titleKey(album) && backToImportChoices}
+        {!grouped && !showImportLink && activePressingReview === titleKey(album) && importChoicesLink('Back to import choices')}
       </div>
     </article>;
   };
@@ -572,6 +595,22 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
     : fetchPage > 1 ? `Could not load Discogs page ${fetchPage}. Your existing selection is kept.`
       : 'Could not load your Discogs collection. Try loading it again.';
   const cancelPageButton = <button type="button" className={secondaryAction} onClick={cancelPageLoad}>Cancel page load</button>;
+  const reviewStatus = reviewCheck === 'failed' ? hasCatalog
+    ? 'Could not verify the selected records. Your choices are kept. Retry the review before importing.'
+    : 'Could not refresh your review. Your draft is kept. Try again.'
+    : reviewCheck === 'canceled' ? hasCatalog
+      ? 'Review refresh canceled. Your choices are kept. Retry the review before importing.'
+      : 'Review refresh canceled. Your draft is kept.'
+      : restoringPage === 0 ? 'Checking both shelves for this review…'
+        : restoringPage !== null ? `Refreshing page ${restoringPage} of ${draft?.lastPage ?? pagination?.page ?? 1}…` : null;
+  const reviewRefreshButton = (className: string, startLabel: string) => <>
+    <button type="button" className={`${className} aria-disabled:opacity-55`} aria-disabled={busy}
+      aria-busy={restoring} aria-describedby={reviewStatus ? 'discogs-review-status' : undefined}
+      onClick={() => { if (!busy) void recheckReview(); }}>
+      {restoring ? 'Refreshing review…' : reviewCheck === 'ready' ? startLabel : 'Retry review'}
+    </button>
+    {restoring && <button type="button" className={secondaryAction} onClick={cancelPageLoad}>Cancel review refresh</button>}
+  </>;
   return (
     <ModalDialog labelledBy="discogs-import-title" onClose={close} onEscape={confirmingDiscard ? keepReview : close}>
       <div ref={panel} className="rh-dialog-panel max-w-6xl">
@@ -600,16 +639,11 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
           {!hasCatalog && draft ? (
             <section className="space-y-2" aria-label="Saved Discogs review">
               <p ref={reviewHeading} tabIndex={-1} className="text-sm font-semibold text-gray-900">Saved review · {draftSummary}</p>
-              <p className="text-sm text-gray-600" role={restoreFailed ? 'alert' : 'status'}>
-                {restoreFailed ? 'Could not refresh your review. Your draft is kept. Try again.'
-                  : restoringPage === 0 ? 'Checking both shelves for this review…'
-                    : restoring ? `Refreshing page ${restoringPage} of ${draft.lastPage}…`
-                      : 'Resume to refresh the Discogs pages you reviewed and check both shelves.'}
+              <p id="discogs-review-status" className="text-sm text-gray-600" role={reviewCheck === 'failed' ? 'alert' : 'status'}>
+                {reviewStatus ?? 'Resume to refresh the Discogs pages you reviewed and check both shelves.'}
               </p>
               <div className="flex flex-wrap gap-2">
-                <button type="button" className={primaryAction} disabled={busy} onClick={() => void restoreReview()}>
-                  {restoring ? 'Refreshing…' : restoreFailed ? 'Retry review' : 'Resume review'}
-                </button>
+                {reviewRefreshButton(primaryAction, 'Resume review')}
                 {discardControl(secondaryAction)}
               </div>
             </section>
@@ -637,10 +671,13 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
               {eligibleTitleCount < remaining.length && <p className="text-sm text-gray-600">
                 Choose one pressing per album where several are listed. Select all skips those albums.
               </p>}
-              {draft && <div className="flex flex-wrap items-center justify-between gap-x-3">
-                <p className="text-sm text-gray-600" role="status">{draftSummary}</p>
-                {discardControl('rh-lookup-link')}
-              </div>}
+              {draft && <p className="text-sm text-gray-600" role="status">{draftSummary}</p>}
+              <div className="flex flex-wrap items-center gap-x-3">
+                {reviewRefreshButton('rh-lookup-link text-left', 'Refresh reviewed pages')}
+                {draft && discardControl('rh-lookup-link')}
+              </div>
+              {reviewStatus && <p id="discogs-review-status" className={`text-sm ${reviewCheck === 'failed' ? 'text-red-600' : 'text-gray-600'}`}
+                role={reviewCheck === 'failed' ? 'alert' : 'status'}>{reviewStatus}</p>}
             </div>
           )}
 
@@ -657,8 +694,9 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
                 const alternatives = canReplace && !processedTitles.has(title) ? pressingsByTitle.get(title) ?? [] : [];
                 const headingId = alternatives.length ? pressingHeadingId(alternatives[0]) : undefined;
                 const action = alternatives.length === 1 ? 'Review pressing' : 'Review pressings';
+                const originalAvailable = alternatives.some(album => album.discogsId === choice.discogsId);
                 const reason = notice.cause === 'saved' ? `Already in ${shelfNames[notice.shelf]}.`
-                  : !headingId || notice.cause === 'unavailable' ? 'Unavailable on the refreshed pages.'
+                  : !headingId || (notice.cause === 'unavailable' && !originalAvailable) ? 'Unavailable on the refreshed pages.'
                     : alternatives.length > 1 ? 'Another pressing appeared.' : 'One pressing is available to review.';
                 return <li key={choice.discogsId} className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 py-1">
                   <p className="min-w-0 text-sm">
@@ -731,23 +769,20 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
                   </div>
                   <div className={`flex min-w-0 flex-wrap items-center gap-2 ${morePage && remaining.length > 0 ? 'max-[25rem]:grid max-[25rem]:grid-cols-2' : ''}`}>
                     {(morePage || pageNotLoaded || fetchStatus === 'loading') && (
-                      <button type="button" className={`${secondaryAction} aria-disabled:opacity-55`} aria-disabled={busy}
+                      <button type="button" className={`${secondaryAction} aria-disabled:opacity-55`} aria-disabled={busy || reviewCheck !== 'ready'}
                         aria-busy={fetchStatus === 'loading'} aria-describedby="discogs-page-coverage"
-                        onClick={() => { if (!busy) void fetchCollection(pageNotLoaded ? fetchPage : morePage ?? 1); }}>
+                        onClick={() => { if (!busy && reviewCheck === 'ready') void fetchCollection(pageNotLoaded ? fetchPage : morePage ?? 1); }}>
                         {fetchStatus === 'loading' ? `Loading Discogs page ${fetchPage}…` : retryPageLoad ? 'Retry Discogs page' : 'Load next Discogs page'}
                       </button>
                     )}
                     {fetchStatus === 'loading' && cancelPageButton}
-                    {remaining.length > 0 && <button type="button" className={primaryAction}
-                      disabled={busy || !selected.length || resumeJobs.length > 0 || recovery === 'error'}
-                      aria-describedby={`discogs-page-coverage${morePage ? ' discogs-partial-import' : ''}`}
+                    {remaining.length > 0 && <button id="discogs-import-commit" type="button" className={primaryAction}
+                      disabled={busy || !selected.length || resumeJobs.length > 0 || recovery === 'error' || reviewCheck !== 'ready'}
+                      aria-describedby={`discogs-page-coverage${morePage ? ' discogs-partial-import' : ''}${reviewStatus ? ' discogs-review-status' : ''}`}
                       onClick={() => void importRecords(selected.map(album => entryFor(album, destination)))}>
                       {selected.length
                         ? `Import ${selected.length} ${selected.length === 1 ? 'record' : 'records'} to ${shelfNames[progress?.destination ?? destination]}`
                         : 'Import selected records'}
-                    </button>}
-                    {!pageNotLoaded && !busy && <button type="button" className="rh-lookup-link" onClick={() => void fetchCollection()}>
-                      {pagination.page > 1 ? 'Refresh first page' : 'Refresh list'}
                     </button>}
                   </div>
                 </div>
@@ -794,7 +829,7 @@ export const DiscogsImporter = ({ open, onOpen, onClose, onSuccess, onImportingC
                       jumpToReviewTarget(headingId);
                     }}>Clear pressing choice</button>}
                 </fieldset> : choices}
-                {activePressingReview === title && backToImportChoices}
+                {activePressingReview === title && !selectedPressing && importChoicesLink('Back to import choices')}
               </section>;
             })}
           </div>}

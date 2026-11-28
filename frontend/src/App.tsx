@@ -1160,11 +1160,12 @@ function App() {
   const hasNewCatalogAlbums = catalogResults?.discogs.some(album => !album.inCollection && !album.inWishlist);
   const queryLength = searchQuery.trim().length;
   const numberSearch = searchScope === 'catalog-number';
-  const lookupSource = numberSearch ? 'Discogs · Catalog number' : nameScopeLabel[searchScope];
   const shortName = isSingleCharacterName(searchQuery, searchScope);
   const singleNameShelf = searchShelf(searchScope);
   const singleNameScope = singleNameShelf ? `in ${shelfLabel[singleNameShelf]}` : 'on both shelves';
   const searchActive = shortName ? exactNameActive : queryLength >= 2;
+  const lookupSource = numberSearch ? 'Discogs · Catalog number'
+    : shortName && exactNameActive && searchScope === 'catalog' ? 'Both shelves · Exact name' : nameScopeLabel[searchScope];
   const catalogActive = !shortName && searchesCatalog(searchScope);
   const numberShelfMatches = numberSearch && catalogResults ? savedCatalogNumberMatches(catalogResults.discogs) : [];
   const catalogUnavailable = catalogState.status === 'error' || !!catalogResults?.errors?.length;
@@ -1318,6 +1319,7 @@ function App() {
           <form
             role="search"
             className="rh-search-form min-w-0 flex-1"
+            data-long-query={queryLength >= 8}
             onSubmit={event => {
               event.preventDefault();
               setShowLookupOptions(false);

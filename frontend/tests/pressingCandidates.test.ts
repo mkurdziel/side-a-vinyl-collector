@@ -47,7 +47,7 @@ describe('pressing candidate evidence', () => {
     const more = 'https://www.discogs.com/search/?q=Artist+Album+S-5233&type=release';
     const onSelect = vi.fn();
     const focusFirstChoice = vi.fn();
-    const querySelector = vi.fn(() => ({ focus: focusFirstChoice }));
+    const querySelector = vi.fn(() => ({ focus: focusFirstChoice, closest: () => null }));
     await act(async () => {
       renderer = create(createElement(CandidatePicker, {
         choices: [
@@ -64,6 +64,7 @@ describe('pressing candidate evidence', () => {
     expect(textOf(chooser.findByProps({ id: chooser.props['aria-labelledby'] }))).toBe('Choose a pressing');
     expect(textOf(chooser)).toContain('Example only · Discogs 21');
     expect(textOf(chooser)).toContain('Discogs markets · US / USA & Canada. Check the label or etched marks.');
+    expect(textOf(chooser)).toContain('Market means where sold. Where made can differ.');
     const link = chooser.findByType('a');
     expect(link.props.href).toBe(more);
     const lookupScope = link.parent!;
@@ -90,11 +91,75 @@ describe('pressing candidate evidence', () => {
     expect(renderer!.root.findAllByProps({ type: 'radio' }).every(radio => !radio.props.checked)).toBe(true);
   });
 
+  it('focuses listing evidence, shows the first difference, and returns to the selected choice on the same page', async () => {
+    const focusHeading = vi.fn();
+    const focusRadio = vi.fn();
+    const evidence = {
+      scrollTop: 0, clientTop: 0, clientHeight: 222,
+      getBoundingClientRect: () => ({ top: 91, bottom: 313 }),
+      closest: vi.fn(),
+    };
+    const inEvidence = (selector: string) => selector === '.rh-pressing-review__evidence' ? evidence : null;
+    const label = { closest: inEvidence, getBoundingClientRect: () => ({ top: 230 - evidence.scrollTop, bottom: 306 - evidence.scrollTop }) };
+    const querySelector = vi.fn(() => ({ focus: focusRadio, closest: () => label }));
+    vi.stubGlobal('getComputedStyle', () => ({
+      overflowY: 'auto', scrollPaddingBlockStart: '12px', scrollPaddingBlockEnd: '12px', scrollMarginBlockStart: '0px',
+    }));
+    const onSelect = vi.fn();
+    getPressingDetails.mockResolvedValue({ pressing: null });
+    const editions = Array.from({ length: 7 }, (_, index) => ({
+      releaseId: index + 1,
+      pressing: { catalogNumber: 'ABC-123', format: index < 6 ? 'Vinyl · LP' : 'CD', country: index === 4 ? 'USA & Canada' : 'US' },
+    }));
+    const picker = (selectedId?: number) => createElement(CandidatePicker, { choices: editions, selectedId, onSelect });
+    await act(async () => {
+      renderer = create(picker(), { createNodeMock: node => {
+        if (node.type === 'h3' && node.props.children === 'Listing evidence') return {
+          focus: focusHeading, closest: inEvidence, getBoundingClientRect: () => ({ top: 600 - evidence.scrollTop }),
+        };
+        return node.type === 'ul' ? { querySelector } : null;
+      } });
+    });
+
+    await toggleComparison();
+    expect(focusHeading).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    expect(evidence.scrollTop).toBe(497);
+    expect(evidence.closest).not.toHaveBeenCalled();
+    expect(renderer!.root.findAllByProps({ type: 'radio' }).every(radio => !radio.props.checked)).toBe(true);
+    await act(async () => renderer!.root.findByType('select').props.onChange({ target: { value: 'Vinyl' } }));
+    await act(async () => button('More pressings').props.onClick());
+    await act(async () => button('Pin').props.onClick());
+    await toggleComparison();
+    await act(async () => button('Check runout marks').props.onClick());
+    await act(async () => renderer!.update(picker(5)));
+    focusHeading.mockClear();
+    querySelector.mockClear();
+    focusRadio.mockClear();
+
+    await toggleComparison();
+    const comparison = renderer!.root.findByProps({ role: 'region' });
+    expect(textOf(comparison.findByProps({ id: comparison.props['aria-labelledby'] }))).toBe('Listing evidence');
+    expect(textOf(comparison.findByType('tbody').findAllByType('tr')[0])).toBe('Release countryDiffersUSUSA & Canada');
+    expect(focusHeading).toHaveBeenCalledOnce();
+    expect(evidence.scrollTop).toBe(497);
+    await act(async () => button('Back to pressings').props.onClick());
+    expect(querySelector).toHaveBeenCalledExactlyOnceWith('input[value="5"]');
+    expect(focusRadio).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    expect(evidence.scrollTop).toBe(127);
+    expect(evidence.closest).not.toHaveBeenCalled();
+    expect(radios()).toEqual([4, 5, 6]);
+    expect(renderer!.root.findByProps({ type: 'radio', value: 5 }).props.checked).toBe(true);
+    expect(renderer!.root.findByType('select').props.value).toBe('Vinyl');
+    expect(button('Hide runout marks')).toBeDefined();
+    expect(button('Go to 1 pinned pressing')).toBeDefined();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   it('opens runout evidence directly from the same-number clue without selecting the example', async () => {
     const onSelect = vi.fn();
     const focusRunouts = vi.fn();
     const focusExample = vi.fn();
-    const querySelector = vi.fn(() => ({ focus: focusExample }));
+    const querySelector = vi.fn(() => ({ focus: focusExample, closest: () => null }));
     getPressingDetails.mockImplementation(async (releaseId: number) => ({
       pressing: { matrixRunouts: [{ value: `ETCH-${releaseId}` }] },
     }));
@@ -332,7 +397,7 @@ describe('pressing candidate evidence', () => {
   it('links the preview to the correct radio without selecting it and distinguishes saved and selected pressings', async () => {
     const onSelect = vi.fn();
     const focus = vi.fn();
-    const querySelector = vi.fn(() => ({ focus }));
+    const querySelector = vi.fn(() => ({ focus, closest: () => null }));
     const savedReleaseId = 1;
     const picker = (selectedId?: number) => createElement(CandidatePicker, { choices, savedReleaseId, selectedId, onSelect });
     await act(async () => {

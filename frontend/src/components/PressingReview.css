@@ -96,11 +96,22 @@
 
 .rh-pressing-example {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  column-gap: 8px;
   padding-inline: 8px 0;
   border-radius: 8px;
   background: var(--rh-active-wash);
+}
+
+.rh-pressing-example__clue {
+  flex: 1;
+  min-inline-size: 0;
+}
+
+.rh-pressing-example__market {
+  flex: 0 0 100%;
+  padding-block-end: 4px;
 }
 
 .rh-pressing-example__action {
@@ -206,6 +217,10 @@
 
   .rh-pressing-review__evidence {
     overflow: visible;
+  }
+
+  .rh-pressing-listing-heading {
+    scroll-margin-block-start: 4.5rem;
   }
 
   .rh-pressing-review__footer {
