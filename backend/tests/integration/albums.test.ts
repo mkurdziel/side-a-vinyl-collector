@@ -3,6 +3,7 @@ import { getTestPool } from '../setup/testContainers';
 import request from 'supertest';
 import express from 'express';
 import * as albumController from '../../src/controllers/albumController';
+import { search } from '../../src/controllers/searchController';
 import { AppError, errorHandler } from '../../src/middleware/errorHandler';
 import discogs from '../../src/services/discogs';
 
@@ -26,6 +27,7 @@ describe('Album CRUD Operations', () => {
     app = express();
     app.use(express.json());
     app.get('/api/albums', albumController.getAllAlbums);
+    app.get('/api/search', search);
     app.get('/api/albums/:id', albumController.getAlbumById);
     app.post('/api/albums', albumController.addAlbum);
     app.delete('/api/albums/:id', albumController.deleteAlbum);
@@ -36,6 +38,21 @@ describe('Album CRUD Operations', () => {
     app.patch('/api/albums/:id/pressing', albumController.updateAlbumPressing);
     app.post('/api/albums/:id/pressing/undo', albumController.undoAlbumPressing);
     app.use(errorHandler);
+  });
+
+  it('finds an exact one-character title or artist within the selected saved shelf', async () => {
+    const titles = [
+      { artist: 'The Fixture', album: 'O', status: 'collection' },
+      { artist: 'O', album: 'Second record', status: 'wishlist' },
+      { artist: 'Otto', album: 'Outside', status: 'collection' },
+    ];
+    for (const album of titles) await request(app).post('/api/albums').send(album).expect(201);
+
+    const both = await request(app).get('/api/search?q=o&scope=saved&offset=0&sort=title').expect(200);
+    expect(both.body.local.map((album: { title: string }) => album.title)).toEqual(['O', 'Second record']);
+    expect(both.body.discogs).toEqual([]);
+    const wishlist = await request(app).get('/api/search?q=O&scope=saved&shelf=wishlist').expect(200);
+    expect(wishlist.body.local.map((album: { artist_name: string }) => album.artist_name)).toEqual(['O']);
   });
 
   describe('POST /api/albums', () => {

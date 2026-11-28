@@ -57,7 +57,7 @@ describe('pressing candidate evidence', () => {
     const chooser = renderer!.root.findByType('fieldset');
     expect(textOf(chooser.findByProps({ id: chooser.props['aria-labelledby'] }))).toBe('Choose a pressing');
     expect(textOf(chooser)).toContain('Example only · Discogs 21');
-    expect(textOf(chooser)).toContain('Same number. Check etched or stamped runout marks.');
+    expect(textOf(chooser)).toContain('Same number. Check the marks just inside the last track.');
     expect(textOf(chooser)).not.toContain('Check your copy’s country.');
     expect(chooser.findAllByType('table')).toHaveLength(0);
     await toggleComparison();
@@ -68,6 +68,21 @@ describe('pressing candidate evidence', () => {
     expect(evidenceRows.map(textOf)).toEqual(['Release countryDiffersUSCanada', 'FormatVinylVinyl', 'MixStereoUnlisted']);
     expect(evidenceRows.map(row => row.props.className)).toEqual(['rh-evidence-priority', undefined, undefined]);
     expect(renderer!.root.findAllByProps({ type: 'radio' }).every(radio => !radio.props.checked)).toBe(true);
+  });
+
+  it('shows a listed physical difference beside the first pressing choices', async () => {
+    await act(async () => {
+      renderer = create(createElement(CandidatePicker, {
+        choices: [
+          { releaseId: 21, pressing: { catalogNumber: 'S-5233', format: 'Vinyl · LP · Mono' } },
+          { releaseId: 22, pressing: { catalogNumber: 'S-5233', format: 'Vinyl · LP · Stereo' } },
+        ],
+        savedReleaseId: 22,
+        onSelect: vi.fn(),
+      }));
+    });
+    expect(textOf(renderer!.root.findByType('fieldset'))).toContain('Stereo / Mono. Check the sleeve or label.');
+    expect(radios()).toEqual([21, 22]);
   });
 
   it('surfaces a long format qualifier when its shorter sibling already fits', () => {
@@ -228,14 +243,14 @@ describe('pressing candidate evidence', () => {
     expect(radios()).toEqual([4, 5, 6]);
     expect(renderer!.root.findByType('select').props.value).toBe('Vinyl');
     expect(button('Compare evidence').props['aria-expanded']).toBe(true);
-    expect(textOf(button('Compare evidence'))).toContain('2 pinned');
+    expect(textOf(button('Go to 2 pinned pressings'))).toContain('2 pinned');
     expect(button('Hide runout markings')).toBeDefined();
     expect(getPressingDetails.mock.calls.map(([releaseId]) => releaseId)).toEqual([1, 4, 5, 6]);
     expect(renderer!.root.findAllByProps({ type: 'radio' }).every(radio => !radio.props.checked)).toBe(true);
     expect(onSelect).not.toHaveBeenCalled();
 
     await act(async () => renderer!.update(picker('album-and-number', matching.slice(1))));
-    expect(textOf(button('Compare evidence'))).toContain('1 pinned');
+    expect(textOf(button('Go to 1 pinned pressing'))).toContain('1 pinned');
     await act(async () => renderer!.update(picker('different-album')));
     expect(radios()).toEqual([1, 2, 3]);
     expect(renderer!.root.findByType('select').props.value).toBe('');
@@ -341,6 +356,8 @@ describe('pressing candidate evidence', () => {
     getPressingDetails.mockReturnValueOnce(firstRead.promise)
       .mockResolvedValueOnce({ pressing: { country: 'US', matrixRunouts: [{ value: 'RUNOUT-4' }] } });
     const onSelect = vi.fn();
+    const focusShortlist = vi.fn();
+    const focusJump = vi.fn();
     const pin = (number: string) => renderer!.root.findAllByType('button').find(control => (
       control.props['aria-label']?.startsWith(`Pin for comparison · ${number}`)
     ))!;
@@ -352,7 +369,13 @@ describe('pressing candidate evidence', () => {
       } });
     }
 
-    await act(async () => { renderer = create(createElement(Chooser)); });
+    await act(async () => {
+      renderer = create(createElement(Chooser), { createNodeMock: node => {
+        if (node.type === 'h3' && node.props.children === 'Pinned pressings') return { focus: focusShortlist };
+        if (node.type === 'button' && /^Go to \d pinned pressing/.test(node.props['aria-label'] ?? '')) return { focus: focusJump };
+        return null;
+      } });
+    });
     await toggleComparison();
     await act(async () => pin('S 5233').props.onClick());
     await act(async () => button('More pressings').props.onClick());
@@ -378,7 +401,11 @@ describe('pressing candidate evidence', () => {
 
     await toggleComparison();
     expect(renderer!.root.findAllByType('section')).toHaveLength(0);
-    await toggleComparison();
+    await act(async () => button('Go to 2 pinned pressings').props.onClick());
+    expect(focusShortlist).toHaveBeenCalledOnce();
+    await act(async () => button('Back to pressing choices').props.onClick());
+    expect(focusJump).toHaveBeenCalledOnce();
+    expect(renderer!.root.findByProps({ type: 'radio', value: 2 }).props.checked).toBe(true);
     expect(textOf(renderer!.root.findByType('section'))).toContain('RUNOUT-4');
     expect(getPressingDetails.mock.calls.map(([releaseId]) => releaseId)).toEqual([2, 4]);
 

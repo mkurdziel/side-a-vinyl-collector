@@ -16,7 +16,7 @@ import type { StoredManualAlbumDraft } from './services/manualAlbumDrafts';
 import { formatUndoDeadline } from './services/undoDeadline';
 import { CatalogPressingPicker } from './components/CatalogPressingPicker';
 import { RemovalHistory, type RemovalHistoryHandle } from './components/RemovalHistory';
-import { lookupMode, readSearchSession, writeSearchSession, type AddSearchOrigin, type LookupAnchor, type LookupMode, type LookupNavigation, type NameSearchScope, type ResultKind, type SearchScope } from './services/searchSession';
+import { isSingleCharacterName, lookupMode, readSearchSession, writeSearchSession, type AddSearchOrigin, type LookupAnchor, type LookupMode, type LookupNavigation, type NameSearchScope, type ResultKind, type SearchScope } from './services/searchSession';
 
 type Shelf = Album['status'];
 type SortBy = 'title' | 'artist' | 'date';
@@ -270,6 +270,7 @@ function App() {
   const [shelfResult, setShelfResult] = useState<ShelfResult | null>(null);
   const [searchQuery, setSearchQuery] = useState(initialLookup?.query ?? '');
   const [searchScope, setSearchScope] = useState<SearchScope>(initialLookup?.scope ?? 'saved');
+  const [exactNameActive, setExactNameActive] = useState(initialLookup?.exactName === true);
   const [addOrigin, setAddOrigin] = useState<AddSearchOrigin | undefined>(initialSession?.addOrigin);
   const [searchState, setSearchState] = useState<SearchState>({ status: 'idle' });
   const [catalogState, setCatalogState] = useState<SearchState>({ status: 'idle' });
@@ -332,6 +333,7 @@ function App() {
   const libraryVersion = useRef(0);
   const latestQuery = useRef(initialLookup?.query ?? '');
   const latestScope = useRef<SearchScope>(initialLookup?.scope ?? 'saved');
+  const exactNameSubmitted = useRef(initialLookup?.exactName === true);
   const searchSort = useRef(sortBy);
   const searchInput = useRef<HTMLInputElement>(null);
   const pressingReviewOpener = useRef<HTMLButtonElement>(null);
@@ -431,7 +433,10 @@ function App() {
     const query = value.trim();
     const scope = latestScope.current;
     const sort = searchSort.current;
-    const kinds = only && query.length >= 2 ? [only] : resultKinds;
+    const exactName = isSingleCharacterName(query, scope);
+    const canSearch = exactName ? exactNameSubmitted.current : query.length >= 2;
+    const partialKind = canSearch && (!exactName || only === 'saved') ? only : undefined;
+    const kinds = partialKind ? [partialKind] : resultKinds;
     for (const kind of kinds) {
       cancelSearch(searchRequests.current[kind]);
       delete searchRequests.current[kind];
@@ -439,9 +444,9 @@ function App() {
       delete pageRequests.current[kind];
       resultOffsets.current[kind] = 0;
     }
-    setLoadingMore(current => only && query.length >= 2 ? { ...current, [only]: undefined } : {});
+    setLoadingMore(current => partialKind ? { ...current, [partialKind]: undefined } : {});
     setLoadedPage(undefined);
-    if (query.length < 2) {
+    if (!canSearch) {
       setSearchState({ status: 'idle' });
       setCatalogState({ status: 'idle' });
       setSavedLoading(false);
@@ -452,7 +457,7 @@ function App() {
     for (const kind of kinds) {
       const setResult = kind === 'saved' ? setSearchState : setCatalogState;
       const setLoading = kind === 'saved' ? setSavedLoading : setCatalogLoading;
-      if ((kind === 'catalog' && !searchesCatalog(scope)) || (kind === 'saved' && scope === 'catalog-number')) {
+      if ((kind === 'catalog' && (exactName || !searchesCatalog(scope))) || (kind === 'saved' && scope === 'catalog-number')) {
         setResult({ status: 'idle' });
         setLoading(false);
         continue;
@@ -536,8 +541,14 @@ function App() {
     }
   };
 
+  const setExactName = (active: boolean) => {
+    exactNameSubmitted.current = active;
+    setExactNameActive(active);
+  };
+
   const changeSearch = (value: string) => {
     lookupAnchor.current = undefined;
+    if (value.trim() !== latestQuery.current.trim()) setExactName(false);
     latestQuery.current = value;
     setSearchQuery(value);
     if (!value.trim()) setDetectedDraft(undefined);
@@ -567,6 +578,7 @@ function App() {
   const parkLookupDraft = (mode: LookupMode) => {
     lookupDrafts.current[mode] = {
       scope: latestScope.current, query: latestQuery.current, destination: saveShelf,
+      ...(exactNameSubmitted.current ? { exactName: true } : {}),
       cache: { saved: searchState, catalog: catalogState, detected: detectedDraft,
         sort: searchSort.current, savedLoading, catalogLoading, pages: loadingMore,
         offsets: { ...resultOffsets.current }, libraryVersion: libraryVersion.current },
@@ -589,6 +601,7 @@ function App() {
     const query = draft?.query ?? '';
     latestScope.current = scope;
     latestQuery.current = query;
+    setExactName(draft?.exactName === true);
     setSearchScope(scope);
     setSearchQuery(query);
     setSaveShelf(draft?.scope === scope ? draft.destination : viewMode);
@@ -604,7 +617,7 @@ function App() {
         if (wasLoading) runSearch(query, { only: kind, keepResults: previousState.status === 'ready' });
         else if (cache.pages[kind] === 'error') setLoadingMore(current => ({ ...current, [kind]: 'error' }));
       }
-    } else if (query.trim().length >= 2) {
+    } else if (query.trim()) {
       runSearch(query);
     }
     focusSearch();
@@ -648,9 +661,11 @@ function App() {
     const drafts: Partial<Record<LookupMode, LookupNavigation>> = {};
     for (const method of ['name', 'catalog-number'] as const) {
       const draft = lookupDrafts.current[method];
-      if (draft) drafts[method] = { scope: draft.scope, query: draft.query, destination: draft.destination };
+      if (draft) drafts[method] = { scope: draft.scope, query: draft.query, destination: draft.destination,
+        ...(draft.exactName ? { exactName: true } : {}) };
     }
-    drafts[mode] = { scope: searchScope, query: searchQuery, destination: saveShelf };
+    drafts[mode] = { scope: searchScope, query: searchQuery, destination: saveShelf,
+      ...(exactNameSubmitted.current ? { exactName: true } : {}) };
     writeSearchSession({ mode, drafts, shelf: viewMode, addOrigin, anchor: lookupAnchor.current });
   };
 
@@ -725,7 +740,7 @@ function App() {
       setArtworkRevisions(prev => ({ ...prev, [updatedArtwork.id]: revision }));
     }
     refreshShelf();
-    if (latestQuery.current.trim().length >= 2) runSearch(latestQuery.current, { keepResults: true });
+    if (latestQuery.current.trim()) runSearch(latestQuery.current, { keepResults: true });
   };
 
   const updateSearchMembership = (albumId: number, status: Shelf, addition?: { key: string; album: Album }) => {
@@ -1124,9 +1139,10 @@ function App() {
   const catalogCount = catalogResults?.discogs.length ?? 0;
   const hasNewCatalogAlbums = catalogResults?.discogs.some(album => !album.inCollection && !album.inWishlist);
   const queryLength = searchQuery.trim().length;
-  const searchActive = queryLength >= 2;
-  const catalogActive = searchesCatalog(searchScope);
   const numberSearch = searchScope === 'catalog-number';
+  const shortName = isSingleCharacterName(searchQuery, searchScope);
+  const searchActive = shortName ? exactNameActive : queryLength >= 2;
+  const catalogActive = !shortName && searchesCatalog(searchScope);
   const numberShelfMatches = numberSearch && catalogResults ? savedCatalogNumberMatches(catalogResults.discogs) : [];
   const catalogUnavailable = catalogState.status === 'error' || !!catalogResults?.errors?.length;
   const pressingReviewIssue = pressingReview && saveErrors[catalogKey(pressingReview.album)];
@@ -1285,6 +1301,10 @@ function App() {
             className="rh-search-form min-w-0 flex-1"
             onSubmit={event => {
               event.preventDefault();
+              if (shortName) {
+                setExactName(true);
+                persistLookup();
+              }
               runSearch(searchQuery);
             }}
           >
@@ -1321,7 +1341,7 @@ function App() {
                   </button>
                 )}
               </div>
-              <button type="submit" className={`${secondaryButton} min-w-11 disabled:opacity-60`} aria-label={numberSearch ? 'Look up in Discogs' : 'Search'} disabled={!searchActive}>
+              <button type="submit" className={`${secondaryButton} min-w-11 disabled:opacity-60`} aria-label={numberSearch ? 'Look up in Discogs' : 'Search'} disabled={!shortName && !searchActive}>
                 <svg aria-hidden="true" className="mx-auto size-4.5 sm:hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeWidth={2} d="m21 21-4.35-4.35M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" />
                 </svg>
@@ -1341,6 +1361,17 @@ function App() {
               Add<span className="hidden sm:inline"> Album</span>
             </button>
             <div className="rh-search-options">
+              {!numberSearch && <div className="rh-search-scope">
+                <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">{addOrigin ? 'Add search in' : 'Search in'}</label>
+                <select id="search-scope" value={searchScope}
+                  onChange={event => changeScope(event.target.value as SearchScope)}
+                  className="max-w-full rounded-lg border border-gray-300 px-2 text-sm">
+                  <option value="saved">Both shelves</option>
+                  <option value="collection">Collection only</option>
+                  <option value="wishlist">Wishlist only</option>
+                  <option value="catalog">Shelves and catalogs</option>
+                </select>
+              </div>}
               <div className="rh-search-modes" role="group" aria-label="Search by">
                 <button type="button" aria-pressed={!numberSearch} onClick={() => changeLookupMethod('name')}>Album or artist</button>
                 <button type="button" aria-pressed={numberSearch} onClick={() => changeLookupMethod('catalog-number')}>Catalog number</button>
@@ -1348,26 +1379,12 @@ function App() {
               <details className="rh-search-tips">
                 <summary aria-label="Search tips"><span className="hidden sm:inline">Search </span>Tips</summary>
                 <div>
-                  <p>Search in controls where albums are found. Choose a shelf when you save a new album.</p>
-                  <p>Find the catalog number on the sleeve or label. Check the label, format, and year before confirming an exact release.</p>
-                  <p>Each artist and title has one shelf entry. Save the album first if you still need to identify its pressing.</p>
+                  <p><strong>Know the name?</strong> Enter the album title or artist. Search in chooses where to look. Choose Collection or Wishlist when you save.</p>
+                  <p><strong>Have the record?</strong> Look for a catalog number on the sleeve or center label. For digits under a barcode, choose Add, then Look up a barcode.</p>
+                  <p><strong>See several pressings?</strong> Compare the center label and sleeve with the listings. Save the album without a pressing if you’re unsure. Each artist and title has one shelf entry.</p>
                   <p className="rh-keyboard-tip">Focus search with <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd>.</p>
                 </div>
               </details>
-              {!numberSearch && <div className="rh-search-scope flex flex-wrap items-center gap-x-2">
-                <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">{addOrigin ? 'Add search in' : 'Search in'}</label>
-                <select
-                  id="search-scope"
-                  value={searchScope}
-                  onChange={event => changeScope(event.target.value as SearchScope)}
-                  className="max-w-full rounded-lg border border-gray-300 px-2 text-sm"
-                >
-                  <option value="saved">Collection and Wishlist</option>
-                  <option value="collection">Collection only</option>
-                  <option value="wishlist">Wishlist only</option>
-                  <option value="catalog">Shelves and online catalogs</option>
-                </select>
-              </div>}
               {numberSearch && <p className="rh-number-scope text-xs text-gray-600" id="number-lookup-source">Looks up numbers in Discogs</p>}
             </div>
           </form>
@@ -1394,7 +1411,8 @@ function App() {
           onExternalChange={() => refreshLibrary()} />
 
         <div role="status" className="text-sm text-gray-600" aria-atomic="true">
-          {queryLength === 1 && <p className="mb-4">Enter at least two characters to search.</p>}
+          {shortName && <p className="mb-3">{searchActive ? 'Exact title and artist matches on your shelves.' : 'Select Search to check for an exact title or artist on your shelves.'}</p>}
+          {numberSearch && queryLength === 1 && <p className="mb-4">Enter at least two characters for a catalog number.</p>}
           {!searchActive && !currentShelf && <p className="py-8">Loading {shelfLabel[viewMode]}…</p>}
         </div>
 
@@ -1404,7 +1422,7 @@ function App() {
             <nav className="rh-result-nav" aria-label={searchActive ? 'Search results' : 'Add search'}>
               <button type="button" onClick={returnToShelf}>{addOrigin ? 'Return to' : 'Back to'} {shelfLabel[addOrigin?.shelf ?? viewMode]}</button>
               {searchActive && <>
-                {searchScope === 'catalog' && <a href="#saved-results-title">Saved</a>}
+                {searchScope === 'catalog' && catalogActive && <a href="#saved-results-title">Saved</a>}
                 {numberShelfMatches.length > 0 && <a href="#number-saved-results-title">On your shelves</a>}
                 {catalogActive && <a href="#catalog-results-title">{numberSearch ? 'Discogs' : 'Catalogs'}</a>}
               </>}
@@ -1440,7 +1458,7 @@ function App() {
               </>}
               {results && savedCount === 0 && <>
                 <p role="status" className="text-sm text-gray-600 [overflow-wrap:anywhere]">No saved albums match “{searchQuery.trim()}”.</p>
-                {!catalogActive && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search online catalogs</button>}
+                {!catalogActive && !shortName && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search online catalogs</button>}
                 {searchScope !== 'catalog' && <button type="button" className="rh-lookup-link" onClick={() => changeLookupMethod('catalog-number')}>Search by catalog number</button>}
               </>}
             </section>

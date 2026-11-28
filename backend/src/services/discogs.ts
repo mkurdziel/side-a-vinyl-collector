@@ -109,9 +109,9 @@ class DiscogsService {
     }
   }
 
-  async searchByBarcode(barcode: string): Promise<(DiscogsAlbum & { otherAlbumMatches?: boolean }) | null> {
-    const cacheKey = `barcode:v2:${barcode}`;
-    const cached = await this.getCached<DiscogsAlbum & { otherAlbumMatches?: boolean }>(cacheKey);
+  async searchByBarcode(barcode: string): Promise<DiscogsAlbum[]> {
+    const cacheKey = `barcode:v3:${barcode}`;
+    const cached = await this.getCached<DiscogsAlbum[]>(cacheKey);
     if (cached) return cached;
 
     try {
@@ -122,17 +122,36 @@ class DiscogsService {
         return response.data;
       });
 
-      const releases = (result.results ?? []).filter(release => Number.isSafeInteger(release.id) && release.id > 0)
-        .map(release => ({ ...this.parseDiscogsRelease(release), discogsListing: 'release' as const,
-          pressing: this.parseSearchPressing(release) }));
-      const first = releases[0];
-      if (!first) return null;
-      const pressingChoices = releases.filter(release =>
-        release.artist.toLowerCase() === first.artist.toLowerCase() && release.album.toLowerCase() === first.album.toLowerCase()
-        && (!first.masterId || !release.masterId || release.masterId === first.masterId));
-      const album = { ...first, pressingChoices, otherAlbumMatches: pressingChoices.length < releases.length };
-      await this.setCache(cacheKey, album);
-      return album;
+      const byTitle = new Map<string, DiscogsAlbum[]>();
+      const seen = new Set<number>();
+      for (const release of result.results ?? []) {
+        if (!Number.isSafeInteger(release.id) || release.id <= 0 || seen.has(release.id)) continue;
+        seen.add(release.id);
+        const album = this.parseDiscogsRelease(release);
+        const name = JSON.stringify([album.artist, album.album].map(value => value.normalize('NFC').trim().toLowerCase()));
+        const pressing = { ...album, discogsListing: 'release' as const, pressing: this.parseSearchPressing(release) };
+        const sameTitle = byTitle.get(name);
+        if (sameTitle) sameTitle.push(pressing);
+        else byTitle.set(name, [pressing]);
+      }
+      const matches: DiscogsAlbum[] = [];
+      for (const sameTitle of byTitle.values()) {
+        const knownMasters = new Set(sameTitle.flatMap(release => release.masterId ? [release.masterId] : []));
+        const byMaster = new Map<number | undefined, [DiscogsAlbum, ...DiscogsAlbum[]]>();
+        for (const release of sameTitle) {
+          const group = knownMasters.size > 1 ? release.masterId : undefined;
+          const pressings = byMaster.get(group);
+          if (pressings) pressings.push(release);
+          else byMaster.set(group, [release]);
+        }
+        for (const pressingChoices of byMaster.values()) {
+          const first = pressingChoices[0];
+          const albumMaster = first.masterId ?? pressingChoices.find(release => release.masterId)?.masterId;
+          matches.push({ ...first, masterId: albumMaster, pressingChoices });
+        }
+      }
+      if (matches.length) await this.setCache(cacheKey, matches);
+      return matches;
     } catch (error) {
       this.logError('Discogs barcode search error:', error);
       this.throwSearchError(error, 'Failed to search Discogs by barcode');

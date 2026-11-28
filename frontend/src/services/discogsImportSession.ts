@@ -11,16 +11,62 @@ export type ImportEntry = {
   savedShelf?: Shelf;
 };
 
+export type ImportReviewChoice = Pick<DiscogsAlbum, 'discogsId' | 'artist' | 'album'> & {
+  source: 'chosen' | 'bulk';
+};
+
+export type ImportReviewDraft = {
+  choices: ImportReviewChoice[];
+  destination: Shelf;
+  lastPage: number;
+};
+
 export const entryFor = ({ discogsId, artist, album, year, coverImageUrl, pressing }: ImportAlbum, destination: Shelf): ImportEntry => ({
   album: { discogsId, artist, album, year, coverImageUrl, pressing }, destination, status: 'pending',
 });
 
 const sessionKey = 'side-a:discogs-import:v1';
+const reviewKey = 'side-a:discogs-import-review:v1';
 const statuses = new Set<ImportStatus>(['pending', 'sending', 'imported', 'found', 'skipped', 'failed']);
 const isShelf = (value: unknown): value is Shelf => value === 'collection' || value === 'wishlist';
 
 export const importTitleKey = (artist: string, album: string) =>
   JSON.stringify([artist.trim().toLowerCase(), album.trim().toLowerCase()]);
+
+export function reviewChoiceFor({ discogsId, artist, album }: Pick<DiscogsAlbum, 'discogsId' | 'artist' | 'album'>, source: ImportReviewChoice['source']): ImportReviewChoice {
+  return { discogsId, artist, album, source };
+}
+
+function isReviewChoice(value: unknown): value is ImportReviewChoice {
+  if (!value || typeof value !== 'object') return false;
+  const { discogsId, artist, album, source } = value as ImportReviewChoice;
+  return Number.isSafeInteger(discogsId) && discogsId > 0 && typeof artist === 'string' && typeof album === 'string' &&
+    (source === 'chosen' || source === 'bulk');
+}
+
+export function readImportReview(): ImportReviewDraft | null {
+  try {
+    const raw = globalThis.sessionStorage.getItem(reviewKey);
+    if (!raw) return null;
+    const { choices, destination, lastPage } = JSON.parse(raw) as ImportReviewDraft;
+    if (!isShelf(destination) || !Number.isSafeInteger(lastPage) || lastPage < 1 || !Array.isArray(choices)) return null;
+    const unique = new Map<string, ImportReviewChoice>();
+    for (const choice of choices.filter(isReviewChoice)) unique.set(importTitleKey(choice.artist, choice.album), choice);
+    return { choices: [...unique.values()], destination, lastPage };
+  } catch {
+    return null;
+  }
+}
+
+export function writeImportReview(draft: ImportReviewDraft | null) {
+  try {
+    if (draft) globalThis.sessionStorage.setItem(reviewKey, JSON.stringify(draft));
+    else globalThis.sessionStorage.removeItem(reviewKey);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export const needsImportCheck = ({ status }: ImportEntry) =>
   status === 'pending' || status === 'sending' || status === 'failed';

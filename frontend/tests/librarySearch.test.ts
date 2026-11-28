@@ -103,6 +103,30 @@ afterEach(async () => {
 });
 
 describe('library and catalog search', () => {
+  it('runs an exact saved-name lookup only after a single-character name is submitted, and resumes it', async () => {
+    const shortTitle = { ...saved, id: 20, title: 'O', artist_name: 'Unknown Fixture Artist' };
+    search.mockResolvedValue({ local: [shortTitle], discogs: [] });
+    await renderLibrary();
+    await chooseScope('catalog');
+    await editSearch('O');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(search).not.toHaveBeenCalled();
+    expect(button('Search').props.disabled).toBe(false);
+
+    await act(async () => renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }));
+    expect(search).toHaveBeenCalledExactlyOnceWith('O', expect.any(AbortSignal), 'saved', undefined, 0, 'title');
+    expect(button('Open O by Unknown Fixture Artist, Wishlist, saved record 20')).toBeDefined();
+    expect(readSearchSession()?.drafts.name).toMatchObject({ query: 'O', scope: 'catalog', exactName: true });
+
+    await act(async () => renderer.unmount());
+    search.mockClear();
+    await renderLibrary();
+    expect(search).toHaveBeenCalledExactlyOnceWith('O', expect.any(AbortSignal), 'saved', undefined, 0, 'title');
+    await editSearch('É');
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
   it('cancels a queued search when cleared and ignores an older response', async () => {
     const older = Promise.withResolvers<SearchResult>();
     search.mockReturnValueOnce(older.promise).mockResolvedValueOnce({ local: [saved], discogs: [] });
