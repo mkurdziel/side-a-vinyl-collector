@@ -53,6 +53,7 @@ const catalogIdentity = (value: string) => value.normalize('NFKC').toLocaleLower
 const shelves: Shelf[] = ['collection', 'wishlist'];
 const resultKinds: ResultKind[] = ['saved', 'catalog'];
 const sortLabels: Record<SortBy, string> = { title: 'Album title', artist: 'Artist name', date: 'Date added' };
+const compactSortLabels: Record<SortBy, string> = { title: 'Title', artist: 'Artist', date: 'Added' };
 const shelfLabel: Record<Shelf, string> = { collection: 'Collection', wishlist: 'Wishlist' };
 const nameScopeLabel: Record<NameSearchScope, string> = {
   saved: 'Both shelves', collection: 'Collection only', wishlist: 'Wishlist only', catalog: 'Shelves and catalogs',
@@ -190,6 +191,7 @@ function SortControl({ sort, onChange, placement }: { sort: SortBy; onChange: (s
   return (
     <div className={`ml-auto flex items-center gap-2${placement === 'shelf' ? ' rh-shelf-sort' : ''}`}>
       <label htmlFor="sort-select" className="text-sm text-gray-600">Sort</label>
+      {placement === 'shelf' && <span className="rh-compact-sort-value" aria-hidden="true">{compactSortLabels[sort]}</span>}
       <select id="sort-select" value={sort} onChange={event => onChange(event.target.value as SortBy)}
         className="min-h-11 rounded-lg border border-gray-300 bg-white px-2.5">
         {Object.entries(sortLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -1347,7 +1349,6 @@ function App() {
           <form
             role="search"
             className="rh-search-form min-w-0 flex-1"
-            data-long-query={queryLength >= 8}
             onSubmit={event => {
               event.preventDefault();
               setShowLookupOptions(false);
@@ -1415,7 +1416,8 @@ function App() {
                 <button type="button" className="rh-lookup-options-toggle" aria-expanded={showLookupOptions} aria-controls="lookup-options"
                   aria-label={`Search options, ${lookupMethodLabel}, ${lookupSource}`}
                   onClick={() => setShowLookupOptions(open => !open)}>
-                  <span className="rh-lookup-method">{numberSearch ? 'Catalog number' : 'Name'}</span><span id="lookup-source" className="rh-lookup-source">{lookupSource}</span>
+                  {numberSearch && <span>Catalog number</span>}
+                  <span id="lookup-source" className="rh-lookup-source">{lookupSource}</span>
                   <svg aria-hidden="true" className="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                     <path strokeLinecap="round" strokeWidth="2" d="m6 9 6 6 6-6" />
                   </svg>
@@ -1508,7 +1510,7 @@ function App() {
             <section className="rh-saved-section" aria-labelledby="saved-results-title">
               <div className="rh-saved-heading-row mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <h2 ref={savedHeading} id="saved-results-title" tabIndex={-1} className="rh-result-heading text-lg font-semibold">Saved albums</h2>
-                {savedCount > 0 && !catalogActive && !shortName && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search online catalogs</button>}
+                {savedCount > 0 && !catalogActive && !shortName && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Include catalogs</button>}
                 {(savedCount > 1 || results?.nextOffset !== undefined) && <SortControl sort={sortBy} onChange={changeSort} />}
               </div>
               {searchState.status === 'error' && (
@@ -1535,7 +1537,7 @@ function App() {
                   {shortName ? `No exact title or artist matches “${searchQuery.trim()}” ${singleNameScope}.`
                     : `No saved albums match “${searchQuery.trim()}”.`}
                 </p>
-                {!catalogActive && !shortName && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search online catalogs</button>}
+                {!catalogActive && !shortName && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Include catalogs</button>}
                 {searchScope !== 'catalog' && <div className="flex flex-wrap items-center gap-x-2">
                   <button type="button" className="rh-lookup-link" aria-describedby="catalog-number-clue"
                     onClick={() => changeLookupMethod('catalog-number')}>Look up a catalog number</button>

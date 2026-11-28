@@ -19,11 +19,18 @@ export type ImportReviewNotice = { choice: ImportReviewChoice } & (
   { cause: 'competing' | 'unavailable' } | { cause: 'saved'; shelf: Shelf }
 );
 
+export type ImportReviewWorkingContext = {
+  searchText: string;
+  needsChoiceOnly: boolean;
+  releaseId?: number;
+};
+
 export type ImportReviewDraft = {
   choices: ImportReviewChoice[];
   notices: ImportReviewNotice[];
   destination: Shelf;
   lastPage: number;
+  working?: ImportReviewWorkingContext;
 };
 
 export const entryFor = ({ discogsId, artist, album, year, coverImageUrl, pressing }: ImportAlbum, destination: Shelf): ImportEntry => ({
@@ -56,11 +63,19 @@ function isReviewNotice(value: unknown): value is ImportReviewNotice {
     (notice.cause === 'saved' && isShelf(notice.shelf)));
 }
 
+function readWorkingContext(value: unknown): ImportReviewWorkingContext | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const { searchText, needsChoiceOnly, releaseId } = value as Partial<ImportReviewWorkingContext>;
+  if (typeof searchText !== 'string' || typeof needsChoiceOnly !== 'boolean') return undefined;
+  return { searchText, needsChoiceOnly,
+    releaseId: typeof releaseId === 'number' && Number.isSafeInteger(releaseId) && releaseId > 0 ? releaseId : undefined };
+}
+
 export function readImportReview(): ImportReviewDraft | null {
   try {
     const raw = globalThis.sessionStorage.getItem(reviewKey);
     if (!raw) return null;
-    const { choices, notices, destination, lastPage } = JSON.parse(raw) as ImportReviewDraft;
+    const { choices, notices, destination, lastPage, working } = JSON.parse(raw) as ImportReviewDraft;
     if (!isShelf(destination) || !Number.isSafeInteger(lastPage) || lastPage < 1 || !Array.isArray(choices)) return null;
     const unique = new Map<string, ImportReviewChoice>();
     for (const choice of choices.filter(isReviewChoice)) unique.set(importTitleKey(choice.artist, choice.album), choice);
@@ -69,7 +84,7 @@ export function readImportReview(): ImportReviewDraft | null {
       const title = importTitleKey(notice.choice.artist, notice.choice.album);
       if (!unique.has(title)) pending.set(title, notice);
     }
-    return { choices: [...unique.values()], notices: [...pending.values()], destination, lastPage };
+    return { choices: [...unique.values()], notices: [...pending.values()], destination, lastPage, working: readWorkingContext(working) };
   } catch {
     return null;
   }

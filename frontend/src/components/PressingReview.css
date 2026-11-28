@@ -55,6 +55,13 @@
   padding-block: 4px;
 }
 
+.rh-pressing-preview__cue {
+  padding-block-end: 4px;
+  color: var(--rh-ink-2);
+  font-size: 0.75rem;
+  text-align: start;
+}
+
 .rh-pressing-preview__release {
   display: block;
   color: var(--rh-ink-2);
