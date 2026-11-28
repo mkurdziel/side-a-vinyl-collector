@@ -112,7 +112,7 @@ describe('library and catalog search', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
     expect(search).not.toHaveBeenCalled();
     expect(button('Search').props.disabled).toBe(false);
-    expect(button('Search').findByType('span').props.className).toBeUndefined();
+    expect(button('Search').children.join('')).toBe('Search');
     expect(renderer.root.findByProps({ id: 'album-search' }).props['aria-describedby']).toBe('short-search-scope');
     expect(renderer.root.findByProps({ id: 'short-search-scope' }).children.join(''))
       .toBe('Exact names in Collection and Wishlist. Online catalogs need two characters.');
@@ -218,7 +218,8 @@ describe('library and catalog search', () => {
     await act(async () => button('Back to Wishlist').props.onClick());
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('');
     const status = renderer.root.findByType('header').findByProps({ role: 'status' });
-    expect(status.findByType('span').children.join('')).toBe('1 album in Wishlist');
+    expect(status.findByType('span').children.map(child => typeof child === 'string' ? child : child.children.join('')).join(''))
+      .toBe('1 album in Wishlist');
   });
 
   it('filters separate shelf scopes without clearing the query or changing the browse shelf', async () => {

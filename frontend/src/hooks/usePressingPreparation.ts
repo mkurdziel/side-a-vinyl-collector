@@ -19,7 +19,7 @@ function readPreparation(key?: string): Preparation {
   if (!key) return emptyPreparation;
   try {
     const raw = globalThis.sessionStorage.getItem(storagePrefix + key);
-    const stored = (raw ? JSON.parse(raw) : null) as Partial<Preparation> | null;
+    const stored = (raw ? JSON.parse(raw) : null) as Partial<Preparation & { version: number }> | null;
     if (!stored) return emptyPreparation;
     return {
       page: typeof stored.page === 'number' && Number.isSafeInteger(stored.page) && stored.page > 0 ? stored.page : 0,
@@ -27,7 +27,7 @@ function readPreparation(key?: string): Preparation {
       pins: Array.isArray(stored.pins)
         ? [...new Set(stored.pins.filter(id => Number.isSafeInteger(id) && id > 0))].slice(0, pressingPinLimit) : [],
       comparing: stored.comparing === true,
-      checkingRunouts: stored.checkingRunouts === true,
+      checkingRunouts: stored.checkingRunouts === true && (stored.version === 2 || stored.comparing === true),
     };
   } catch {
     return emptyPreparation;
@@ -49,7 +49,7 @@ export function usePressingPreparation(key: string | undefined, choices: readonl
     setSession({ key, state: next });
     if (!key) return;
     try {
-      globalThis.sessionStorage.setItem(storagePrefix + key, JSON.stringify(next));
+      globalThis.sessionStorage.setItem(storagePrefix + key, JSON.stringify({ ...next, version: 2 }));
     } catch {
       // Comparison still works in memory if tab storage is unavailable.
     }

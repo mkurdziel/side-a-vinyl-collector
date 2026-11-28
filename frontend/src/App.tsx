@@ -53,6 +53,9 @@ const shelves: Shelf[] = ['collection', 'wishlist'];
 const resultKinds: ResultKind[] = ['saved', 'catalog'];
 const sortLabels: Record<SortBy, string> = { title: 'Album title', artist: 'Artist name', date: 'Date added' };
 const shelfLabel: Record<Shelf, string> = { collection: 'Collection', wishlist: 'Wishlist' };
+const nameScopeLabel: Record<NameSearchScope, string> = {
+  saved: 'Both shelves', collection: 'Collection only', wishlist: 'Wishlist only', catalog: 'Shelves and catalogs',
+};
 const albumGrid = 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4';
 const secondaryButton = 'min-h-11 rounded-lg border border-gray-300 bg-gray-100 px-3 text-sm font-semibold text-gray-900 hover:bg-gray-50';
 const searchesCatalog = (scope: SearchScope) => scope === 'catalog' || scope === 'catalog-number';
@@ -182,11 +185,13 @@ function AlbumMeta({ title, artist, year, shelf, resultId, artworkUnverified }: 
   );
 }
 
-function SortControl({ sort, onChange, shelf = false }: { sort: SortBy; onChange: (sort: SortBy) => void; shelf?: boolean }) {
+function SortControl({ sort, onChange, placement }: { sort: SortBy; onChange: (sort: SortBy) => void; placement?: 'shelf' | 'lookup-options' }) {
+  const id = placement === 'lookup-options' ? 'phone-sort-select' : 'sort-select';
+  const placementClass = placement === 'shelf' ? 'rh-shelf-sort' : placement === 'lookup-options' ? 'rh-lookup-sort' : '';
   return (
-    <div className={`ml-auto flex items-center gap-2 ${shelf ? 'rh-shelf-sort' : ''}`}>
-      <label htmlFor="sort-select" className="rh-sort-label text-sm text-gray-600">Sort</label>
-      <select id="sort-select" value={sort} onChange={event => onChange(event.target.value as SortBy)}
+    <div className={`ml-auto flex items-center gap-2 ${placementClass}`}>
+      <label htmlFor={id} className="text-sm text-gray-600">Sort</label>
+      <select id={id} value={sort} onChange={event => onChange(event.target.value as SortBy)}
         className="min-h-11 rounded-lg border border-gray-300 bg-white px-2.5">
         {Object.entries(sortLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select>
@@ -282,6 +287,7 @@ function App() {
   const [shelfResult, setShelfResult] = useState<ShelfResult | null>(null);
   const [searchQuery, setSearchQuery] = useState(initialLookup?.query ?? '');
   const [searchScope, setSearchScope] = useState<SearchScope>(initialLookup?.scope ?? 'saved');
+  const [showLookupOptions, setShowLookupOptions] = useState(false);
   const [exactNameActive, setExactNameActive] = useState(initialLookup?.exactName === true);
   const [addOrigin, setAddOrigin] = useState<AddSearchOrigin | undefined>(initialSession?.addOrigin);
   const [searchState, setSearchState] = useState<SearchState>({ status: 'idle' });
@@ -560,6 +566,7 @@ function App() {
 
   const changeSearch = (value: string) => {
     lookupAnchor.current = undefined;
+    setShowLookupOptions(false);
     if (value.trim() !== latestQuery.current.trim()) setExactName(false);
     latestQuery.current = value;
     setSearchQuery(value);
@@ -598,6 +605,7 @@ function App() {
   };
 
   const changeLookupMethod = (method: LookupMode, nameScope?: NameSearchScope) => {
+    setShowLookupOptions(false);
     const previous = lookupMode(latestScope.current);
     if (method === previous) {
       if (nameScope) changeScope(nameScope);
@@ -1152,6 +1160,7 @@ function App() {
   const hasNewCatalogAlbums = catalogResults?.discogs.some(album => !album.inCollection && !album.inWishlist);
   const queryLength = searchQuery.trim().length;
   const numberSearch = searchScope === 'catalog-number';
+  const lookupSource = numberSearch ? 'Discogs · Catalog number' : nameScopeLabel[searchScope];
   const shortName = isSingleCharacterName(searchQuery, searchScope);
   const singleNameShelf = searchShelf(searchScope);
   const singleNameScope = singleNameShelf ? `in ${shelfLabel[singleNameShelf]}` : 'on both shelves';
@@ -1282,10 +1291,10 @@ function App() {
             </div>
             <div className="rh-library-count text-sm" role="status" aria-atomic="true">
               {currentShelf?.status === 'ready' && (
-                <span>{shelfAlbums.length} {shelfAlbums.length === 1 ? 'album' : 'albums'} in {shelfLabel[viewMode]}</span>
+                <span>{shelfAlbums.length} {shelfAlbums.length === 1 ? 'album' : 'albums'}<span className="sr-only sm:not-sr-only"> in {shelfLabel[viewMode]}</span></span>
               )}
             </div>
-            <SortControl shelf sort={sortBy} onChange={changeSort} />
+            <SortControl placement="shelf" sort={sortBy} onChange={changeSort} />
           </div>}
           <button
             type="button"
@@ -1311,6 +1320,7 @@ function App() {
             className="rh-search-form min-w-0 flex-1"
             onSubmit={event => {
               event.preventDefault();
+              setShowLookupOptions(false);
               if (shortName) {
                 setExactName(true);
                 persistLookup();
@@ -1330,7 +1340,7 @@ function App() {
                   aria-describedby={numberSearch ? 'number-lookup-source' : shortName ? 'short-search-scope' : undefined}
                   aria-description={addOrigin && searchScope === 'catalog' && !shortName ? 'Add search includes your shelves and online catalogs.' : undefined}
                   className={`w-full border px-2 py-2 sm:px-3 ${searchQuery ? 'pr-11 sm:pr-12' : ''}`}
-                  placeholder={numberSearch ? 'Number on the sleeve or label' : 'Album title or artist name'}
+                  placeholder={numberSearch ? 'Catalog no.' : 'Title or artist'}
                   value={searchQuery}
                   onChange={event => changeSearch(event.target.value)}
                 />
@@ -1351,11 +1361,8 @@ function App() {
                   </button>
                 )}
               </div>
-              <button type="submit" className={`${secondaryButton} min-w-11 disabled:opacity-60`} aria-label={numberSearch ? 'Look up in Discogs' : 'Search'} disabled={!shortName && !searchActive}>
-                {!shortName && <svg aria-hidden="true" className="mx-auto size-4.5 sm:hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeWidth={2} d="m21 21-4.35-4.35M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" />
-                </svg>}
-                <span className={shortName ? undefined : 'hidden sm:inline'}>{numberSearch ? 'Look up in Discogs' : 'Search'}</span>
+              <button type="submit" className={`${secondaryButton} rh-search-submit min-w-11 disabled:opacity-60`} aria-label={numberSearch ? 'Look up in Discogs' : 'Search'} disabled={!shortName && !searchActive}>
+                {numberSearch ? <>Look up<span className="hidden sm:inline"> in Discogs</span></> : 'Search'}
               </button>
             </div>
             <button
@@ -1375,31 +1382,38 @@ function App() {
                 : `One character checks for an exact title or artist ${singleNameScope}.`}
             </p>}
             <div className="rh-search-options">
-              {!numberSearch && <div className="rh-search-scope">
-                <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">{addOrigin ? 'Add search in' : 'Search in'}</label>
-                <select id="search-scope" value={searchScope}
-                  onChange={event => changeScope(event.target.value as SearchScope)}
-                  className="max-w-full rounded-lg border border-gray-300 px-2 text-sm">
-                  <option value="saved">Both shelves</option>
-                  <option value="collection">Collection only</option>
-                  <option value="wishlist">Wishlist only</option>
-                  <option value="catalog">Shelves and catalogs</option>
-                </select>
-              </div>}
-              <div className="rh-search-modes" role="group" aria-label="Search by">
-                <button type="button" aria-pressed={!numberSearch} onClick={() => changeLookupMethod('name')}>Album or artist</button>
-                <button type="button" aria-pressed={numberSearch} onClick={() => changeLookupMethod('catalog-number')}>Catalog number</button>
-              </div>
-              <details className="rh-search-tips">
-                <summary aria-label="Search tips"><span className="hidden sm:inline">Search </span>Tips</summary>
-                <div>
-                  <p><strong>Know the name?</strong> Enter the album title or artist. The shelf tabs change what you browse. Search in chooses where to look. Choose Collection or Wishlist when you save.</p>
-                  <p><strong>Have the record?</strong> Look for a catalog number on the sleeve or center label. For digits under a barcode, choose Add, then Look up a barcode.</p>
-                  <p><strong>See several pressings?</strong> Compare the center label and sleeve with the listings. Save the album without a pressing if you’re unsure. Each artist and title has one shelf entry.</p>
-                  <p className="rh-keyboard-tip">Focus search with <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd>.</p>
+              <button type="button" className="rh-lookup-options-toggle" aria-expanded={showLookupOptions} aria-controls="lookup-options"
+                onClick={() => setShowLookupOptions(open => !open)}>
+                <span>Search options</span><span className="rh-lookup-source">{lookupSource}</span>
+                <svg aria-hidden="true" className="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path strokeLinecap="round" strokeWidth="2" d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+              <div id="lookup-options" className="rh-lookup-settings" data-expanded={showLookupOptions}>
+                {!numberSearch && <div className="rh-search-scope">
+                  <label htmlFor="search-scope" className="text-xs text-gray-600 sm:text-sm">{addOrigin ? 'Add search in' : 'Search in'}</label>
+                  <select id="search-scope" value={searchScope}
+                    onChange={event => changeScope(event.target.value as SearchScope)}
+                    className="max-w-full rounded-lg border border-gray-300 px-2 text-sm">
+                    {Object.entries(nameScopeLabel).map(([scope, label]) => <option key={scope} value={scope}>{label}</option>)}
+                  </select>
+                </div>}
+                <div className="rh-search-modes" role="group" aria-label="Search by">
+                  <button type="button" aria-pressed={!numberSearch} onClick={() => changeLookupMethod('name')}>Album or artist</button>
+                  <button type="button" aria-pressed={numberSearch} onClick={() => changeLookupMethod('catalog-number')}>Catalog number</button>
                 </div>
-              </details>
-              {numberSearch && <p className="rh-number-scope text-xs text-gray-600" id="number-lookup-source">Looks up numbers in Discogs</p>}
+                <details className="rh-search-tips">
+                  <summary aria-label="Search tips"><span className="hidden sm:inline">Search </span>Tips</summary>
+                  <div>
+                    <p><strong>Know the name?</strong> Enter the album title or artist. The shelf tabs change what you browse. Search in chooses where to look. Choose Collection or Wishlist when you save.</p>
+                    <p><strong>Have the record?</strong> Look for a catalog number on the sleeve or center label. For digits under a barcode, choose Add, then Look up a barcode.</p>
+                    <p><strong>See several pressings?</strong> Compare the center label and sleeve with the listings. Save the album without a pressing if you’re unsure. Each artist and title has one shelf entry.</p>
+                    <p className="rh-keyboard-tip">Focus search with <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd>.</p>
+                  </div>
+                </details>
+                {numberSearch && <p className="rh-number-scope text-xs text-gray-600" id="number-lookup-source">Looks up numbers in Discogs</p>}
+                {!searchActive && <SortControl placement="lookup-options" sort={sortBy} onChange={changeSort} />}
+              </div>
             </div>
           </form>
         </div>
