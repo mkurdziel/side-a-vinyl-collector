@@ -1,20 +1,21 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { toast } from 'react-hot-toast';
-import api, { ApiError, isExactSavedMatch } from '../services/api';
+import api, { ApiError, isExactSavedMatch, type Album, type DiscogsAlbum } from '../services/api';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 import { ModalDialog } from './ModalDialog';
 import { SaveDestinationActions, type DestinationAction } from './SaveDestinationActions';
-import { applyLookupPressingEdits, applyLookupShelfEdits, discogsReleaseSource, type LookupPressingEdits, type LookupShelfEdits } from '../albumDisplay';
+import { applyLookupPressingEdits, applyLookupShelfEdits, catalogAlbumReference, catalogSaveReference, discogsReleaseSource, type LookupPressingEdits, type LookupShelfEdits } from '../albumDisplay';
+import { CatalogPressingPicker } from './CatalogPressingPicker';
 import type { OpenSavedAlbum, SavePressing, UndoPressing } from './PressingComparison';
 import { LookupRecovery } from './LookupRecovery';
 import type { ManualAlbumDraft } from './ManualAlbumDialog';
 
 type BarcodeMatch = Awaited<ReturnType<typeof api.scanBarcode>> & { barcode: string };
+type Shelf = Album['status'];
 type LookupFailure = 'invalid' | 'missing' | 'unavailable';
 type Lookup = { status: 'scanning' | 'looking-up' }
   | { status: 'failed'; reason: LookupFailure; barcode: string }
   | { status: 'found'; match: BarcodeMatch }
-  | { status: 'saved'; match: BarcodeMatch; destination: 'collection' | 'wishlist'; movedId?: number; restored?: boolean };
+  | { status: 'saved'; match: BarcodeMatch; destination: Shelf; album?: Album; movedId?: number; restored?: boolean };
 
 const lookupMessages: Record<LookupFailure, string> = {
   invalid: 'Enter the 8, 12, 13, or 14 digits printed below the barcode.',
@@ -51,16 +52,25 @@ export const BarcodeScanner = ({
   const [undoing, setUndoing] = useState(false);
   const [undoFailed, setUndoFailed] = useState(false);
   const [duplicateId, setDuplicateId] = useState<number>();
+  const [saveIssue, setSaveIssue] = useState<string>();
+  const [opening, setOpening] = useState(false);
+  const [pressingReview, setPressingReview] = useState<{ album: DiscogsAlbum; destination: Shelf }>();
   const saveInProgress = useRef(false);
   const manualInput = useRef<HTMLInputElement>(null);
   const scannerTitle = useRef<HTMLHeadingElement>(null);
   const resultTitle = useRef<HTMLHeadingElement>(null);
+  const reviewOpener = useRef<HTMLButtonElement>(null);
+  const openSavedButton = useRef<HTMLButtonElement>(null);
   const lastInput = useRef<'camera' | 'manual'>('manual');
   const focusNextScan = useRef(false);
   const completedBarcode = useRef<string | undefined>(undefined);
   const [manualBarcode, setManualBarcode] = useState('');
   const scannedResult = lookup.status === 'found'
     ? applyLookupShelfEdits(applyLookupPressingEdits(lookup.match, lookupPressingEdits), lookupShelfEdits) : null;
+  const releaseId = scannedResult?.discogsId;
+  const release = scannedResult && releaseId !== undefined && discogsReleaseSource(releaseId) ? {
+    ...scannedResult, id: releaseId, discogsId: releaseId, source: 'discogs', discogsListing: 'release',
+  } satisfies DiscogsAlbum : undefined;
   const titleOnly = scannedResult?.existingStatus && !isExactSavedMatch(scannedResult.existingMatch);
   const foundDuplicate = duplicateId !== undefined && lookupShelfEdits?.[duplicateId] !== null ? duplicateId : undefined;
   const scanning = lookup.status === 'scanning';
@@ -68,7 +78,7 @@ export const BarcodeScanner = ({
   const failure = lookup.status === 'failed' && manualBarcode.trim() === lookup.barcode ? lookup.reason : undefined;
 
   useLayoutEffect(() => {
-    if (lookup.status === 'found' || lookup.status === 'saved') resultTitle.current?.focus();
+    if (lookup.status === 'found') resultTitle.current?.focus();
     if (lookup.status === 'scanning' && focusNextScan.current) {
       focusNextScan.current = false;
       if (lastInput.current === 'manual') manualInput.current?.focus();
@@ -76,11 +86,17 @@ export const BarcodeScanner = ({
     }
   }, [lookup]);
 
+  useLayoutEffect(() => {
+    if (!pressingReview && (lookup.status === 'saved' || foundDuplicate !== undefined))
+      (openSavedButton.current ?? resultTitle.current)?.focus();
+  }, [foundDuplicate, lookup, pressingReview]);
+
   const lookUp = async (barcode: string, source: 'camera' | 'manual' = 'camera') => {
     if (lookupInProgress.current || (source === 'camera' && completedBarcode.current === barcode)) return;
     lastInput.current = source;
     if (source === 'manual') setCameraEnabled(false);
     setDuplicateId(undefined);
+    setSaveIssue(undefined);
 
     setManualBarcode(barcode);
     if (!barcodePattern.test(barcode)) {
@@ -104,41 +120,61 @@ export const BarcodeScanner = ({
     }
   };
 
-  const saveMatch = async (action: DestinationAction) => {
-    if (!scannedResult || saveInProgress.current) return;
+  const saveMatch = async (action: DestinationAction, confirmed?: DiscogsAlbum) => {
+    if (!scannedResult || saveInProgress.current || foundDuplicate !== undefined) return false;
     const { existingStatus, existingAlbumId, existingMatch } = scannedResult;
     const moveId = action === 'move' && existingStatus === 'wishlist' && isExactSavedMatch(existingMatch) ? existingAlbumId : undefined;
     const adding = action !== 'move' && !existingStatus;
-    if (!moveId && !adding) return;
+    if (!moveId && !adding) return false;
 
     saveInProgress.current = true;
     setSaving(action);
+    setSaveIssue(undefined);
     try {
       if (moveId) {
-        if (!await onMoveSaved(moveId, scannedResult.album)) return;
+        if (!await onMoveSaved(moveId, scannedResult.album)) return false;
         setLookup({ status: 'saved', match: scannedResult, destination: 'collection', movedId: moveId });
-        return;
+        return true;
       } else if (adding) {
-        await api.addAlbum({
+        const reference = confirmed ? catalogSaveReference(confirmed) : release ? catalogAlbumReference(release)
+          : { catalogListing: scannedResult.catalogListing ?? undefined };
+        const { album } = await api.addAlbum({
           artist: scannedResult.artist,
           album: scannedResult.album,
           coverImageUrl: scannedResult.coverImageUrl,
-          discogsId: scannedResult.discogsId,
+          ...reference,
+          applyCatalogReference: true,
           barcode: scannedResult.barcode,
           status: action,
         });
-        setLookup({ status: 'saved', match: scannedResult, destination: action });
+        setLookup({ status: 'saved', match: scannedResult, destination: action, album });
         onSuccess();
+        return true;
       }
+      return false;
     } catch (error) {
       if (error instanceof ApiError && error.status === 409 && error.existingAlbumId !== undefined) {
         setDuplicateId(error.existingAlbumId);
       } else {
-        toast.error(error instanceof Error ? error.message : 'Could not save the album. Try again.');
+        setSaveIssue(error instanceof Error ? error.message : 'Could not save the album. Try again.');
       }
+      return false;
     } finally {
       saveInProgress.current = false;
       setSaving(undefined);
+    }
+  };
+
+  const openSaved = async (id: number, opener: HTMLButtonElement) => {
+    if (opening) return;
+    setOpening(true);
+    const outcome = await onOpenSaved(id, opener, true);
+    setOpening(false);
+    if (outcome === 'unavailable') setSaveIssue('Could not open this saved album. Try again.');
+    if (outcome === 'removed') {
+      setSaveIssue('This album is no longer saved.');
+      setDuplicateId(undefined);
+      if (lookup.status === 'saved') setLookup({ ...lookup, album: undefined });
     }
   };
 
@@ -148,6 +184,7 @@ export const BarcodeScanner = ({
     setManualBarcode('');
     setLookup({ status: 'scanning' });
     setDuplicateId(undefined);
+    setSaveIssue(undefined);
     setUndoFailed(false);
     setCameraEnabled(lastInput.current === 'camera');
     if (lastInput.current === 'camera') retryCamera();
@@ -350,13 +387,19 @@ export const BarcodeScanner = ({
                   <p className="mt-1 text-xs tabular-nums text-gray-600">Barcode {scannedResult.barcode}</p>
                 </div>
               </div>
+              {scannedResult.otherAlbumMatches && <p className="text-sm text-gray-600">
+                Discogs also found other albums for this barcode. Check the artist and title before saving.
+              </p>}
               <div className="grid gap-2">
                 {saving && <p role="status" className="text-sm text-gray-600">Saving this album…</p>}
+                {saveIssue && <p role="alert" className="text-sm text-red-600">{saveIssue}</p>}
                 {foundDuplicate !== undefined ? (
                   <div className="grid gap-1">
                     <p role="alert" className="text-sm">This album is already saved.</p>
-                    <button type="button" autoFocus className="rh-primary-action px-3 text-sm font-semibold"
-                      onClick={event => void onOpenSaved(foundDuplicate, event.currentTarget)}>Open saved album</button>
+                    <button ref={openSavedButton} type="button" className="rh-primary-action px-3 text-sm font-semibold"
+                      aria-busy={opening} aria-disabled={opening} onClick={event => void openSaved(foundDuplicate, event.currentTarget)}>
+                      Open saved album
+                    </button>
                   </div>
                 ) : <SaveDestinationActions
                   albumTitle={scannedResult.album}
@@ -366,13 +409,21 @@ export const BarcodeScanner = ({
                   existingAlbumId={scannedResult.existingAlbumId}
                   titleMatches={scannedResult.titleMatches}
                   lookup={{
-                    artist: scannedResult.artist, year: scannedResult.year, releaseId: scannedResult.discogsId,
-                    source: discogsReleaseSource(scannedResult.discogsId),
+                    artist: scannedResult.artist, year: scannedResult.year, releaseId: release?.discogsId,
+                    source: discogsReleaseSource(release?.discogsId), pressing: scannedResult.pressing,
                   }}
+                  lookupChoices={release?.pressingChoices?.map(choice => ({
+                    artist: choice.artist, year: choice.year, releaseId: choice.discogsId, pressing: choice.pressing,
+                  }))}
+                  onReviewNewPressings={release && ((destination, opener) => {
+                    reviewOpener.current = opener;
+                    setSaveIssue(undefined);
+                    setPressingReview({ album: release, destination });
+                  })}
                   onSearch={editMatchedSearch}
                   searchLabel="Search catalogs by name"
                   onOpenSaved={onOpenSaved}
-                  onSavePressing={discogsReleaseSource(scannedResult.discogsId) ? onSavePressing : undefined}
+                  onSavePressing={release ? onSavePressing : undefined}
                   onUndoPressing={onUndoPressing}
                   onSavedCopyRemoved={onSavedCopyRemoved}
                   pending={saving}
@@ -396,16 +447,22 @@ export const BarcodeScanner = ({
                   <p className="text-sm text-gray-600">{lookup.match.artist}</p>
                   <p role="status" className="mt-2 text-sm font-semibold">
                     {lookup.restored ? 'Moved back to Wishlist' : lookup.destination === 'collection' ? 'Saved to Collection' : 'Saved to Wishlist'}
+                    {lookup.album && (lookup.album.discogs_id ? ` · Discogs release ${lookup.album.discogs_id}` : ' · Pressing unconfirmed')}
                   </p>
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
+                {lookup.album && <button ref={openSavedButton} type="button" className="rh-lookup-link"
+                  aria-busy={opening} aria-disabled={opening} onClick={event => void openSaved(lookup.album!.id, event.currentTarget)}>
+                  Open saved album
+                </button>}
                 <button type="button" className="rh-primary-action px-4 text-sm font-semibold" disabled={undoing}
                   onClick={handleScanAnother}>Scan next</button>
                 <button type="button" className="rh-lookup-link" onClick={close} disabled={undoing}>Done</button>
                 {lookup.movedId !== undefined && <button type="button" className="rh-lookup-link" disabled={undoing}
                   onClick={() => void undoSavedMove()}>{undoing ? 'Undoing…' : 'Undo move'}</button>}
               </div>
+              {saveIssue && <p role="alert" className="text-sm text-red-600">{saveIssue}</p>}
               {undoFailed && lookup.movedId !== undefined && (
                 <div>
                   <p role="alert" className="text-sm text-red-600">Could not undo this move. Check the album’s current shelf.</p>
@@ -418,6 +475,15 @@ export const BarcodeScanner = ({
         </div>
 
       </div>
+      {pressingReview && (
+        <CatalogPressingPicker album={pressingReview.album} destination={pressingReview.destination}
+          opener={reviewOpener} fallback={openSavedButton} duplicate={foundDuplicate !== undefined}
+          issue={foundDuplicate !== undefined ? 'This album is already saved.' : saveIssue}
+          onOpenDuplicate={foundDuplicate === undefined ? undefined : opener => void openSaved(foundDuplicate, opener)}
+          onClose={() => setPressingReview(undefined)}
+          onSave={confirmed => saveMatch(pressingReview.destination, confirmed)}
+          onSaveWithoutPressing={() => saveMatch(pressingReview.destination)} />
+      )}
     </ModalDialog>
   );
 };

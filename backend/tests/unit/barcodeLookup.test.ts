@@ -71,6 +71,21 @@ describe('barcode lookup failures', () => {
 });
 
 describe('barcode match evidence', () => {
+  it('returns pressing evidence for the same album without treating other titles as candidates', async () => {
+    get.mockResolvedValueOnce({ data: { results: [
+      { id: 91, title: 'Artist - Fixture', master_id: 900, catno: 'A-123', country: 'US' },
+      { id: 92, title: 'Artist - Fixture', master_id: 900, catno: 'A-123', country: 'UK' },
+      { id: 93, title: 'Artist - Other album', master_id: 901, catno: 'B-456' },
+      { id: 94, title: 'Artist - Fixture', master_id: 901, catno: 'C-789' },
+    ] } });
+    await expect(lookup()).resolves.toMatchObject({
+      status: 200, body: { discogsId: 91, masterId: 900, otherAlbumMatches: true, pressingChoices: [
+        { discogsId: 91, discogsListing: 'release', pressing: { catalogNumber: 'A-123', country: 'US' } },
+        { discogsId: 92, discogsListing: 'release', pressing: { catalogNumber: 'A-123', country: 'UK' } },
+      ] },
+    });
+  });
+
   it('distinguishes saved barcode mappings from catalog release IDs', async () => {
     query.mockResolvedValueOnce({ rows: [{ id: 44, title: 'Fixture', artist_name: 'Artist' }] })
       .mockResolvedValueOnce({ rows: [{ album_id: 44, status: 'collection' }] });

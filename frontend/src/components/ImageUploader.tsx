@@ -1,12 +1,15 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { toast } from 'react-hot-toast';
-import api, { ApiError, isExactSavedMatch, type DiscogsAlbum } from '../services/api';
+import api, { ApiError, isExactSavedMatch, type Album, type DiscogsAlbum } from '../services/api';
 import { ModalDialog } from './ModalDialog';
 import { SaveDestinationActions, type DestinationAction } from './SaveDestinationActions';
-import { applyLookupPressingEdits, applyLookupShelfEdits, catalogSource, type LookupPressingEdits, type LookupShelfEdits } from '../albumDisplay';
+import { applyLookupPressingEdits, applyLookupShelfEdits, catalogAlbumReference, catalogSaveReference, catalogSource, type LookupPressingEdits, type LookupShelfEdits } from '../albumDisplay';
+import { CatalogPressingPicker } from './CatalogPressingPicker';
 import type { OpenSavedAlbum, SavePressing, UndoPressing } from './PressingComparison';
 import { LookupRecovery } from './LookupRecovery';
 import type { ManualAlbumDraft } from './ManualAlbumDialog';
+
+type Shelf = Album['status'];
+type CoverMatch = DiscogsAlbum & { existingStatus?: Shelf | null };
 
 interface ImageUploaderProps {
   onClose: () => void;
@@ -32,16 +35,27 @@ export const ImageUploader = ({ onClose, onBack, onSuccess, onSearchByName, onMa
   const [extractedInfo, setExtractedInfo] = useState<Awaited<ReturnType<typeof api.analyzeImage>>['extractedText'] | null>(null);
   const [saving, setSaving] = useState<{ id: number; action: DestinationAction }>();
   const [duplicates, setDuplicates] = useState<Record<number, number>>({});
+  const [duplicateFocusId, setDuplicateFocusId] = useState<number>();
+  const [saveIssue, setSaveIssue] = useState<{ id: number; message: string }>();
+  const [receipt, setReceipt] = useState<{ album: Album; matchId: number }>();
+  const [opening, setOpening] = useState(false);
+  const [pressingReview, setPressingReview] = useState<{ album: CoverMatch; destination: Shelf }>();
   const saveInProgress = useRef(false);
   const [analysisError, setAnalysisError] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
   const outcomeHeading = useRef<HTMLHeadingElement>(null);
   const focusUpload = useRef(false);
+  const reviewOpener = useRef<HTMLButtonElement>(null);
+  const openReceiptButton = useRef<HTMLButtonElement>(null);
+  const duplicateButton = useRef<HTMLButtonElement>(null);
   const draft = extractedInfo ? { artist: extractedInfo.artist, album: extractedInfo.album } : undefined;
   const results = matches.map(match => applyLookupShelfEdits(applyLookupPressingEdits({
     ...match, existingStatus: match.inCollection ? 'collection' as const : match.inWishlist ? 'wishlist' as const : undefined,
   }, lookupPressingEdits), lookupShelfEdits));
   const allTitleOnly = results.every(match => match.existingStatus && !isExactSavedMatch(match.existingMatch));
+  const reviewedAlbum = pressingReview && results.find(match => match.discogsId === pressingReview.album.discogsId);
+  const reviewDuplicateId = reviewedAlbum && duplicates[reviewedAlbum.discogsId];
+  const reviewDuplicate = reviewDuplicateId !== undefined && lookupShelfEdits?.[reviewDuplicateId] !== null ? reviewDuplicateId : undefined;
 
   useLayoutEffect(() => {
     if (!analyzing && (analysisError || matches.length)) outcomeHeading.current?.focus();
@@ -50,12 +64,19 @@ export const ImageUploader = ({ onClose, onBack, onSuccess, onSearchByName, onMa
       fileInput.current?.focus();
     }
   }, [analyzing, analysisError, matches, imagePreview]);
+  useLayoutEffect(() => {
+    if (!pressingReview) (openReceiptButton.current ?? duplicateButton.current)?.focus();
+  }, [duplicates, pressingReview, receipt]);
+
   const clearPhoto = () => {
     setImagePreview('');
     setMatches([]);
     setDuplicates({});
+    setDuplicateFocusId(undefined);
     setExtractedInfo(null);
     setAnalysisError('');
+    setReceipt(undefined);
+    setSaveIssue(undefined);
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -116,42 +137,74 @@ export const ImageUploader = ({ onClose, onBack, onSuccess, onSearchByName, onMa
     reader.readAsDataURL(file);
   };
 
-  const saveMatch = async (match: DiscogsAlbum, action: DestinationAction) => {
-    if (match.inCollection || saveInProgress.current) return;
-    const moveId = action === 'move' && match.inWishlist && isExactSavedMatch(match.existingMatch) ? match.existingAlbumId : undefined;
-    const adding = action !== 'move' && !match.inWishlist;
-    if (!moveId && !adding) return;
+  const saveMatch = async (match: CoverMatch, action: DestinationAction, confirmed?: DiscogsAlbum) => {
+    if (saveInProgress.current || receipt) return false;
+    const moveId = action === 'move' && match.existingStatus === 'wishlist' && isExactSavedMatch(match.existingMatch)
+      ? match.existingAlbumId : undefined;
+    const duplicateId = duplicates[match.discogsId];
+    const hasDuplicate = duplicateId !== undefined && lookupShelfEdits?.[duplicateId] !== null;
+    const adding = action !== 'move' && !match.existingStatus && !hasDuplicate;
+    if (!moveId && !adding) return false;
 
     saveInProgress.current = true;
     setSaving({ id: match.discogsId, action });
+    setSaveIssue(undefined);
     try {
       if (moveId) {
-        if (!await onMoveSaved(moveId, match.album)) return;
+        if (!await onMoveSaved(moveId, match.album)) return false;
         onClose();
-        return;
+        return true;
       } else if (adding) {
-        await api.addAlbum({
+        const { album } = await api.addAlbum({
           artist: match.artist,
           album: match.album,
           coverImageUrl: match.coverImageUrl,
-          discogsId: match.discogsId,
+          ...(confirmed ? catalogSaveReference(confirmed) : catalogAlbumReference(match)),
+          applyCatalogReference: true,
           status: action,
         });
-        toast.success(`Added “${match.album}” to ${action === 'collection' ? 'Collection' : 'Wishlist'}.`);
+        setReceipt({ album, matchId: match.discogsId });
+        onSuccess();
+        return true;
       }
-      onSuccess();
-      onClose();
+      return false;
     } catch (error) {
       if (error instanceof ApiError && error.status === 409 && error.existingAlbumId !== undefined) {
         const savedId = error.existingAlbumId;
+        setDuplicateFocusId(match.discogsId);
         setDuplicates(current => ({ ...current, [match.discogsId]: savedId }));
       } else {
-        toast.error(error instanceof Error ? error.message : 'Could not save the album. Try again.');
+        setSaveIssue({ id: match.discogsId, message: error instanceof Error ? error.message : 'Could not save the album. Try again.' });
       }
+      return false;
     } finally {
       saveInProgress.current = false;
       setSaving(undefined);
     }
+  };
+
+  const openSaved = async (id: number, opener: HTMLButtonElement, matchId = id) => {
+    if (opening) return;
+    setOpening(true);
+    const outcome = await onOpenSaved(id, opener, true);
+    setOpening(false);
+    if (outcome === 'unavailable') setSaveIssue({ id: matchId, message: 'Could not open this saved album. Try again.' });
+    if (outcome === 'removed') {
+      setSaveIssue({ id: matchId, message: 'This album is no longer saved.' });
+      if (receipt?.album.id === id) setReceipt(undefined);
+      else setDuplicates(current => Object.fromEntries(Object.entries(current).filter(([, savedId]) => savedId !== id)));
+    }
+  };
+
+  const reviewNewPressing = (match: CoverMatch, destination: Shelf, opener: HTMLButtonElement) => {
+    const pressingChoices = results.filter(candidate => candidate.artist.toLowerCase() === match.artist.toLowerCase()
+      && candidate.album.toLowerCase() === match.album.toLowerCase()
+      && (!match.masterId || !candidate.masterId || candidate.masterId === match.masterId))
+      .flatMap(candidate => candidate.pressingChoices?.length ? candidate.pressingChoices : [candidate])
+      .filter(candidate => catalogSource(candidate)?.kind === 'pressing');
+    reviewOpener.current = opener;
+    setSaveIssue(undefined);
+    setPressingReview({ album: { ...match, pressingChoices }, destination });
   };
 
   const close = () => {
@@ -233,7 +286,27 @@ export const ImageUploader = ({ onClose, onBack, onSuccess, onSearchByName, onMa
             </div>
           )}
 
-          {matches.length > 0 && (
+          {receipt && (
+            <div className="space-y-2">
+              <div className="rh-lookup-record">
+                <div className="min-w-0 [overflow-wrap:anywhere]">
+                  <h3 className="text-lg font-semibold text-gray-900">{receipt.album.title}</h3>
+                  <p className="text-sm text-gray-600">{receipt.album.artist_name}</p>
+                  <p role="status" className="mt-2 text-sm font-semibold">
+                    Saved to {receipt.album.status === 'collection' ? 'Collection' : 'Wishlist'} · {receipt.album.discogs_id
+                      ? `Discogs release ${receipt.album.discogs_id}` : 'Pressing unconfirmed'}
+                  </p>
+                </div>
+              </div>
+              {saveIssue && <p role="alert" className="text-sm text-red-600">{saveIssue.message}</p>}
+              <button ref={openReceiptButton} type="button" className="rh-primary-action px-3 text-sm font-semibold"
+                aria-busy={opening} aria-disabled={opening} onClick={event => void openSaved(receipt.album.id, event.currentTarget, receipt.matchId)}>
+                Open saved album
+              </button>
+            </div>
+          )}
+
+          {!receipt && matches.length > 0 && (
             <div className="space-y-3">
               <div className="flex flex-wrap items-start justify-between gap-x-2">
                 <h3 ref={outcomeHeading} tabIndex={-1} className="py-2 text-lg font-semibold text-gray-900">
@@ -262,11 +335,15 @@ export const ImageUploader = ({ onClose, onBack, onSuccess, onSearchByName, onMa
                         </div>
                       </div>
                       <div className="mt-3">
+                        {saveIssue?.id === match.discogsId && <p role="alert" className="mb-1 text-sm text-red-600">{saveIssue.message}</p>}
                         {foundDuplicate ? (
                           <div className="grid gap-1">
                             <p role="alert" className="text-sm">This album is already saved.</p>
-                          <button type="button" autoFocus className="rh-primary-action px-3 text-sm font-semibold" disabled={!!saving}
-                              onClick={event => void onOpenSaved(duplicateId, event.currentTarget)}>Open saved album</button>
+                            <button ref={duplicateFocusId === match.discogsId ? duplicateButton : undefined} type="button"
+                              className="rh-primary-action px-3 text-sm font-semibold" disabled={!!saving}
+                              aria-disabled={opening} aria-busy={opening} onClick={event => void openSaved(duplicateId, event.currentTarget, match.discogsId)}>
+                              Open saved album
+                            </button>
                           </div>
                         ) : <SaveDestinationActions
                           albumTitle={match.album}
@@ -277,6 +354,8 @@ export const ImageUploader = ({ onClose, onBack, onSuccess, onSearchByName, onMa
                           titleMatches={match.titleMatches}
                           lookup={{ artist: match.artist, year: match.year, source: catalogSource(match),
                             pressing: match.pressing, releaseId: catalogSource(match)?.kind === 'pressing' ? match.discogsId : undefined }}
+                          onReviewNewPressings={catalogSource(match)?.kind === 'pressing'
+                            ? (destination, opener) => reviewNewPressing(match, destination, opener) : undefined}
                           onSearch={() => onSearchByName(`${match.artist} ${match.album}`, { artist: match.artist, album: match.album })}
                           searchLabel="Search catalogs by name"
                           onOpenSaved={onOpenSaved}
@@ -285,9 +364,7 @@ export const ImageUploader = ({ onClose, onBack, onSuccess, onSearchByName, onMa
                           onSavedCopyRemoved={onSavedCopyRemoved}
                           pending={saving?.id === match.discogsId ? saving.action : undefined}
                           disabled={!!saving}
-                          onSelect={action => void saveMatch({
-                            ...match, inCollection: existingStatus === 'collection', inWishlist: existingStatus === 'wishlist',
-                          }, action)}
+                          onSelect={action => void saveMatch(match, action)}
                         />}
                       </div>
                     </article>
@@ -300,10 +377,20 @@ export const ImageUploader = ({ onClose, onBack, onSuccess, onSearchByName, onMa
           <div className="flex flex-wrap justify-end gap-2">
             {imagePreview && !analyzing && <button type="button" className="rh-lookup-link" disabled={!!saving}
               onClick={() => fileInput.current?.click()}>Choose another photo</button>}
-            <button type="button" className="rh-lookup-link" onClick={close} disabled={!!saving}>Cancel</button>
+            <button type="button" className="rh-lookup-link" onClick={close} disabled={!!saving}>{receipt ? 'Done' : 'Cancel'}</button>
           </div>
         </div>
       </div>
+      {pressingReview && (
+        <CatalogPressingPicker album={pressingReview.album} destination={pressingReview.destination}
+          opener={reviewOpener} fallback={openReceiptButton} duplicate={reviewDuplicate !== undefined}
+          issue={reviewDuplicate !== undefined ? 'This album is already saved.' :
+            saveIssue?.id === pressingReview.album.discogsId ? saveIssue.message : undefined}
+          onOpenDuplicate={reviewDuplicate === undefined ? undefined : opener => void openSaved(reviewDuplicate, opener, pressingReview.album.discogsId)}
+          onClose={() => setPressingReview(undefined)}
+          onSave={confirmed => reviewedAlbum ? saveMatch(reviewedAlbum, pressingReview.destination, confirmed) : Promise.resolve(false)}
+          onSaveWithoutPressing={() => reviewedAlbum ? saveMatch(reviewedAlbum, pressingReview.destination) : Promise.resolve(false)} />
+      )}
     </ModalDialog>
   );
 };

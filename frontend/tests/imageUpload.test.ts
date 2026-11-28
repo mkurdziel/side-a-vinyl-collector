@@ -14,11 +14,16 @@ vi.mock('../src/services/api', async importOriginal => ({
 }));
 import { ImageUploader } from '../src/components/ImageUploader';
 import type { SavePressing } from '../src/components/PressingComparison';
+import { ApiError } from '../src/services/api';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let renderer: ReturnType<typeof create> | undefined;
 const focused = vi.fn();
 const props = { onClose: vi.fn(), onSuccess: vi.fn(), onSearchByName: vi.fn(), onManual: vi.fn(), onMoveSaved: vi.fn(), onOpenSaved: vi.fn(), viewMode: 'collection' as const };
+const coverFile = { name: 'cover.jpg', type: 'image/jpeg', size: 1024 };
+const coverMatch = { id: 1, discogsId: 1, artist: 'Portishead', album: 'Dummy', source: 'discogs',
+  discogsListing: 'release', masterId: 200, coverImageUrl: 'https://example.test/cover.jpg' };
+const savedAlbum = { id: 23, title: 'Dummy', artist_name: 'Portishead', status: 'collection', discogs_id: null };
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -65,15 +70,70 @@ describe('album image uploads', () => {
   });
 
   it('lets a cover match be saved to either shelf and puts the active shelf first', async () => {
-    await upload({ name: 'cover.jpg', type: 'image/jpeg', size: 1024 }, 'wishlist');
+    analyzeImage.mockResolvedValueOnce({ extractedText: {}, discogsMatches: [coverMatch] });
+    addAlbum.mockResolvedValueOnce({ album: savedAlbum });
+    await upload(coverFile, 'wishlist');
     const addButtons = renderer!.root.findAllByType('button')
-      .filter(button => button.props['aria-label']?.startsWith('Add Dummy to '));
+      .filter(button => button.props['aria-label']?.startsWith('Save without pressing to '));
     expect(addButtons.map(button => button.props['aria-label'])).toEqual([
-      'Add Dummy to Wishlist', 'Add Dummy to Collection',
+      'Save without pressing to Wishlist · Dummy', 'Save without pressing to Collection · Dummy',
     ]);
     await act(async () => addButtons[1].props.onClick());
-    expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ discogsId: 1, status: 'collection' }));
+    expect(addAlbum).toHaveBeenCalledExactlyOnceWith({ artist: 'Portishead', album: 'Dummy',
+      coverImageUrl: 'https://example.test/cover.jpg', catalogListing: { source: 'discogs', kind: 'master', id: 200 },
+      status: 'collection', applyCatalogReference: true });
     expect(props.onSuccess).toHaveBeenCalledOnce();
+    expect(props.onClose).not.toHaveBeenCalled();
+    expect(renderer!.root.findByProps({ alt: 'Uploaded cover' })).toBeDefined();
+    expect(focused).toHaveBeenLastCalledWith('Open saved album');
+    expect(JSON.stringify(renderer!.toJSON())).toContain('Pressing unconfirmed');
+  });
+
+  it('reviews only pressings of the chosen cover match and saves the explicitly selected release', async () => {
+    analyzeImage.mockResolvedValueOnce({ extractedText: {}, discogsMatches: [
+      coverMatch,
+      { ...coverMatch, id: 2, discogsId: 2, pressing: { catalogNumber: 'ABC-123', country: 'UK' }, coverImageUrl: 'https://example.test/other-edition.jpg' },
+      { ...coverMatch, id: 3, discogsId: 3, album: 'Third', masterId: 201 },
+    ] });
+    addAlbum.mockResolvedValueOnce({ album: { ...savedAlbum, discogs_id: 2, status: 'wishlist' } });
+    await upload(coverFile, 'wishlist');
+    const opener = { isConnected: true };
+    await act(async () => renderer!.root.findAllByProps({ 'aria-label': 'Review pressings for Dummy in Wishlist' })[0]
+      .props.onClick({ currentTarget: opener }));
+    const picker = renderer!.root.findByType('form');
+    const submit = () => act(async () => picker.props.onSubmit({ preventDefault: vi.fn() }));
+    expect(picker.findAllByProps({ type: 'radio' }).map(choice => [choice.props.value, choice.props.checked])).toEqual([[1, false], [2, false]]);
+    await submit();
+    expect(addAlbum).not.toHaveBeenCalled();
+    await act(async () => picker.findAllByProps({ type: 'radio' })[1].props.onChange());
+    await submit();
+    expect(addAlbum).toHaveBeenCalledExactlyOnceWith({ artist: 'Portishead', album: 'Dummy',
+      coverImageUrl: 'https://example.test/cover.jpg', discogsId: 2, status: 'wishlist', applyCatalogReference: true });
+    expect(renderer!.root.findByProps({ alt: 'Uploaded cover' })).toBeDefined();
+    expect(focused).toHaveBeenLastCalledWith('Open saved album');
+    const open = renderer!.root.findAllByType('button').find(node => node.children.join('') === 'Open saved album')!;
+    props.onOpenSaved.mockResolvedValueOnce('opened');
+    await act(async () => open.props.onClick({ currentTarget: opener }));
+    expect(props.onOpenSaved).toHaveBeenCalledExactlyOnceWith(23, opener, true);
+  });
+
+  it('keeps a duplicate outcome in the review with a focused route to the saved album', async () => {
+    analyzeImage.mockResolvedValueOnce({ extractedText: {}, discogsMatches: [coverMatch] });
+    addAlbum.mockRejectedValueOnce(new ApiError('Already saved', 409, 23));
+    props.onOpenSaved.mockResolvedValueOnce('opened');
+    await upload(coverFile);
+    const opener = { isConnected: true };
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Review pressings for Dummy in Collection' })
+      .props.onClick({ currentTarget: opener }));
+    const picker = renderer!.root.findByType('form');
+    const withoutPressing = picker.findAllByType('button').find(button => button.children.join('') === 'Save without pressing to Collection')!;
+    await act(async () => withoutPressing.props.onClick());
+    expect(picker.findByProps({ role: 'alert' }).children).toEqual(['This album is already saved.']);
+    expect(focused).toHaveBeenLastCalledWith('Open saved album');
+    const open = picker.findAllByType('button').find(node => node.children.join('') === 'Open saved album')!;
+    await act(async () => open.props.onClick({ currentTarget: opener }));
+    expect(props.onOpenSaved).toHaveBeenCalledExactlyOnceWith(23, opener, true);
+    expect(props.onSuccess).not.toHaveBeenCalled();
   });
 
   it('moves a wishlisted cover match only when its saved record ID is available', async () => {
@@ -157,8 +217,9 @@ describe('album image uploads', () => {
     expect(cancel.props.disabled).toBe(true);
     await act(async () => renderer!.root.findByProps({ labelledBy: 'identify-cover-title' }).props.onClose());
     expect(props.onClose).not.toHaveBeenCalled();
-    await act(async () => pending.resolve({}));
-    expect(props.onClose).toHaveBeenCalledOnce();
+    await act(async () => pending.resolve({ album: savedAlbum }));
+    expect(props.onClose).not.toHaveBeenCalled();
+    expect(focused).toHaveBeenLastCalledWith('Open saved album');
   });
 
   it('focuses the photo results and offers recovery even when candidates exist', async () => {

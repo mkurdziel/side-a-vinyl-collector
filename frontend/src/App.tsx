@@ -111,7 +111,7 @@ function draftForSearch(query: string, detected?: ManualAlbumDraft): ManualAlbum
   if (artist && text.toLowerCase().startsWith(`${artist.toLowerCase()} `)) {
     return { artist, album: text.slice(artist.length).trim().slice(0, 255) };
   }
-  return { album: text.slice(0, 255) };
+  return { searchText: text.slice(0, 255) };
 }
 
 function AlbumCover({ src }: { src?: string }) {
@@ -709,6 +709,7 @@ function App() {
         year: catalogSource(album)?.kind === 'album' ? album.year : undefined,
         coverImageUrl: confirmed?.coverImageUrl ?? album.coverImageUrl,
         ...(confirmed ? catalogSaveReference(confirmed) : catalogAlbumReference(album)),
+        applyCatalogReference: true,
         status: destination,
       });
       setRecentCatalogSaves(current => new Set(current).add(saved.id));
@@ -1153,10 +1154,10 @@ function App() {
                 onChange={event => changeScope(event.target.value as SearchScope)}
                 className="max-w-full rounded-lg border border-gray-300 px-2 text-sm"
               >
-                <option value="saved">Both shelves</option>
+                <option value="saved">Collection and Wishlist</option>
                 <option value="collection">Collection only</option>
                 <option value="wishlist">Wishlist only</option>
-                <option value="catalog">Saved and catalogs</option>
+                <option value="catalog">Shelves and online catalogs</option>
               </select>
             </div>}
               <button
@@ -1235,7 +1236,7 @@ function App() {
             <details className="rh-search-tips">
               <summary aria-label="Search tips"><span className="hidden sm:inline">Search </span>Tips</summary>
               <div>
-                <p>Search both shelves or choose a shelf. To find an album you don’t own, search the catalogs by artist and title.</p>
+                <p>Use Search in to choose a shelf or include online catalogs. Name searches keep that choice when you open them from Add.</p>
                 <p>Look up a catalog number printed on the sleeve or label. Check the format and year before saving a pressing.</p>
                 <p className="rh-keyboard-tip">Focus search with <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd>.</p>
               </div>
@@ -1282,7 +1283,7 @@ function App() {
             <div className={`rh-catalog-bar${catalogCount > 0 ? ' rh-catalog-bar-sticky' : ''}`}>
               <h2 ref={catalogHeading} id="catalog-results-title" tabIndex={-1} className="rh-result-heading text-lg font-semibold">{numberSearch ? 'Discogs results' : 'Catalog albums'}</h2>
               {hasNewCatalogMatches && <label className="rh-catalog-destination text-sm text-gray-600">
-                Save new matches to
+                Default shelf for new albums
                 <select id="catalog-save-shelf" value={saveShelf}
                   onChange={event => setSaveShelf(event.target.value as Shelf)}
                   className="min-h-11 max-w-full rounded-lg border border-gray-300 px-2.5">
@@ -1430,7 +1431,7 @@ function App() {
           }}
           onSearchClick={() => {
             setShowAddMenu(false);
-            openNameSearch();
+            changeLookupMethod('name');
           }}
           onCatalogNumberClick={() => {
             setShowAddMenu(false);
@@ -1532,10 +1533,7 @@ function App() {
           onSavedCopyRemoved={pressingCopyRemoved}
           lookupShelfEdits={lookupShelfEdits}
           lookupPressingEdits={lookupPressingEdits}
-          onSuccess={() => {
-            refreshLibrary();
-            setShowImageUploader(false);
-          }}
+          onSuccess={refreshLibrary}
           viewMode={viewMode}
         />
       )}

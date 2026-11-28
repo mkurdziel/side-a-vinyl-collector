@@ -1,9 +1,9 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { ApiError, type DiscogsAlbum, type PressingDetails, type SavedTitleMatch } from '../services/api';
-import { createPressingDetailsLoader } from '../services/pressingEvidence';
+import { createPressingDetailsLoader, withPressingEvidence } from '../services/pressingEvidence';
 import { discogsReleaseSource, savedCatalogSource, savedCopyContext, savedCopyLabel, type CatalogSource } from '../albumDisplay';
 import { ModalDialog } from './ModalDialog';
-import { PressingCandidates, type PressingCandidate } from './PressingCandidates';
+import { PressingCandidates, PressingSelectionSummary, type PressingCandidate } from './PressingCandidates';
 
 export type SavedAlbumOutcome = 'opened' | 'removed' | 'unavailable';
 export type OpenSavedAlbum = (id: number, opener: HTMLButtonElement, inlineError?: boolean) => Promise<SavedAlbumOutcome>;
@@ -78,18 +78,6 @@ function fieldValue(pressing: PressingDetails | undefined, key: PressingField) {
 function candidateValue(candidate: LookupPressing | undefined, key: PressingField, details?: PressingDetails) {
   return fieldValue(details, key) ?? fieldValue(candidate?.pressing, key)
     ?? (key === 'year' && candidate?.year ? String(candidate.year) : undefined);
-}
-
-function candidateLabel(candidate: ReleaseCandidate, details?: PressingDetails) {
-  const value = (key: PressingField) => candidateValue(candidate, key, details);
-  return [
-    value('catalogNumber'),
-    value('country'),
-    value('year'),
-    value('label'),
-    value('format'),
-    `Discogs release ${candidate.releaseId}`,
-  ].filter(Boolean).join(' · ');
 }
 
 function availableDetails(details?: ReleaseDetails) {
@@ -223,6 +211,8 @@ export function PressingComparison({
   const currentReceipt = receipt?.album.id === selected?.id ? receipt : undefined;
   const pressingUpdated = currentReceipt?.outcome === 'saved' && currentReceipt.album.discogs_id === savedRelease;
   const lookupPending = lookupStatus === 'pending';
+  const offerKeepPressing = !!onSavePressing && !!selected && (!pressingUpdated || !alreadySaved);
+  const keepLabel = savedRelease ? 'Keep current pressing' : 'Leave pressing unconfirmed';
 
   useLayoutEffect(() => {
     if (removed) (copySelect.current ?? savedOutcome.current ?? returnAfterRemoval.current ?? removalNotice.current)?.focus();
@@ -402,6 +392,11 @@ export function PressingComparison({
     <summary className="min-h-11 cursor-pointer content-center font-medium">Where to check your record</summary>
     <p className="pb-2">Look for the catalog number on the sleeve or center label. The runout is the smooth band between the last track and the label. Match the etched or stamped letters and numbers to Matrix / Runout on Discogs when shown.</p>
   </details>;
+  const keepPressing = (
+    <button type="button" className="rh-lookup-link" aria-disabled={busy} onClick={() => { if (!busy) close(); }}>
+      {keepLabel}
+    </button>
+  );
 
   return (
     <ModalDialog labelledBy={headingId} onClose={close} onEscape={escape} returnFocusTo={returnFocusTo} fallbackFocusTo={fallbackFocusTo}>
@@ -484,6 +479,7 @@ export function PressingComparison({
             <PressingCandidates choices={candidates} selectedId={candidate?.releaseId}
               onSelect={id => { setCandidateId(id); setSaveSelection(undefined); }}
               searchedNumber={searchedNumber} savedReleaseId={savedRelease} disabled={busy || lookupPending}
+              uncertainAction={offerKeepPressing ? (savedRelease ? 'If you’re unsure, keep the current pressing.' : 'If you’re unsure, leave the pressing unconfirmed.') : undefined}
               loadDetails={loadPressingDetails} />
           </div>}
           {candidate && <div>
@@ -517,21 +513,23 @@ export function PressingComparison({
             {candidates.length === 1 && recordHelp}
           </div>}
           {selected && !lookupPending && <p className="text-sm text-gray-600">Side A saves one entry per artist and title.</p>}
-          {onSavePressing && selected && candidate && !lookupPending && (!pressingUpdated || !alreadySaved) && (
+          {offerKeepPressing && selected && (
             <div>
               {savedReleaseChanged && <p ref={changedNotice} tabIndex={-1} role="status" className="mb-2 text-sm text-gray-600">
                 {alreadySaved ? 'The saved copy was updated and now matches this pressing.' : 'The saved pressing changed. Check the updated evidence before confirming again.'}
               </p>}
-              {saveStatus ? (
+              {saveStatus && candidate ? (
                 <div className="grid gap-2 rounded-lg border border-gray-300 p-3" role="group" aria-labelledby={savePromptId}>
                   <p id={savePromptId} ref={savePrompt} tabIndex={-1} className="text-sm font-medium">
-                    Use {candidateLabel(candidate, lookupPressing)} for {availableCopies.length === 1
+                    {savedRelease ? 'Replace the pressing for' : 'Save a pressing for'} {availableCopies.length === 1
                       ? `${selected.title} in ${selectedShelf}` : savedCopyLabel(selected)}?
                   </p>
-                  {savedRelease && <p className="text-sm text-gray-600">This will replace Discogs release {savedRelease} on this saved record.</p>}
+                  <PressingSelectionSummary choice={withPressingEvidence(candidate, lookupPressing, 'release')} />
+                  {savedRelease && availableCopies.length === 1 && <p className="text-sm text-gray-600">Currently saved as Discogs release {savedRelease}.</p>}
                   {saveStatus === 'failed' && <p id={saveErrorId} role="alert" className="text-sm text-red-600">{saveSelection?.message}</p>}
                   <div className="flex flex-wrap items-center gap-2">
                     <button type="button" className="rh-lookup-link" aria-disabled={busy} onClick={cancelSave}>Cancel</button>
+                    {keepPressing}
                     <button ref={confirmSave} type="button" className="rh-primary-action px-3 text-sm font-semibold"
                       aria-disabled={busy} aria-busy={saveStatus === 'saving'} aria-describedby={saveStatus === 'failed' ? saveErrorId : undefined}
                       onClick={() => void save()}>
@@ -540,14 +538,17 @@ export function PressingComparison({
                     </button>
                   </div>
                 </div>
-              ) : alreadySaved ? (
-                !savedReleaseChanged && <p className="text-sm text-gray-600">This pressing is already saved.</p>
               ) : (
-                <button ref={saveTrigger} type="button" className="rh-primary-action px-3 text-sm font-semibold" aria-disabled={busy}
-                  onClick={() => {
-                    if (!busy) setSaveSelection({ copyId: selected.id, releaseId: candidate.releaseId,
-                      previousRelease: selected.discogs_id, status: 'confirming' });
-                  }}>Use this pressing</button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {keepPressing}
+                  {alreadySaved && !savedReleaseChanged && <p className="text-sm text-gray-600">This pressing is already saved.</p>}
+                  {candidate && !lookupPending && !alreadySaved && <button ref={saveTrigger} type="button"
+                    className="rh-primary-action px-3 text-sm font-semibold" aria-disabled={busy}
+                    onClick={() => {
+                      if (!busy) setSaveSelection({ copyId: selected.id, releaseId: candidate.releaseId,
+                        previousRelease: selected.discogs_id, status: 'confirming' });
+                    }}>Use this pressing</button>}
+                </div>
               )}
             </div>
           )}
@@ -565,7 +566,7 @@ export function PressingComparison({
               {selected && sourceLink('Saved copy', savedCopyLabel(selected), savedSource)}
               {onSearch && <button type="button" className="rh-lookup-link" aria-disabled={saveSelection?.status === 'saving' || undoing}
                 onClick={() => { if (!saving.current) onSearch(); }}>{searchLabel}</button>}
-              {backLabel && !(removed && !selected) && <button type="button" className="rh-lookup-link" aria-disabled={saveSelection?.status === 'saving' || undoing}
+              {backLabel && !offerKeepPressing && !(removed && !selected) && <button type="button" className="rh-lookup-link" aria-disabled={saveSelection?.status === 'saving' || undoing}
                 onClick={close}>{backLabel}</button>}
             </div>
             {selected && failedId === selected.id && <p role="alert" className="px-2 text-sm text-red-600">Couldn’t open this saved copy. Try again.</p>}
