@@ -182,10 +182,10 @@ function AlbumMeta({ title, artist, year, shelf, resultId, artworkUnverified }: 
   );
 }
 
-function SortControl({ sort, onChange }: { sort: SortBy; onChange: (sort: SortBy) => void }) {
+function SortControl({ sort, onChange, shelf = false }: { sort: SortBy; onChange: (sort: SortBy) => void; shelf?: boolean }) {
   return (
-    <div className="ml-auto flex items-center gap-2">
-      <label htmlFor="sort-select" className="text-sm text-gray-600">Sort</label>
+    <div className={`ml-auto flex items-center gap-2 ${shelf ? 'rh-shelf-sort' : ''}`}>
+      <label htmlFor="sort-select" className="rh-sort-label text-sm text-gray-600">Sort</label>
       <select id="sort-select" value={sort} onChange={event => onChange(event.target.value as SortBy)}
         className="min-h-11 rounded-lg border border-gray-300 bg-white px-2.5">
         {Object.entries(sortLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -215,9 +215,10 @@ function SaveIssueNotice({ issue, issueKey, loadingAlbumId, onOpen }: {
   );
 }
 
-function ShelfActions({ album, detailed = false, pending, issue, loadingAlbumId, onMove, onRemove, onOpenIssue }: {
+function ShelfActions({ album, detailed = false, card = false, pending, issue, loadingAlbumId, onMove, onRemove, onOpenIssue }: {
   album: Album;
   detailed?: boolean;
+  card?: boolean;
   pending?: SaveAction;
   issue?: SaveIssue;
   loadingAlbumId?: number;
@@ -243,19 +244,29 @@ function ShelfActions({ album, detailed = false, pending, issue, loadingAlbumId,
     </button>
   );
   return (
-    <div className="grid gap-1.5">
+    <div className={card ? 'rh-shelf-card-controls' : 'grid gap-1.5'}>
       {detailed ? <>{move}{remove}</> : (
         <>
           {inWishlist && move}
-          <details className="min-w-0">
-            <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-1 rounded-lg px-1 text-xs font-semibold text-gray-600 hover:bg-gray-100"
-              aria-label={`Shelf actions for ${savedCopyLabel(album)}`}>
-              Actions
-              <svg aria-hidden="true" className="size-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <path strokeLinecap="round" strokeWidth="2" d="m6 9 6 6 6-6" />
-              </svg>
+          <details className={card ? 'rh-shelf-card-menu' : 'min-w-0'} name={card ? 'shelf-card-actions' : undefined}
+            onKeyDown={card ? event => {
+              if (event.key !== 'Escape' || !event.currentTarget.open) return;
+              event.preventDefault();
+              event.currentTarget.open = false;
+              event.currentTarget.querySelector('summary')?.focus();
+            } : undefined}>
+            <summary className={card ? 'rh-shelf-card-menu-trigger' : 'flex min-h-11 cursor-pointer items-center justify-between gap-1 rounded-lg px-1 text-xs font-semibold text-gray-600 hover:bg-gray-100'}
+              title={card ? 'Shelf actions' : undefined} aria-label={`Shelf actions for ${savedCopyLabel(album)}`}>
+              {card ? <svg aria-hidden="true" className="size-5" viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" />
+              </svg> : <>
+                Actions
+                <svg aria-hidden="true" className="size-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path strokeLinecap="round" strokeWidth="2" d="m6 9 6 6 6-6" />
+                </svg>
+              </>}
             </summary>
-            <div className="grid gap-1.5">{!inWishlist && move}{remove}</div>
+            <div className={card ? 'rh-shelf-card-menu-panel' : 'grid gap-1.5'}>{!inWishlist && move}{remove}</div>
           </details>
         </>
       )}
@@ -1178,7 +1189,7 @@ function App() {
         const availablePressings = catalogResults?.discogs.length ? savedPressingChoices(album, catalogResults.discogs) : [];
         const canCompare = availablePressings.some(pressing => pressing.releaseId !== album.discogs_id);
         return (
-          <article key={album.id} data-lookup-result={searchActive ? 'saved' : undefined}
+          <article key={album.id} data-shelf={searchActive ? undefined : album.status} data-lookup-result={searchActive ? 'saved' : undefined}
             data-lookup-target={searchActive ? savedResultTarget(album.id) : undefined}
             className={searchActive ? 'rh-saved-result' : 'rh-album-card relative flex flex-col rounded-xl border border-gray-200'}>
             <div className="rh-album-cover relative flex aspect-square items-center justify-center overflow-hidden">
@@ -1196,8 +1207,8 @@ function App() {
                 if (!pending) showAlbumDetails(album, event.currentTarget);
               }}
             >{searchActive && 'Open album'}</button>
-            <div className={searchActive ? 'rh-saved-actions' : 'relative z-20 mt-auto grid gap-1.5 p-2 pt-0'}>
-              <ShelfActions album={album} pending={pending} issue={saveErrors[key]}
+            <div className={searchActive ? 'rh-saved-actions' : 'rh-shelf-card-actions'}>
+              <ShelfActions album={album} card={!searchActive} pending={pending} issue={saveErrors[key]}
                 loadingAlbumId={loadingAlbumId}
                 onMove={moveAlbum} onRemove={startRemoval} onOpenIssue={openSaveIssue} />
             </div>
@@ -1248,27 +1259,12 @@ function App() {
       </div>
 
       <header className="rh-header border-b">
-        <div className="rh-shell mx-auto px-6 py-6">
-          <div className="mb-2 flex items-center justify-between gap-3 sm:mb-4">
-            <h1>Vinyl Collector</h1>
-            <button
-              type="button"
-              onClick={() => setShowSettings(true)}
-              className="rh-icon-button rounded-lg border p-2.5 text-gray-500 transition-colors"
-              title="Settings"
-              aria-label="Open settings"
-              aria-haspopup="dialog"
-            >
-              <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-            </button>
-          </div>
+        <div className="rh-shell rh-header-layout mx-auto px-6">
+          <h1>Vinyl Collector</h1>
 
-          {searchActive ? <p className="text-sm text-gray-600">Browsing <strong className="font-semibold text-gray-900">{shelfLabel[addOrigin?.shelf ?? viewMode]}</strong></p>
-            : <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
-            <div className="rh-shelf-controls flex items-center gap-2">
+          {searchActive ? <p className="rh-library-tools text-sm text-gray-600">Browsing <strong className="font-semibold text-gray-900">{shelfLabel[addOrigin?.shelf ?? viewMode]}</strong></p>
+            : <div className="rh-library-tools rh-shelf-toolbar">
+            <div className="rh-shelf-controls">
               <div className="rh-view-switcher flex" role="group" aria-label="Browse shelf">
                 {shelves.map(shelf => (
                   <button
@@ -1284,15 +1280,26 @@ function App() {
                 ))}
               </div>
             </div>
-            <div className="flex flex-wrap items-center justify-between gap-2 sm:flex-1">
-              <div className="rh-library-count text-sm" role="status" aria-atomic="true">
-                {currentShelf?.status === 'ready' && (
-                  <span>{shelfAlbums.length} {shelfAlbums.length === 1 ? 'album' : 'albums'} in {shelfLabel[viewMode]}</span>
-                )}
-              </div>
-              <SortControl sort={sortBy} onChange={changeSort} />
+            <div className="rh-library-count text-sm" role="status" aria-atomic="true">
+              {currentShelf?.status === 'ready' && (
+                <span>{shelfAlbums.length} {shelfAlbums.length === 1 ? 'album' : 'albums'} in {shelfLabel[viewMode]}</span>
+              )}
             </div>
+            <SortControl shelf sort={sortBy} onChange={changeSort} />
           </div>}
+          <button
+            type="button"
+            onClick={() => setShowSettings(true)}
+            className="rh-icon-button rh-settings-button rounded-lg border text-gray-500 transition-colors"
+            title="Settings"
+            aria-label="Open settings"
+            aria-haspopup="dialog"
+          >
+            <svg aria-hidden="true" className="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </button>
         </div>
       </header>
 
@@ -1440,7 +1447,7 @@ function App() {
             <section className="rh-saved-section" aria-labelledby="saved-results-title">
               <div className="rh-saved-heading-row mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <h2 ref={savedHeading} id="saved-results-title" tabIndex={-1} className="rh-result-heading text-lg font-semibold">Saved albums</h2>
-                {savedCount > 0 && !catalogActive && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search online catalogs</button>}
+                {savedCount > 0 && !catalogActive && !shortName && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search online catalogs</button>}
                 {(savedCount > 1 || results?.nextOffset !== undefined) && <SortControl sort={sortBy} onChange={changeSort} />}
               </div>
               {searchState.status === 'error' && (

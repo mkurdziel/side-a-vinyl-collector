@@ -120,6 +120,7 @@ describe('library and catalog search', () => {
     await act(async () => renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }));
     expect(search).toHaveBeenCalledExactlyOnceWith('O', expect.any(AbortSignal), 'saved', undefined, 0, 'title');
     expect(button('Open O by Unknown Fixture Artist, Wishlist, saved record 20')).toBeDefined();
+    expect(button('Search online catalogs')).toBeUndefined();
     expect(readSearchSession()?.drafts.name).toMatchObject({ query: 'O', scope: 'catalog', exactName: true });
 
     await act(async () => renderer.unmount());

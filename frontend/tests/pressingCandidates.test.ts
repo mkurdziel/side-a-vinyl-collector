@@ -468,18 +468,53 @@ describe('pressing candidate evidence', () => {
     })); });
     await toggleComparison();
     await act(async () => button('Check runout markings').props.onClick());
+    const heading = renderer!.root.findAllByType('h3').find(node => textOf(node) === 'Runout marks on these pressings')!;
+    const announcement = heading.parent!.findByProps({ role: 'status' });
+    const fieldset = renderer!.root.findByType('fieldset');
+    expect(fieldset.children.indexOf(heading.parent!)).toBeLessThan(fieldset.children.indexOf(fieldset.findByType('ul')));
+    expect(announcement.props['aria-atomic']).toBe('true');
+    expect(textOf(announcement)).toBe('');
     expect(status()).toContain('Discogs release 2. Couldn’t load runout markings.');
     expect(status().some(message => message.includes('for these pressings'))).toBe(false);
 
     await act(async () => button('Retry runout markings').props.onClick());
     const missing = () => status().filter(message => message.includes('Discogs lists no runout markings'));
     expect(missing()).toEqual(['Discogs lists no runout markings for these pressings. Compare the format on your sleeve or label. If you’re unsure, save the album without a pressing.']);
+    expect(heading.parent!.findByProps({ role: 'status' })).toBe(announcement);
+    expect(heading.props['aria-describedby']).toBe(announcement.props.id);
+    expect(textOf(announcement)).toBe(missing()[0]);
 
     await act(async () => button('More pressings').props.onClick());
     await act(async () => button('Pin').props.onClick());
     await act(async () => button('Pin').props.onClick());
     expect(radios()).toEqual([4, 5]);
-    expect(missing()).toEqual(['Discogs lists no runout markings for these pressings. Check the catalog number and label on your copy. If you’re unsure, save the album without a pressing.']);
+    expect(missing()).toEqual(['Discogs lists no runout markings for the pinned pressings. Check the catalog number and label on your copy. If you’re unsure, save the album without a pressing.']);
+    expect(textOf(announcement)).toBe('');
+    expect(heading.props['aria-describedby']).toBeUndefined();
+  });
+
+  it('keeps the no-runout guidance scoped when a pinned pressing still has markings', async () => {
+    const sameNumber = choices.map(choice => ({ releaseId: choice.releaseId, pressing: { catalogNumber: 'S-5233' } }));
+    const onSelect = vi.fn();
+    getPressingDetails.mockImplementation(async (releaseId: number) => ({
+      pressing: releaseId === 2 ? { matrixRunouts: [{ value: 'S-5233 B2' }] } : null,
+    }));
+    await act(async () => { renderer = create(createElement(CandidatePicker, {
+      choices: sameNumber, onSelect, uncertainAction: 'If you’re unsure, keep the current pressing.',
+    })); });
+    await toggleComparison();
+    const pin = renderer!.root.findByProps({ 'aria-label': 'Pin for comparison · S-5233, Discogs release 2' });
+    await act(async () => pin.props.onClick());
+    await act(async () => button('Check runout marks').props.onClick());
+
+    const heading = renderer!.root.findAllByType('h3').find(node => textOf(node) === 'Runout marks on these pressings')!;
+    const announcement = heading.parent!.findByProps({ role: 'status' });
+    expect(textOf(announcement)).toBe('Discogs lists no runout markings for the unpinned pressings shown here. Check the catalog number and label on your copy. If you’re unsure, keep the current pressing.');
+    const shortlist = renderer!.root.findByType('section');
+    expect(textOf(shortlist)).toContain('S-5233 B2');
+    expect(textOf(shortlist)).not.toContain('Discogs lists no runout markings');
+    expect(renderer!.root.findAllByProps({ type: 'radio' }).every(radio => !radio.props.checked)).toBe(true);
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it('shares an in-flight and completed lookup with the comparison table without sharing cancellation', async () => {
