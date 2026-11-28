@@ -7,6 +7,67 @@ export interface PressingCandidate {
   catalogNumberMatch?: 'exact' | 'unverified';
 }
 
+function formatParts(value: string) {
+  return value.split('·').map(part => part.trim()).filter(Boolean);
+}
+
+export function concisePressingValue(value: string, limit: number) {
+  if (value.length <= limit) return value;
+  const boundary = value.lastIndexOf(' · ', limit - 1);
+  return `${value.slice(0, boundary > 0 ? boundary : limit - 1).trimEnd()}…`;
+}
+
+export function summarizePressingFormat(value: string, formats: readonly string[], limit: number): string {
+  const summary = concisePressingValue(value, limit);
+  if (summary === value) return value;
+
+  // A shorter sibling can fit a deciding qualifier that this value would hide.
+  const visiblePrefix = summary.slice(0, -1).toLowerCase();
+  const peers = formats.filter(format => {
+    const normalized = format.toLowerCase();
+    return normalized !== value.toLowerCase() &&
+      (normalized === visiblePrefix || normalized.startsWith(`${visiblePrefix} · `) ||
+        concisePressingValue(format, limit).toLowerCase() === summary.toLowerCase());
+  });
+  if (!peers.length) return summary;
+
+  const [medium, ...qualifiers] = formatParts(value);
+  if (!medium || !qualifiers.length) return summary;
+  const peerParts = peers.map(format => new Set(formatParts(format).map(part => part.toLowerCase())));
+  const differences = qualifiers.map(part => ({
+    part,
+    occurrences: peerParts.filter(parts => parts.has(part.toLowerCase())).length,
+  })).filter(({ occurrences }) => occurrences < peers.length)
+    .sort((a, b) => a.occurrences - b.occurrences);
+  if (!differences.length) return summary;
+
+  const facts = [medium];
+  // Keep LP or other short physical format data when it leaves room for the differences.
+  const physicalFormat = qualifiers[0];
+  if (/^(LP|EP|Single|\d{1,2}")$/i.test(physicalFormat) && physicalFormat !== differences[0].part &&
+    [medium, physicalFormat, differences[0].part].join(' · ').length <= limit) {
+    facts.push(physicalFormat);
+  }
+  for (const { part } of differences) {
+    const room = limit - facts.join(' · ').length - ' · '.length;
+    if (part.length <= room) facts.push(part);
+    else if (facts.length === 1 && room >= 6) facts.push(concisePressingValue(part, room));
+  }
+  return facts.join(' · ');
+}
+
+const mediumNames = new Map([
+  ['vinyl', 'Vinyl'], ['lp', 'Vinyl'], ['cd', 'CD'], ['cdr', 'CDr'], ['cassette', 'Cassette'],
+  ['shellac', 'Shellac'], ['file', 'File'], ['dvd', 'DVD'], ['blu-ray', 'Blu-ray'], ['minidisc', 'MiniDisc'],
+]);
+
+export function pressingMedia(format = ''): string[] {
+  return Array.from(new Set(formatParts(format).flatMap(part => {
+    const medium = mediumNames.get(part.toLowerCase());
+    return medium ? [medium] : [];
+  })));
+}
+
 export function withPressingEvidence(choice: PressingCandidate, details?: PressingDetails | null,
   priority: 'listing' | 'release' = 'listing'): PressingCandidate {
   if (!details) return choice;

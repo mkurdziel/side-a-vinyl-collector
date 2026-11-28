@@ -408,6 +408,7 @@ export function PressingComparison({
     </button>
   );
   const selectedSummary = candidate && !alreadySaved && <PressingSelectionSummary compact searchedNumber={searchedNumber}
+    formats={candidates.map(choice => choice.pressing?.format ?? '')}
     choice={withPressingEvidence(candidate, lookupPressing, 'release')} />;
 
   return (
@@ -525,7 +526,6 @@ export function PressingComparison({
               </table>
               {candidates.length === 1 && recordHelp}
             </div>}
-            {selected && !lookupPending && <p className="text-sm text-gray-600">Side A saves one entry per artist and title.</p>}
             <div>
               <div className="rh-comparison-links">
                 {selected && onOpenSaved && (
@@ -558,7 +558,9 @@ export function PressingComparison({
                       ? `${selected.title} in ${selectedShelf}` : savedCopyLabel(selected)}?
                   </p>
                   {selectedSummary}
-                  {savedRelease && availableCopies.length === 1 && <p className="text-xs text-gray-600">Currently saved as Discogs release {savedRelease}.</p>}
+                  <p className="text-xs text-gray-600">{savedRelease && availableCopies.length === 1
+                    ? `This replaces Discogs release ${savedRelease} with the selected release.`
+                    : 'This links the exact Discogs release to your saved entry.'}</p>
                   {saveStatus === 'failed' && <p id={saveErrorId} role="alert" className="text-sm text-red-600">{saveSelection?.message}</p>}
                   <div className="flex flex-wrap items-center justify-end gap-1.5">
                     <button type="button" className="rh-lookup-link" aria-disabled={busy} onClick={cancelSave}>Cancel</button>
@@ -574,6 +576,7 @@ export function PressingComparison({
               ) : (
                 <>
                   {selectedSummary}
+                  {selectedSummary && !lookupPending && <p className="text-xs text-gray-600">Confirmation records the exact Discogs release on your {selectedShelf} entry.</p>}
                   {alreadySaved && !savedReleaseChanged && <p className="text-sm text-gray-600">This pressing is already saved.</p>}
                   <div className="flex flex-wrap items-center justify-end gap-1.5">
                     {keepPressing}

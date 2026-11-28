@@ -13,6 +13,7 @@ import { SaveDestinationActions, type DestinationAction } from './components/Sav
 import { ModalDialog } from './components/ModalDialog';
 import { ManualAlbumDialog, type ManualAlbumDraft } from './components/ManualAlbumDialog';
 import { CatalogPressingPicker } from './components/CatalogPressingPicker';
+import { RemovalHistory, type RemovalHistoryHandle } from './components/RemovalHistory';
 
 type Shelf = Album['status'];
 type SortBy = 'title' | 'artist' | 'date';
@@ -28,9 +29,6 @@ type ResultKind = 'saved' | 'catalog';
 type SearchRequest = { controller: AbortController; timer?: number };
 type SaveAction = DestinationAction | 'remove';
 type ShelfMove = { albumId: number; title: string; from: Shelf; to: Shelf };
-type RemovalDetails = Pick<Album, 'id' | 'title' | 'status'>;
-type PendingRemoval = RemovalDetails & { kind: 'removed'; undoToken: string; expiresAt: string };
-type RemovalReceipt = PendingRemoval | (RemovalDetails & { kind: 'restored' | 'unavailable'; message?: string });
 type SaveIssue = { message: string; albumId?: number; stale?: boolean };
 type LoadedPage = { target: string; message: string; trigger?: HTMLButtonElement };
 type LookupMode = 'name' | 'catalog-number';
@@ -56,20 +54,10 @@ const shelves: Shelf[] = ['collection', 'wishlist'];
 const resultKinds: ResultKind[] = ['saved', 'catalog'];
 const sortLabels: Record<SortBy, string> = { title: 'Album title', artist: 'Artist name', date: 'Date added' };
 const shelfLabel: Record<Shelf, string> = { collection: 'Collection', wishlist: 'Wishlist' };
-const removalStorageKey = 'side-a-last-removal';
 const albumGrid = 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4';
 const secondaryButton = 'min-h-11 rounded-lg border border-gray-300 bg-gray-100 px-3 text-sm font-semibold text-gray-900 hover:bg-gray-50';
 const searchesCatalog = (scope: SearchScope) => scope === 'catalog' || scope === 'catalog-number';
 const searchShelf = (scope: SearchScope) => scope === 'collection' || scope === 'wishlist' ? scope : undefined;
-
-function getPendingRemoval(): PendingRemoval | undefined {
-  try {
-    const entry = JSON.parse(sessionStorage.getItem(removalStorageKey) ?? 'null') as Partial<PendingRemoval> | null;
-    if (entry?.kind === 'removed' && Number.isSafeInteger(entry.id) && typeof entry.title === 'string' &&
-      (entry.status === 'collection' || entry.status === 'wishlist') && typeof entry.undoToken === 'string' &&
-      typeof entry.expiresAt === 'string' && Date.parse(entry.expiresAt) > Date.now()) return entry as PendingRemoval;
-  } catch { /* A blocked or expired session can still use the current page’s Undo. */ }
-}
 
 function sortAlbums(albums: Album[], sort: SortBy) {
   return [...albums].sort((first, second) => {
@@ -272,9 +260,6 @@ function App() {
   const [lookupPressingEdits, setLookupPressingEdits] = useState<Partial<Record<number, SavedTitleMatch>>>({});
   const albumDetailOpener = useRef<HTMLButtonElement | null>(null);
   const [albumToRemove, setAlbumToRemove] = useState<Album | null>(null);
-  const [removalReceipt, setRemovalReceipt] = useState<RemovalReceipt | undefined>(getPendingRemoval);
-  const [undoingRemoval, setUndoingRemoval] = useState(false);
-  const [removalIssue, setRemovalIssue] = useState<string>();
   const [lastShelfMove, setLastShelfMove] = useState<ShelfMove | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [discogsConfigured, setDiscogsConfigured] = useState<boolean | null>(null);
@@ -300,15 +285,14 @@ function App() {
   const latestScope = useRef<SearchScope>('saved');
   const searchSort = useRef(sortBy);
   const searchInput = useRef<HTMLInputElement>(null);
+  const onlineSearchAction = useRef<HTMLButtonElement>(null);
   const pressingReviewOpener = useRef<HTMLButtonElement>(null);
   const pressingReviewFallback = useRef<HTMLElement>(null);
   const catalogHeading = useRef<HTMLHeadingElement>(null);
   const savedHeading = useRef<HTMLHeadingElement>(null);
   const activeShelfButton = useRef<HTMLButtonElement>(null);
   const undoButton = useRef<HTMLButtonElement>(null);
-  const removalUndo = useRef<HTMLButtonElement>(null);
-  const removalNotice = useRef<HTMLParagraphElement>(null);
-  const restoringRemoval = useRef(false);
+  const removalHistory = useRef<RemovalHistoryHandle>(null);
 
   const viewMode = shelfRequest.view;
   const currentShelf = shelfResult?.request.view === viewMode &&
@@ -319,21 +303,6 @@ function App() {
   useEffect(() => {
     localStorage.setItem('albumSortBy', sortBy);
   }, [sortBy]);
-
-  useEffect(() => {
-    try {
-      if (removalReceipt?.kind === 'removed') sessionStorage.setItem(removalStorageKey, JSON.stringify(removalReceipt));
-      else sessionStorage.removeItem(removalStorageKey);
-    } catch { /* Undo still works in memory. */ }
-    if (removalReceipt?.kind !== 'removed' || undoingRemoval) return;
-    const remaining = Math.max(0, Date.parse(removalReceipt.expiresAt) - Date.now());
-    const timer = window.setTimeout(() => {
-      if (removalUndo.current?.ownerDocument.activeElement === removalUndo.current) removalNotice.current?.focus();
-      const { id, title, status } = removalReceipt;
-      setRemovalReceipt(current => current === removalReceipt ? { id, title, status, kind: 'unavailable', message: 'Undo expired.' } : current);
-    }, remaining);
-    return () => window.clearTimeout(timer);
-  }, [removalReceipt, undoingRemoval]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -961,46 +930,7 @@ function App() {
     setAlbumToRemove(null);
     setSelectedAlbum(current => current?.id === album.id ? null : current);
     setLastShelfMove(current => current?.albumId === album.id ? null : current);
-    const { id, title, status } = album;
-    setRemovalIssue(undefined);
-    setRemovalReceipt(receipt?.undoToken && Number.isFinite(Date.parse(receipt.expiresAt))
-      ? { id, title, status, kind: 'removed', undoToken: receipt.undoToken, expiresAt: receipt.expiresAt }
-      : { id, title, status, kind: 'unavailable' });
-    window.requestAnimationFrame(() => {
-      (removalUndo.current ?? removalNotice.current)?.focus();
-    });
-  };
-
-  const undoRemoval = async (receipt: PendingRemoval) => {
-    if (restoringRemoval.current) return;
-    restoringRemoval.current = true;
-    const action = removalUndo.current;
-    const focusOutcome = () => {
-      if (action?.ownerDocument.activeElement === action) {
-        window.requestAnimationFrame(() => removalNotice.current?.focus());
-      }
-    };
-    setUndoingRemoval(true);
-    setRemovalIssue(undefined);
-    try {
-      const { album } = await api.undoAlbumRemoval(receipt.id, receipt.undoToken);
-      const { id, title, status } = album;
-      setRemovalReceipt(current => current === receipt ? { id, title, status, kind: 'restored' } : current);
-      refreshLibrary();
-      focusOutcome();
-    } catch (error) {
-      const message = error instanceof ApiError ? error.message : 'Couldn’t undo the removal. Try again.';
-      if (error instanceof ApiError && (error.status === 409 || error.status === 400)) {
-        const { id, title, status } = receipt;
-        setRemovalReceipt(current => current === receipt ? { id, title, status, kind: 'unavailable', message } : current);
-        focusOutcome();
-      } else {
-        setRemovalIssue(message);
-      }
-    } finally {
-      restoringRemoval.current = false;
-      setUndoingRemoval(false);
-    }
+    removalHistory.current?.recordRemoval(album, receipt);
   };
 
   const results = searchState.status === 'ready' ? searchState.results : null;
@@ -1011,6 +941,7 @@ function App() {
   const searchActive = queryLength >= 2;
   const catalogActive = searchesCatalog(searchScope);
   const numberSearch = searchScope === 'catalog-number';
+  const continueOnline = addingByName && !catalogActive;
   const catalogUnavailable = catalogState.status === 'error' || !!catalogResults?.errors?.length;
   const pressingReviewIssue = pressingReview && saveErrors[catalogKey(pressingReview.album)];
   const pressingReviewDuplicate = pressingReviewIssue?.albumId;
@@ -1230,13 +1161,10 @@ function App() {
                 <option value="wishlist">Wishlist only</option>
                 <option value="catalog">Shelves and online catalogs</option>
               </select>
-              {addingByName && !catalogActive && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>
-                Search online catalogs
-              </button>}
             </div>}
               <button
                 type="button"
-                className="rh-primary-action rh-add-trigger flex shrink-0 items-center justify-center gap-1 px-2.5 py-2 text-sm font-semibold sm:gap-2 sm:px-4"
+                className={`${continueOnline ? secondaryButton : 'rh-primary-action'} rh-add-trigger flex shrink-0 items-center justify-center gap-1 px-2.5 py-2 text-sm font-semibold sm:gap-2 sm:px-4`}
                 aria-label="Add Album"
                 aria-haspopup="dialog"
                 onClick={() => setShowAddMenu(true)}
@@ -1246,6 +1174,11 @@ function App() {
                 </svg>
                 Add<span className="hidden sm:inline"> Album</span>
               </button>
+            {continueOnline && <div className="rh-online-continuation">
+              <p className="text-sm">Find records outside your shelves.</p>
+              <button ref={onlineSearchAction} type="button" className="rh-primary-action px-3 text-sm font-semibold"
+                onClick={() => openNameSearch()}>Search online catalogs</button>
+            </div>}
           </form>
         </div>
 
@@ -1258,29 +1191,7 @@ function App() {
           viewMode={viewMode}
         />
 
-        {removalReceipt && (
-          <aside className="mb-4 rounded-xl border border-gray-300 bg-white p-3" aria-label="Latest album removal">
-            <p ref={removalNotice} role="status" tabIndex={-1} className="text-sm font-medium [overflow-wrap:anywhere]">
-              {removalReceipt.kind === 'restored'
-                ? `“${removalReceipt.title}” restored to ${shelfLabel[removalReceipt.status]}.`
-                : `“${removalReceipt.title}” removed from ${shelfLabel[removalReceipt.status]}.`}
-              {removalReceipt.kind === 'unavailable' && removalReceipt.message && ` ${removalReceipt.message}`}
-            </p>
-            {removalIssue && <p role="alert" className="mt-1 text-sm text-red-600">{removalIssue}</p>}
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              {removalReceipt.kind === 'removed' && <button ref={removalUndo} type="button" className={secondaryButton}
-                aria-disabled={undoingRemoval} aria-busy={undoingRemoval} onClick={() => void undoRemoval(removalReceipt)}>
-                {undoingRemoval ? 'Restoring…' : removalIssue ? 'Retry undo removal' : 'Undo removal'}
-              </button>}
-              <button type="button" className="rh-lookup-link" disabled={undoingRemoval}
-                aria-label="Dismiss removal notice" onClick={() => {
-                  setRemovalReceipt(undefined);
-                  setRemovalIssue(undefined);
-                  focusSearch();
-                }}>Dismiss</button>
-            </div>
-          </aside>
-        )}
+        <RemovalHistory ref={removalHistory} onRestored={() => refreshLibrary()} fallbackFocus={searchInput} />
 
         {lastShelfMove && (
           <aside className="mb-4 rounded-xl border border-gray-300 bg-white p-3" aria-label="Latest shelf move">
@@ -1347,7 +1258,7 @@ function App() {
             <section className="rh-saved-section" aria-labelledby="saved-results-title">
               <div className="rh-saved-heading-row mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <h2 ref={savedHeading} id="saved-results-title" tabIndex={-1} className="rh-result-heading text-lg font-semibold">Saved albums</h2>
-                {savedCount > 0 && searchScope !== 'catalog' && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search catalogs too</button>}
+                {savedCount > 0 && !catalogActive && !continueOnline && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search online catalogs</button>}
                 {(savedCount > 1 || results?.nextOffset !== undefined) && <SortControl sort={sortBy} onChange={changeSort} />}
               </div>
               {searchState.status === 'error' && (
@@ -1371,7 +1282,7 @@ function App() {
               </>}
               {results && savedCount === 0 && <>
                 <p role="status" className="text-sm text-gray-600 [overflow-wrap:anywhere]">No saved albums match “{searchQuery.trim()}”.</p>
-                {searchScope !== 'catalog' && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search catalogs too</button>}
+                {!catalogActive && !continueOnline && <button type="button" className="rh-lookup-link" onClick={() => openNameSearch()}>Search online catalogs</button>}
                 {searchScope !== 'catalog' && <button type="button" className="rh-lookup-link" onClick={() => changeLookupMethod('catalog-number')}>Search by catalog number</button>}
               </>}
             </section>
@@ -1524,6 +1435,9 @@ function App() {
             setShowAddMenu(false);
             changeLookupMethod('name');
             setAddingByName(true);
+            if (latestQuery.current.trim().length >= 2 && !searchesCatalog(latestScope.current)) {
+              window.requestAnimationFrame(() => onlineSearchAction.current?.focus());
+            }
           }}
           onCatalogNumberClick={() => {
             setShowAddMenu(false);
@@ -1568,8 +1482,7 @@ function App() {
 
       {showSettings && <SettingsModal restoreBlocked={discogsImporting} onClose={() => setShowSettings(false)} onRestore={() => {
         setLastShelfMove(null);
-        setRemovalReceipt(undefined);
-        setRemovalIssue(undefined);
+        removalHistory.current?.clear();
         setArtworkRevisions({});
         setLibraryArtworkRevision(Date.now());
         setShelfResult(null);

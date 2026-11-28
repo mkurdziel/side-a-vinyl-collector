@@ -23,6 +23,7 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
   onSaveWithoutPressing, onOpenDuplicate, opener, fallback }: Props) {
   const headingId = useId();
   const issueId = useId();
+  const saveGuidanceId = useId();
   const openDuplicate = useRef<HTMLButtonElement>(null);
   const evidenceRegion = useRef<HTMLDivElement>(null);
   const saveInProgress = useRef(false);
@@ -100,11 +101,17 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
           <div ref={evidenceRegion} className="rh-pressing-review__evidence p-4 sm:px-6" role="region" aria-label="Pressing evidence" tabIndex={0}>
             <PressingCandidates choices={choices} searchedNumber={searchedNumber} selectedId={selectedId}
               onSelect={setSelectedId} onReadEvidence={recordEvidence} disabled={!!saving || duplicate}
-              uncertainAction={onSaveWithoutPressing ? 'If you’re unsure, save the album without a pressing.' : undefined} />
+              uncertainAction={onSaveWithoutPressing ? 'If you’re unsure, you can save without pressing below.' : undefined} />
           </div>
           <footer className="rh-pressing-review__footer grid gap-2 px-4 py-2 sm:px-6" role="group" aria-label={duplicate ? 'Saved album' : 'Save album'}>
             {selectedChoice && !duplicate && <PressingSelectionSummary compact searchedNumber={searchedNumber}
+              formats={choices.map(choice => choice.pressing?.format ?? '')}
               choice={withPressingEvidence(selectedChoice, evidence[selectedChoice.releaseId])} />}
+            {!duplicate && <p id={saveGuidanceId} className="text-xs text-gray-600">
+              {onSaveWithoutPressing
+                ? `Save an exact Discogs release, or save the album to ${shelf} and identify its pressing later.`
+                : `Choose an exact Discogs release to save to ${shelf}.`}
+            </p>}
             {saveIssue && <p id={issueId} role="alert" className="text-sm text-red-600">{saveIssue}</p>}
             <div className="flex flex-wrap items-center justify-end gap-1.5">
               <button type="button" className="rh-lookup-link aria-disabled:opacity-60" onClick={close}
@@ -115,11 +122,11 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
               ) : (
                 <>
                   {onSaveWithoutPressing && <button type="button" className="rh-lookup-link aria-disabled:opacity-60" onClick={() => save()}
-                    aria-disabled={!!saving} aria-busy={saving === 'album'} aria-describedby={saveIssue ? issueId : undefined}>
+                    aria-disabled={!!saving} aria-busy={saving === 'album'} aria-describedby={saveIssue ? issueId : saveGuidanceId}>
                     {saving === 'album' ? `Saving album to ${shelf}…` : `Save without pressing to ${shelf}`}
                   </button>}
                   <button type="submit" className="rh-primary-action px-3 text-sm font-semibold aria-disabled:opacity-60"
-                    aria-disabled={!pressing || !!saving} aria-busy={saving === 'pressing'} aria-describedby={saveIssue ? issueId : undefined}>
+                    aria-disabled={!pressing || !!saving} aria-busy={saving === 'pressing'} aria-describedby={saveIssue ? issueId : saveGuidanceId}>
                     {saving === 'pressing' ? `Saving pressing to ${shelf}…` : `Save pressing to ${shelf}`}
                   </button>
                 </>

@@ -3,7 +3,7 @@ import { act, create, type ReactTestInstance } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PressingDetails } from '../src/services/api';
 import { PressingCandidates, PressingSelectionSummary, type PressingCandidate } from '../src/components/PressingCandidates';
-import { createPressingDetailsLoader, sharedCatalogNumber } from '../src/services/pressingEvidence';
+import { createPressingDetailsLoader, sharedCatalogNumber, summarizePressingFormat } from '../src/services/pressingEvidence';
 
 const { getPressingDetails } = vi.hoisted(() => ({ getPressingDetails: vi.fn() }));
 vi.mock('../src/services/api', async importOriginal => ({
@@ -17,6 +17,7 @@ const textOf = (node: ReactTestInstance): string => node.children.map(child => t
 const button = (label: string) => renderer!.root.findAllByType('button').find(control => textOf(control) === label)!;
 const status = () => renderer!.root.findAllByProps({ role: 'status' }).map(textOf);
 const radios = () => renderer!.root.findAllByProps({ type: 'radio' }).map(control => control.props.value);
+const radioLabels = () => renderer!.root.findAllByType('label').filter(node => node.findAllByProps({ type: 'radio' }).length > 0);
 
 afterEach(async () => {
   await act(async () => renderer?.unmount());
@@ -33,6 +34,13 @@ const choices: PressingCandidate[] = [
 ];
 
 describe('pressing candidate evidence', () => {
+  it('surfaces a long format qualifier when its shorter sibling already fits', () => {
+    const mono = 'Vinyl · LP · Album · Reissue · Mono';
+    const stereo = 'Vinyl · LP · Album · Reissue · Remastered · Stereo';
+    expect(summarizePressingFormat(stereo, [mono, stereo], 36)).toBe('Vinyl · LP · Remastered · Stereo');
+    expect(summarizePressingFormat(mono, [mono, stereo], 36)).toContain('Mono');
+  });
+
   it('counts normalized numbers per distinct release and ignores placeholder values', () => {
     expect(sharedCatalogNumber([
       { releaseId: 1, pressing: { catalogNumber: 'CÁT-12 · CAT 12 · alt 1 · none' } },
@@ -61,7 +69,7 @@ describe('pressing candidate evidence', () => {
       renderer = create(createElement(PressingCandidates, { choices: matching, onSelect: vi.fn(), searchedNumber: 'PCS 7088' }));
     });
 
-    const vinylRadio = renderer!.root.findAllByType('label')[0];
+    const vinylRadio = radioLabels()[0];
     expect(textOf(vinylRadio)).toMatch(/Catalog number PCS 7088.*Format Vinyl · LP · Album.*Country UK & Ireland.*Release year 2016.*Discogs release 9269057.*Label Apple Records/);
     expect(textOf(vinylRadio)).not.toContain('Universal Music Group');
     const listing = renderer!.root.findAllByType('details').find(node => textOf(node).includes('release 9269057'))!;
@@ -72,7 +80,7 @@ describe('pressing candidate evidence', () => {
     await act(async () => pinVinyl.props.onClick());
     await act(async () => button('More pressings').props.onClick());
 
-    const cdRadio = renderer!.root.findByType('label');
+    const cdRadio = radioLabels()[0];
     expect(textOf(cdRadio)).toMatch(/Catalog number PCS 7088.*Format CD · Album.*Country Japan.*Release year 1987.*Discogs release 1840188/);
     const pinCd = renderer!.root.findByProps({ 'aria-label': 'Pin for comparison · PCS 7088, CD · Album, Japan, 1987, Discogs release 1840188' });
     await act(async () => pinCd.props.onClick());
@@ -86,6 +94,63 @@ describe('pressing candidate evidence', () => {
     expect(textOf(renderer!.root)).toMatch(/Catalog number PCS 7088.*Format Vinyl · LP · Album.*Country UK & Ireland.*Release year 2016.*Discogs release 9269057/);
     expect(textOf(renderer!.root)).not.toContain('Apple Records');
     expect(renderer!.root.findAllByType('details')).toHaveLength(0);
+  });
+
+  it('surfaces distinguishing format qualifiers and groups full facts with the Discogs link', async () => {
+    const prefix = 'Vinyl · LP · Album · Reissue · Limited Edition';
+    const formats = [`${prefix} · Remastered · Stereo`, `${prefix} · Mono`];
+    const onSelect = vi.fn();
+    await act(async () => {
+      renderer = create(createElement(PressingCandidates, {
+        choices: formats.map((format, index) => ({
+          releaseId: index + 10, pressing: { catalogNumber: 'PCS 7088', format },
+        })),
+        onSelect,
+      }));
+    });
+
+    expect(radioLabels().map(textOf)).toEqual([
+      expect.stringContaining('Format Vinyl · LP · Remastered · Stereo'),
+      expect.stringContaining('Format Vinyl · LP · Mono'),
+    ]);
+    expect(radioLabels().map(textOf).every(label => !label.includes('Limited Edition'))).toBe(true);
+    expect(onSelect).not.toHaveBeenCalled();
+    const rows = renderer!.root.findAllByType('li');
+    rows.forEach((row, index) => {
+      const listing = row.findByType('details');
+      expect(listing.props.open).toBeUndefined();
+      expect(textOf(listing.findByType('summary'))).toBe(`Listing details for Discogs release ${index + 10}`);
+      expect(listing.findByType('a').props.href).toBe(`https://www.discogs.com/release/${index + 10}`);
+      expect(row.findAllByType('a')).toEqual([listing.findByType('a')]);
+      expect(textOf(listing)).toContain(formats[index]);
+    });
+  });
+
+  it('narrows a mixed-media list by actual medium without dropping a pin or selection', async () => {
+    const matching = [
+      { releaseId: 1, pressing: { format: 'Vinyl · LP · Album' } },
+      { releaseId: 2, pressing: { format: 'Vinyl · 12" · Reissue' } },
+      { releaseId: 3, pressing: { format: 'Cassette · Album' } },
+      { releaseId: 4, pressing: { format: 'CD · Album' } },
+      { releaseId: 5, pressing: { format: 'Vinyl · CD · Limited Edition' } },
+    ];
+    getPressingDetails.mockResolvedValue({ pressing: null });
+    const onSelect = vi.fn();
+    await act(async () => {
+      renderer = create(createElement(PressingCandidates, { choices: matching, selectedId: 2, onSelect }));
+    });
+    const mediumFilter = renderer!.root.findByType('select');
+    expect(mediumFilter.findAllByType('option').map(textOf)).toEqual(['All media', 'Vinyl', 'Cassette', 'CD']);
+    await act(async () => button('Pin').props.onClick());
+    await act(async () => mediumFilter.props.onChange({ target: { value: 'CD' } }));
+    expect(radios()).toEqual([4, 5]);
+    expect(status()).toContain('2 CD pressings');
+    expect(textOf(renderer!.root.findByType('section'))).toContain('Discogs release 1');
+    expect(textOf(renderer!.root.findByType(PressingSelectionSummary))).toContain('Discogs release 2');
+    await act(async () => mediumFilter.props.onChange({ target: { value: 'Vinyl' } }));
+    expect(radios()).toEqual([1, 2, 5]);
+    expect(renderer!.root.findByProps({ type: 'radio', value: 2 }).props.checked).toBe(true);
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it('shows evidence before a radio selection and only fetches runouts for visible pressings on request', async () => {

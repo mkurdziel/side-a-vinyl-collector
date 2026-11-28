@@ -337,11 +337,15 @@ describe('library and catalog search', () => {
     await act(async () => button('Remove album').props.onClick());
     expect(button('Open Blue Train by John Coltrane, Collection, Discogs release 22')).toBeUndefined();
     await act(async () => { await vi.advanceTimersByTimeAsync(7000); });
-    const notice = renderer.root.findByProps({ 'aria-label': 'Latest album removal' });
-    expect(notice.findByProps({ role: 'status' }).children.join('')).toBe('“Blue Train” removed from Collection.');
+    const notice = renderer.root.findByProps({ 'aria-label': 'Album removal recovery' });
+    expect(notice.findAllByType('p').some(node =>
+      node.children.filter(child => typeof child === 'string').join('').includes('removed from Collection')
+    )).toBe(true);
     await act(async () => button('Undo removal').props.onClick());
     expect(undoAlbumRemoval).toHaveBeenCalledExactlyOnceWith(record.id, 'undo-removal');
-    expect(notice.findByProps({ role: 'status' }).children.join('')).toBe('“Blue Train” restored to Collection.');
+    expect(notice.findAllByProps({ role: 'status' }).some(node =>
+      node.children.join('') === '“Blue Train” restored to Collection.'
+    )).toBe(true);
     expect(button('Open Blue Train by John Coltrane, Collection, Discogs release 22')).toBeDefined();
   });
 
@@ -356,6 +360,7 @@ describe('library and catalog search', () => {
     expect(renderer.root.findByProps({ id: 'search-scope' }).props.value).toBe('wishlist');
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Blue Train');
     expect(search).toHaveBeenCalledExactlyOnceWith('Blue Train', expect.any(AbortSignal), 'saved', 'wishlist', 0, 'title');
+    expect(button('Search online catalogs').props.className).toContain('rh-primary-action');
     await act(async () => button('Search online catalogs').props.onClick());
     expect(renderer.root.findByProps({ id: 'search-scope' }).props.value).toBe('catalog');
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Blue Train');
