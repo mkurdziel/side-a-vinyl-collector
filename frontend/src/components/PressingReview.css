@@ -44,9 +44,38 @@
   padding-block: 4px;
 }
 
-.rh-pressing-preview thead span {
-  display: inline-block;
+.rh-pressing-preview__release {
+  display: block;
   color: var(--rh-ink-2);
+  font-weight: 400;
+}
+
+.rh-pressing-preview__find {
+  min-block-size: 44px;
+  width: 100%;
+  color: var(--rh-info-hover);
+  text-align: start;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.rh-pressing-preview__find .rh-pressing-preview__release {
+  display: inline-block;
+  text-decoration: inherit;
+}
+
+.rh-pressing-difference {
+  display: block;
+  color: var(--rh-ink-2);
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+
+.rh-pressing-candidate-role {
+  display: block;
+  color: var(--rh-info-hover);
+  font-size: 0.75rem;
+  font-weight: 600;
 }
 
 .rh-pressing-secondary > summary {

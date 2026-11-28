@@ -76,8 +76,10 @@ export function SaveDestinationActions({
   const savedShelfNames = [...new Set(matches.map(copy => shelfNames[copy.status]))];
   const matchedShelves = savedShelfNames.length ? savedShelfNames.join(' and ') : existingStatus && shelfNames[existingStatus];
   const savedPressing = matches.length === 1 ? savedPressingLabel(matches[0]) : undefined;
-  const reviewAction = sharedDestination ? 'Review catalog pressings' : 'Review pressings';
-  const reviewLabel = `${reviewAction} for ${catalogLabel ?? albumTitle}`;
+  const reviewAction = !sharedDestination ? 'Review pressings'
+    : existingStatus ? 'Compare with saved album' : 'Choose a pressing to add';
+  const reviewLabel = sharedDestination ? `${reviewAction} · ${catalogLabel ?? albumTitle}`
+    : `${reviewAction} for ${catalogLabel ?? albumTitle}`;
   const canReviewSaved = !!onOpenSaved && matches.length > 0;
   const canReviewNew = !!(catalogLabel ? onReviewPressings : onReviewNewPressings);
   const existingEntry = matches.length === 1 ? `your ${shelfNames[matches[0].status]} entry` : 'the saved entry you choose';

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { discogsReleaseSource } from '../albumDisplay';
 import {
   catalogNumberKey,
@@ -26,6 +26,7 @@ const fieldLimits = { label: 32, format: 36, country: 28, year: 4 };
 
 type MatrixRunouts = NonNullable<PressingDetails['matrixRunouts']>;
 type EvidenceResult = { status: 'error' } | { status: 'ready'; details: PressingDetails | null };
+type EvidenceState = 'pending' | 'unavailable';
 type OptionField = typeof optionFields[number];
 
 interface Props {
@@ -35,7 +36,9 @@ interface Props {
   searchedNumber?: string;
   savedReleaseId?: number;
   savedEvidence?: PressingDetails;
-  savedEvidenceState?: 'pending' | 'unavailable';
+  savedEvidenceState?: EvidenceState;
+  selectedEvidence?: PressingDetails;
+  selectedEvidenceState?: EvidenceState;
   disabled?: boolean;
   medium?: string;
   onMediumChange: (medium: string) => void;
@@ -95,9 +98,9 @@ const comparisonFacts = [
   { label: 'Catalog no.', read: candidateNumber, compare: catalogNumberKey },
 ];
 
-function comparisonRows(left: PressingCandidate, right: PressingCandidate, searchedNumber?: string) {
+function comparisonRows(left: PressingCandidate, right?: PressingCandidate, searchedNumber?: string) {
   return comparisonFacts.map(({ label, read, compare }) => {
-    const values = [read(left, searchedNumber), read(right, searchedNumber)];
+    const values = (right ? [left, right] : [left]).map(choice => read(choice, searchedNumber));
     const differs = hasKnownDifference(compare ? values.map(compare) : values);
     return { label, values, differs };
   }).filter(({ values }) => values.some(Boolean));
@@ -115,15 +118,20 @@ function firstAlternative(first: PressingCandidate, choices: readonly PressingCa
   return comparable.find(choice => comparisonRows(first, choice, searchedNumber).some(row => row.differs)) ?? comparable[0];
 }
 
-function FirstComparison({ left, right, savedReleaseId, savedEvidenceState, searchedNumber }: {
-  left: PressingCandidate;
-  right: PressingCandidate;
-  savedReleaseId?: number;
-  savedEvidenceState?: 'pending' | 'unavailable';
+interface PreviewColumn {
+  choice: PressingCandidate;
+  label: string;
+  state?: EvidenceState;
+  onFind?: () => void;
+}
+
+function PressingPreview({ reference, target, searchedNumber }: {
+  reference?: PreviewColumn;
+  target: PreviewColumn;
   searchedNumber?: string;
 }) {
-  const facts = comparisonRows(left, right, searchedNumber);
-  if (!facts.length) return null;
+  const columns = reference ? [reference, target] : [target];
+  const facts = comparisonRows(columns[0].choice, columns[1]?.choice, searchedNumber);
 
   // Keep true differences first. A missing value is only worth an early row when it helps explain an uncertain match.
   const priority = [...facts.filter(fact => fact.differs), ...facts.filter(fact => !fact.differs && fact.values.every(Boolean)),
@@ -133,20 +141,32 @@ function FirstComparison({ left, right, savedReleaseId, savedEvidenceState, sear
   if (importantMissing && !rows.includes(importantMissing) && !rows[2]?.differs) rows[2] = importantMissing;
 
   return <table className="rh-pressing-table rh-pressing-preview">
-    <caption className="sr-only">{left.releaseId === savedReleaseId ? 'Saved pressing and catalog alternative' : 'Compare two catalog pressings'}</caption>
+    <caption className="sr-only">Pressing evidence preview</caption>
     <thead><tr>
       <th scope="col">Evidence</th>
-      {[left, right].map(choice => <th key={choice.releaseId} scope="col">
-        {choice.releaseId === savedReleaseId ? 'Saved pressing' : 'Discogs'} <span className="font-normal">{choice.releaseId}</span>
-      </th>)}
+      {columns.map(({ choice, label, onFind }) => {
+        const heading = <>{label} <span className="rh-pressing-preview__release">{choice.releaseId}</span></>;
+        return <th key={choice.releaseId} scope="col">
+          {onFind ? <button type="button" className="rh-pressing-preview__find"
+            aria-label={`${label} · Find in list`} onClick={onFind}>{heading}</button> : heading}
+        </th>;
+      })}
     </tr></thead>
-    <tbody>{rows.map(({ label, values, differs }) => <tr key={label} className={differs ? 'rh-evidence-priority' : undefined}>
-      <th scope="row">{label}</th>
+    <tbody>{!rows.length && <tr><td colSpan={columns.length + 1}>No physical details listed yet.</td></tr>}
+    {rows.map(({ label, values, differs }) => <tr key={label} className={differs ? 'rh-evidence-priority' : undefined}>
+      <th scope="row">{label}{differs && <span className="rh-pressing-difference">Differs</span>}</th>
       {values.map((value, index) => <td key={index} className={value ? undefined : 'text-gray-600'}>
-        {value || (index === 0 && savedEvidenceState ? (savedEvidenceState === 'pending' ? 'Checking…' : 'Unavailable') : 'Unlisted')}
+        {value || (columns[index].state === 'pending' ? 'Checking…' : columns[index].state === 'unavailable' ? 'Unavailable' : 'Unlisted')}
       </td>)}
     </tr>)}</tbody>
   </table>;
+}
+
+export function RecordEvidenceHelp() {
+  return <details className="rh-pressing-secondary text-sm text-gray-600">
+    <summary>Where to check your record</summary>
+    <p className="max-w-prose pb-2">Look for the catalog number on the sleeve or center label. Check the label name and format, such as mono or stereo. The runout is the smooth band between the last track and the center label. Compare its etched or stamped markings with the Discogs listing.</p>
+  </details>;
 }
 
 function PressingFacts({ choice, varying, formats, searchedNumber, compact }: {
@@ -213,15 +233,16 @@ function PressingListingDetails({ choice }: { choice: PressingCandidate }) {
   );
 }
 
-export function PressingSelectionSummary({ choice, compact, formats, searchedNumber }: {
+export function PressingSelectionSummary({ choice, compact, formats, searchedNumber, id }: {
   choice: PressingCandidate;
   compact?: boolean;
   formats?: readonly string[];
   searchedNumber?: string;
+  id?: string;
 }) {
   const markings = choice.pressing?.matrixRunouts ?? [];
-  return <div className={`min-w-0 text-gray-600 [overflow-wrap:anywhere] ${compact ? 'text-xs' : 'border-t border-gray-200 pt-2 text-sm'}`}>
-    <p className={compact ? 'sr-only' : 'mb-0.5 text-xs'}>Selected pressing</p>
+  return <div id={id} className={`min-w-0 text-gray-600 [overflow-wrap:anywhere] ${compact ? 'text-xs' : 'border-t border-gray-200 pt-2 text-sm'}`}>
+    <p className="mb-0.5 text-xs font-semibold text-gray-900">Selected pressing</p>
     <PressingFacts choice={choice} compact={compact} formats={formats} searchedNumber={searchedNumber} />
     {!compact && <>
       {markings.length > 0 && <div className="mt-1">
@@ -323,7 +344,8 @@ function MissingRunouts({ choices, uncertainAction }: { choices: readonly Pressi
 }
 
 export function PressingCandidates({
-  choices, selectedId, onSelect, searchedNumber, savedReleaseId, savedEvidence, savedEvidenceState, disabled, loadDetails, onReadEvidence,
+  choices, selectedId, onSelect, searchedNumber, savedReleaseId, savedEvidence, savedEvidenceState, selectedEvidence, selectedEvidenceState,
+  disabled, loadDetails, onReadEvidence,
   medium = '', onMediumChange,
   uncertainAction = 'If you’re unsure, go back without choosing a pressing.',
 }: Props) {
@@ -336,9 +358,11 @@ export function PressingCandidates({
   const shortlistHeading = useRef<HTMLHeadingElement>(null);
   const runoutToggle = useRef<HTMLButtonElement>(null);
   const pageNotice = useRef<HTMLParagraphElement>(null);
+  const candidateList = useRef<HTMLUListElement>(null);
   const [checkingRunouts, setCheckingRunouts] = useState(false);
   const [showListingTools, setShowListingTools] = useState(false);
   const [requestedPage, setRequestedPage] = useState(0);
+  const [focusRequest, setFocusRequest] = useState<{ releaseId: number }>();
   const [loadLocally] = useState(createPressingDetailsLoader);
   const [pinnedIds, setPinnedIds] = useState<number[]>([]);
   const [evidence, setEvidence] = useState<Partial<Record<number, EvidenceResult>>>({});
@@ -382,8 +406,19 @@ export function PressingCandidates({
   const savedChoice = withDetails.find(choice => choice.releaseId === savedReleaseId);
   const saved = savedReleaseId === undefined ? undefined : withPressingEvidence(savedChoice ?? { releaseId: savedReleaseId }, savedEvidence, 'release');
   const first = saved ?? visible[0];
-  const second = first && (selection && selection.releaseId !== first.releaseId && !selectedOutsideMedia
-    ? selection : firstAlternative(first, visible, searchedNumber));
+  const suggested = !selection && first ? firstAlternative(first, visible, searchedNumber) ?? (saved ? undefined : first) : undefined;
+  const target = selection ?? suggested ?? (visible.length ? saved : undefined);
+  const reference = target && !selectedOutsideMedia && target.releaseId !== savedReleaseId
+    ? saved ?? visible.find(choice => choice.releaseId !== target.releaseId)
+    : undefined;
+  const targetLabel = selectedOutsideMedia ? 'Selected pressing outside filter'
+    : selection ? (target?.releaseId === savedReleaseId ? 'Saved pressing selected' : 'Selected pressing')
+      : suggested ? 'Suggested pressing' : 'Saved pressing';
+
+  useLayoutEffect(() => {
+    if (!focusRequest) return;
+    candidateList.current?.querySelector<HTMLInputElement>(`input[value="${focusRequest.releaseId}"]`)?.focus();
+  }, [focusRequest]);
 
   const goToPage = (next: number) => {
     setRequestedPage(next);
@@ -401,10 +436,24 @@ export function PressingCandidates({
     onMediumChange(next);
     setRequestedPage(0);
   };
+  const findChoice = (releaseId: number, inAllMedia = false) => {
+    const candidates = inAllMedia ? withDetails : available;
+    const index = candidates.findIndex(choice => choice.releaseId === releaseId);
+    if (index < 0) return;
+    if (inAllMedia) onMediumChange('');
+    setRequestedPage(Math.floor(index / pageSize));
+    setFocusRequest({ releaseId });
+  };
   const showSelection = () => {
     if (!selection) return;
-    onMediumChange('');
-    goToPage(Math.floor(withDetails.indexOf(selection) / pageSize));
+    findChoice(selection.releaseId, true);
+  };
+  const evidenceState = (choice: PressingCandidate): EvidenceState | undefined => {
+    if (choice.releaseId === savedReleaseId) return savedEvidenceState;
+    if (evidence[choice.releaseId]?.status === 'ready' || (choice.releaseId === selectedId && selectedEvidence)) return undefined;
+    if (evidence[choice.releaseId]?.status === 'error') return 'unavailable';
+    if (requests.some(request => request.releaseId === choice.releaseId)) return 'pending';
+    return choice.releaseId === selectedId ? selectedEvidenceState : undefined;
   };
 
   if (!unique.length) return null;
@@ -415,11 +464,17 @@ export function PressingCandidates({
       <legend className="text-sm font-semibold">Pressings from Discogs</legend>
       {requests.map(({ releaseId }) => <EvidenceRequest key={releaseId} releaseId={releaseId}
         loadDetails={loadDetails ?? loadLocally} onResult={recordEvidence} />)}
-      {first && second && <FirstComparison left={first} right={second} savedReleaseId={savedReleaseId}
-        savedEvidenceState={savedEvidenceState} searchedNumber={searchedNumber} />}
+      {target && <PressingPreview searchedNumber={searchedNumber}
+        reference={reference && { choice: reference, label: saved ? 'Saved pressing' : 'Catalog reference', state: evidenceState(reference) }}
+        target={{
+          choice: target.releaseId === savedReleaseId && saved ? saved : withPressingEvidence(target, selectedEvidence, 'release'),
+          label: targetLabel,
+          state: evidenceState(target),
+          onFind: available.some(choice => choice.releaseId === target.releaseId) ? () => findChoice(target.releaseId) : undefined,
+        }} />}
       {(shared || showRunoutGuide) && <div id={guideId} className="space-y-1 text-xs text-gray-600">
         {shared && <p>{shared.number} is shared by {shared.count} pressings in these results.</p>}
-        {showRunoutGuide && <p>Runouts are etched or stamped in the smooth band next to the center label.</p>}
+        {showRunoutGuide && <p>Look for etched or stamped markings in the smooth band between the last track and the center label.</p>}
       </div>}
       {pinned.length > 0 && (
         <section aria-labelledby={shortlistId} className="min-w-0 space-y-2 border-y border-gray-200 py-2">
@@ -493,7 +548,7 @@ export function PressingCandidates({
           {showListingTools && !pinned.length && <p id={pinHintId} className="text-xs text-gray-600">Pin up to two pressings to compare across pages.</p>}
         </div>
       )}
-      <ul id={candidatesId} className={`min-w-0 divide-y divide-gray-200 border-y border-gray-200 ${compareGrid
+      <ul id={candidatesId} ref={candidateList} className={`min-w-0 divide-y divide-gray-200 border-y border-gray-200 ${compareGrid
         ? '@min-[30rem]:grid @min-[30rem]:grid-cols-2 @min-[30rem]:gap-2 @min-[30rem]:divide-y-0 @min-[30rem]:border-y-0' : ''}
         ${compareGrid && visible.length > 2 ? '@min-[40rem]:grid-cols-3' : ''}`}>
         {visible.map(choice => {
@@ -508,8 +563,10 @@ export function PressingCandidates({
                   <input type="radio" name={name} value={releaseId} checked={checked} onChange={() => onSelect(releaseId)}
                     className="mt-1 shrink-0 accent-blue-600" />
                   <span className="min-w-0">
+                  {checked ? <span className="rh-pressing-candidate-role">{releaseId === savedReleaseId ? 'Saved pressing selected' : 'Selected pressing'}</span>
+                    : releaseId === suggested?.releaseId && <span className="rh-pressing-candidate-role">Suggested pressing</span>}
                     <PressingFacts choice={choice} varying={varying} formats={formats} searchedNumber={searchedNumber} />
-                    {releaseId === savedReleaseId && <span className="block text-gray-600">Your saved pressing</span>}
+                  {releaseId === savedReleaseId && !checked && <span className="block text-gray-600">Your saved pressing</span>}
                     {choice.catalogNumberMatch === 'unverified' && <span className="block text-gray-600">Check the number on the listing.</span>}
                   </span>
                 </label>
@@ -527,6 +584,7 @@ export function PressingCandidates({
         })}
       </ul>
       {visibleMissing && <MissingRunouts choices={inlineRunouts} uncertainAction={uncertainAction} />}
+      <RecordEvidenceHelp />
     </fieldset>
   );
 }

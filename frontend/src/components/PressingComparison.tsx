@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { ApiError, type DiscogsAlbum, type PressingDetails, type SavedTitleMatch } from '../services/api';
 import { catalogNumberKey, createPressingDetailsLoader, matchesPressingMedium, pressingFormatFacts, withPressingEvidence } from '../services/pressingEvidence';
+import { formatUndoDeadline } from '../services/undoDeadline';
 import { discogsReleaseSource, savedCatalogSource, savedCopyContext, savedCopyLabel, type CatalogSource } from '../albumDisplay';
 import { ModalDialog } from './ModalDialog';
-import { PressingCandidates, PressingSelectionSummary, type PressingCandidate } from './PressingCandidates';
+import { PressingCandidates, PressingSelectionSummary, RecordEvidenceHelp, type PressingCandidate } from './PressingCandidates';
 import './PressingReview.css';
 
 export type SavedAlbumOutcome = 'opened' | 'removed' | 'unavailable';
 export type OpenSavedAlbum = (id: number, opener: HTMLButtonElement, inlineError?: boolean) => Promise<SavedAlbumOutcome>;
-export type SavePressing = (copy: SavedTitleMatch, releaseId: number) => Promise<{ album: SavedTitleMatch; undoToken: string }>;
+export type SavePressing = (copy: SavedTitleMatch, releaseId: number) =>
+  Promise<{ album: SavedTitleMatch; undoToken: string; expiresAt?: string }>;
 export type UndoPressing = (copy: SavedTitleMatch, undoToken: string) => Promise<SavedTitleMatch>;
 
 export interface LookupPressing {
@@ -65,6 +67,7 @@ type PressingReceipt = {
   album: SavedTitleMatch;
   outcome: 'saved' | 'undone';
   undoToken?: string;
+  expiresAt?: string;
   error?: string;
 };
 
@@ -170,7 +173,9 @@ export function PressingComparison({
   const headingId = useId();
   const copySelectId = useId();
   const savePromptId = useId();
+  const selectionSummaryId = useId();
   const saveErrorId = useId();
+  const undoDeadlineId = useId();
   const removalId = useId();
   const savedEvidenceId = useId();
   const [selectedId, setSelectedId] = useState<number>();
@@ -228,6 +233,8 @@ export function PressingComparison({
   const alreadySaved = !!lookupRelease && selected?.discogs_id === lookupRelease;
   const currentReceipt = receipt?.album.id === selected?.id ? receipt : undefined;
   const pressingUpdated = currentReceipt?.outcome === 'saved' && currentReceipt.album.discogs_id === savedRelease;
+  const undoDeadline = pressingUpdated && onUndoPressing && currentReceipt.undoToken && currentReceipt.expiresAt
+    ? formatUndoDeadline(currentReceipt.expiresAt) : undefined;
   const lookupPending = lookupStatus === 'pending';
   const offerKeepPressing = !!onSavePressing && !!selected && (!pressingUpdated || !alreadySaved);
   const keepLabel = savedRelease ? 'Keep current pressing' : 'Leave pressing unconfirmed';
@@ -340,9 +347,9 @@ export function PressingComparison({
     saving.current = true;
     setSaveSelection({ ...saveSelection, status: 'saving' });
     try {
-      const { album, undoToken } = await onSavePressing(selected, lookupRelease);
+      const { album, undoToken, expiresAt } = await onSavePressing(selected, lookupRelease);
       rememberPressing(album, previousRelease);
-      setReceipt({ album, outcome: 'saved', undoToken });
+      setReceipt({ album, outcome: 'saved', undoToken, expiresAt });
       setSaveSelection(undefined);
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {
@@ -388,6 +395,7 @@ export function PressingComparison({
   const lookupPressing = availableDetails(lookupDetails);
   const savedPressing = availableDetails(savedDetails);
   const lookupRecord = [title, catalogArtist].filter(Boolean).join(' by ');
+  const lookupColumn = candidates.length > 1 ? 'Selected pressing' : 'Catalog match';
   const selectedShelf = selected?.status === 'collection' ? 'Collection' : 'Wishlist';
   const savedIdentityDiffers = selected && (selected.title !== title || selected.artist_name !== (catalogArtist ?? selected.artist_name));
   const action = openingId === selected?.id ? 'Opening saved copy…'
@@ -415,16 +423,12 @@ export function PressingComparison({
   const evidence = [...fieldRows, ...runoutRow].sort((a, b) => a.priority - b.priority);
   const lookupHasGaps = evidence.some(row => !row.lookupValue);
   const savedHasGaps = evidence.some(row => !row.savedValue);
-  const recordHelp = <details className="mt-1 max-w-prose text-sm text-gray-600">
-    <summary className="min-h-11 cursor-pointer content-center font-medium">Where to check your record</summary>
-    <p className="pb-2">Look for the catalog number on the sleeve or center label. The runout is the smooth band between the last track and the label. Match the etched or stamped letters and numbers to Matrix / Runout on Discogs when shown.</p>
-  </details>;
   const keepPressing = (
     <button type="button" className="rh-lookup-link" aria-disabled={busy} onClick={() => { if (!busy) close(); }}>
       {keepLabel}
     </button>
   );
-  const selectedSummary = candidate && !alreadySaved && <PressingSelectionSummary compact searchedNumber={searchedNumber}
+  const selectedSummary = candidate && !alreadySaved && <PressingSelectionSummary compact id={selectionSummaryId} searchedNumber={searchedNumber}
     formats={candidates.map(choice => choice.pressing?.format ?? '')}
     choice={withPressingEvidence(candidate, lookupPressing, 'release')} />;
   const savedEvidenceSummary = savedRelease && <>
@@ -468,11 +472,14 @@ export function PressingComparison({
                   </p>
                   {pressingUpdated && currentReceipt?.undoToken && onUndoPressing && (
                     <button type="button" className="rh-lookup-link" aria-disabled={busy} aria-busy={undoing}
-                      onClick={() => void undo()}>
+                      aria-describedby={undoDeadline ? undoDeadlineId : undefined} onClick={() => void undo()}>
                       {undoing ? 'Undoing…' : currentReceipt.error ? 'Retry undo' : 'Undo pressing change'}
                     </button>
                   )}
                 </div>
+                {undoDeadline && <p id={undoDeadlineId} className="text-xs font-normal text-gray-600">
+                  Undo until <time dateTime={currentReceipt?.expiresAt}>{undoDeadline}</time> here or in Recent library changes.
+                </p>}
                 {savedIdentityDiffers && <p className="mt-0.5 font-normal">{selected.title} by {selected.artist_name}</p>}
                 {currentReceipt?.error && <p ref={receiptNotice} tabIndex={-1} role="alert" className="text-sm font-normal text-red-600">{currentReceipt.error}</p>}
               </div>
@@ -515,6 +522,8 @@ export function PressingComparison({
                 onSelect={id => { setCandidateId(id); setSaveSelection(undefined); }}
                 searchedNumber={searchedNumber} savedReleaseId={savedRelease} savedEvidence={savedPressing}
                 savedEvidenceState={savedRelease && !savedDetails ? 'pending' : savedDetails?.status === 'failed' ? 'unavailable' : undefined}
+                selectedEvidence={lookupPressing}
+                selectedEvidenceState={lookupRelease && !lookupDetails ? 'pending' : lookupDetails?.status === 'failed' ? 'unavailable' : undefined}
                 disabled={busy || lookupPending} medium={medium} onMediumChange={value => { setMedium(value); setSaveSelection(undefined); }}
                 uncertainAction={offerKeepPressing ? (savedRelease ? 'If you’re unsure, keep the current pressing.' : 'If you’re unsure, leave the pressing unconfirmed.') : undefined}
                 loadDetails={loadPressingDetails} onReadEvidence={recordCandidateEvidence} />
@@ -533,8 +542,8 @@ export function PressingComparison({
                 <thead>
                   <tr>
                     <th scope="col">Evidence</th>
-                    <th scope="col" aria-label="Catalog match">Catalog match
-                      <ReleaseDetailsStatus column="Catalog match" releaseId={lookupRelease} details={lookupDetails} hasGaps={lookupHasGaps} onRetry={retryDetails} />
+                    <th scope="col" aria-label={lookupColumn}>{lookupColumn}
+                      <ReleaseDetailsStatus column={lookupColumn} releaseId={lookupRelease} details={lookupDetails} hasGaps={lookupHasGaps} onRetry={retryDetails} />
                     </th>
                     <th scope="col" aria-label="Saved copy">Saved copy
                       <ReleaseDetailsStatus column="Saved copy" releaseId={savedRelease} details={savedDetails}
@@ -545,7 +554,7 @@ export function PressingComparison({
                 <tbody>
                   {evidence.map(({ label, lookupValue, savedValue, priority }) => (
                     <tr key={label} className={priority === 0 ? 'rh-evidence-priority' : undefined}>
-                      <th scope="row">{label}</th>
+                      <th scope="row">{label}{priority === 0 && <span className="rh-pressing-difference">Differs</span>}</th>
                       <td>{lookupValue || missingEvidence(lookupRelease, lookupDetails)}</td>
                       <td>{savedValue || missingEvidence(savedRelease, savedDetails)}</td>
                     </tr>
@@ -555,7 +564,7 @@ export function PressingComparison({
                   </tr>
                 </tbody>
               </table>
-              {candidates.length === 1 && recordHelp}
+              {candidates.length === 1 && <RecordEvidenceHelp />}
             </EvidenceContainer>}
             <div>
               <div className="rh-comparison-links">
@@ -597,7 +606,8 @@ export function PressingComparison({
                     <button type="button" className="rh-lookup-link" aria-disabled={busy} onClick={cancelSave}>Cancel</button>
                     {keepPressing}
                     <button ref={confirmSave} type="button" className="rh-primary-action px-3 text-sm font-semibold"
-                      aria-disabled={busy} aria-busy={saveStatus === 'saving'} aria-describedby={saveStatus === 'failed' ? saveErrorId : undefined}
+                      aria-disabled={busy} aria-busy={saveStatus === 'saving'}
+                      aria-describedby={saveStatus === 'failed' ? `${saveErrorId} ${selectionSummaryId}` : selectionSummaryId}
                       onClick={() => void save()}>
                       {saveStatus === 'saving' ? 'Saving pressing…' : saveStatus === 'failed'
                         ? (saveSelection?.changeSelection ? 'Review selection' : 'Retry saving pressing') : 'Confirm pressing'}
@@ -613,7 +623,7 @@ export function PressingComparison({
                   <div className="flex flex-wrap items-center justify-end gap-1.5">
                     {keepPressing}
                     {candidate && !lookupPending && !alreadySaved && !selectionOutsideMedia && <button ref={saveTrigger} type="button"
-                      className="rh-primary-action px-3 text-sm font-semibold" aria-disabled={busy}
+                      className="rh-primary-action px-3 text-sm font-semibold" aria-disabled={busy} aria-describedby={selectionSummaryId}
                       onClick={() => {
                         if (!busy) setSaveSelection({ copyId: selected.id, releaseId: candidate.releaseId,
                           previousRelease: selected.discogs_id, status: 'confirming' });

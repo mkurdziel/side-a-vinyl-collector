@@ -52,8 +52,9 @@ describe('pressing candidate evidence', () => {
     });
     const comparison = renderer!.root.findByType('table');
     expect(textOf(comparison.findByType('thead'))).toContain('Saved pressing 22');
+    expect(textOf(comparison.findByType('thead'))).toContain('Suggested pressing 21');
     const evidenceRows = comparison.findByType('tbody').findAllByType('tr');
-    expect(evidenceRows.map(textOf)).toEqual(['CountryUSCanada', 'FormatVinylVinyl', 'MixStereoUnlisted']);
+    expect(evidenceRows.map(textOf)).toEqual(['CountryDiffersUSCanada', 'FormatVinylVinyl', 'MixStereoUnlisted']);
     expect(evidenceRows.map(row => row.props.className)).toEqual(['rh-evidence-priority', undefined, undefined]);
     expect(renderer!.root.findAllByProps({ type: 'radio' }).every(radio => !radio.props.checked)).toBe(true);
   });
@@ -96,7 +97,7 @@ describe('pressing candidate evidence', () => {
     const vinylRadio = radioLabels()[0];
     expect(textOf(vinylRadio)).toMatch(/Catalog number PCS 7088.*Format Vinyl · LP · Album.*Country UK & Ireland.*Release year 2016.*Discogs release 9269057.*Label Apple Records/);
     expect(textOf(vinylRadio)).not.toContain('Universal Music Group');
-    expect(renderer!.root.findAllByType('details')).toHaveLength(0);
+    expect(renderer!.root.findAllByType('details').map(textOf)).toEqual([expect.stringContaining('Where to check your record')]);
     await act(async () => button('Listing details and pins').props.onClick());
     const listing = renderer!.root.findAllByType('details').find(node => textOf(node).includes('release 9269057'))!;
     expect(listing.props.open).toBeUndefined();
@@ -173,6 +174,7 @@ describe('pressing candidate evidence', () => {
     await act(async () => mediumFilter.props.onChange({ target: { value: 'CD' } }));
     expect(radios()).toEqual([4, 5]);
     expect(status()).toContain('2 CD pressings');
+    expect(textOf(renderer!.root.findByType('table').findByType('thead'))).toBe('EvidenceSelected pressing outside filter 2');
     expect(textOf(renderer!.root.findByType('section'))).toContain('Discogs release 1');
     expect(button('Show selected pressing in All media')).toBeDefined();
     const pinnedSelection = renderer!.root.findAllByType('button').find(control => control.props['aria-label']?.startsWith('Select pressing ·'))!;
@@ -186,6 +188,35 @@ describe('pressing candidate evidence', () => {
     expect(radios()).toEqual([1, 2, 5]);
     expect(renderer!.root.findByProps({ type: 'radio', value: 2 }).props.checked).toBe(true);
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('links the preview to the correct radio without selecting it and distinguishes saved and selected pressings', async () => {
+    const onSelect = vi.fn();
+    const focus = vi.fn();
+    const querySelector = vi.fn(() => ({ focus }));
+    const savedReleaseId = 1;
+    const picker = (selectedId?: number) => createElement(CandidatePicker, { choices, savedReleaseId, selectedId, onSelect });
+    await act(async () => {
+      renderer = create(picker(), { createNodeMock: node => node.type === 'ul' ? { querySelector } : null });
+    });
+    const preview = () => textOf(renderer!.root.findByType('table').findByType('thead'));
+    expect(preview()).toBe('EvidenceSaved pressing 1Suggested pressing 2');
+    expect(textOf(radioLabels()[1])).toContain('Suggested pressing');
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Suggested pressing · Find in list' }).props.onClick());
+    expect(querySelector).toHaveBeenCalledExactlyOnceWith('input[value="2"]');
+    expect(focus).toHaveBeenCalledOnce();
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(renderer!.root.findByProps({ type: 'radio', value: 2 }).props.checked).toBe(false);
+
+    await act(async () => renderer!.update(picker(2)));
+    expect(preview()).toBe('EvidenceSaved pressing 1Selected pressing 2');
+    expect(textOf(radioLabels()[1])).toContain('Selected pressing');
+    expect(renderer!.root.findByProps({ type: 'radio', value: 2 }).props.checked).toBe(true);
+
+    await act(async () => renderer!.update(picker(1)));
+    expect(preview()).toBe('EvidenceSaved pressing selected 1');
+    expect(textOf(radioLabels()[0])).toContain('Saved pressing selected');
+    expect(textOf(renderer!.root.findByType('table'))).not.toContain('Differs');
   });
 
   it('shows evidence before a radio selection and only fetches runouts for visible pressings on request', async () => {

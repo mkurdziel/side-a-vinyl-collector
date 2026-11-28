@@ -24,6 +24,7 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
   const headingId = useId();
   const issueId = useId();
   const saveGuidanceId = useId();
+  const selectionSummaryId = useId();
   const openDuplicate = useRef<HTMLButtonElement>(null);
   const evidenceRegion = useRef<HTMLDivElement>(null);
   const saveInProgress = useRef(false);
@@ -107,7 +108,7 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
               uncertainAction={onSaveWithoutPressing ? 'If you’re unsure, you can save without pressing below.' : undefined} />
           </div>
           <footer className="rh-pressing-review__footer grid gap-2 px-4 py-2 sm:px-6" role="group" aria-label={duplicate ? 'Saved album' : 'Save album'}>
-            {selectedWithEvidence && !duplicate && <PressingSelectionSummary compact searchedNumber={searchedNumber}
+            {selectedWithEvidence && !duplicate && <PressingSelectionSummary compact id={selectionSummaryId} searchedNumber={searchedNumber}
               formats={choices.map(choice => choice.pressing?.format ?? '')}
               choice={selectedWithEvidence} />}
             {!duplicate && <p id={saveGuidanceId} role={selectionOutsideMedia ? 'status' : undefined} className="text-xs text-gray-600">
@@ -129,7 +130,8 @@ export function CatalogPressingPicker({ album, destination, searchedNumber, issu
                     {saving === 'album' ? `Saving album to ${shelf}…` : `Save without pressing to ${shelf}`}
                   </button>}
                   <button type="submit" className="rh-primary-action px-3 text-sm font-semibold aria-disabled:opacity-60"
-                    aria-disabled={!pressing || !!saving || selectionOutsideMedia} aria-busy={saving === 'pressing'} aria-describedby={saveIssue ? issueId : saveGuidanceId}>
+                    aria-disabled={!pressing || !!saving || selectionOutsideMedia} aria-busy={saving === 'pressing'}
+                    aria-describedby={[saveIssue ? issueId : saveGuidanceId, selectedWithEvidence && selectionSummaryId].filter(Boolean).join(' ')}>
                     {saving === 'pressing' ? `Saving pressing to ${shelf}…` : `Save pressing to ${shelf}`}
                   </button>
                 </>

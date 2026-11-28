@@ -285,18 +285,6 @@ summary:focus-visible,
 .rh-number-scope { grid-area: 2 / 2; align-self: center; padding-inline: 6px; }
 .rh-query-controls { grid-area: 2 / 1; }
 .rh-add-trigger { grid-area: 2 / 3; align-self: end; justify-self: end; }
-.rh-online-continuation {
-  grid-column: 1 / -1;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 4px 12px;
-  padding: 6px 8px;
-  border-radius: 10px;
-  background: var(--rh-info-wash);
-  color: var(--rh-ink-2);
-}
 .rh-result-heading { scroll-margin-block-start: 142px; }
 
 .rh-search input {
@@ -820,21 +808,6 @@ html:has(.rh-dialog[open]) .rh-page-toaster { display: none; }
   border-radius: 50%;
   animation: var(--animate-spin);
 }
-
-.rh-add-method {
-  display: flex;
-  align-items: flex-start;
-  gap: 1rem;
-  padding: 1rem;
-  text-align: left;
-  border: 1px solid var(--rh-edge-strong);
-  border-radius: 12px;
-  transition: background 160ms ease;
-}
-
-.rh-add-method:not(:disabled):hover { background: var(--rh-surface-2); }
-.rh-add-method:disabled { cursor: not-allowed; }
-.rh-add-method > :first-child { flex-shrink: 0; }
 
 .rh-upload-label:has(input:focus-visible) {
   outline: 2px solid var(--rh-info);
