@@ -1,9 +1,14 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { getTestPool } from '../setup/testContainers';
 import request from 'supertest';
 import express from 'express';
 import * as albumController from '../../src/controllers/albumController';
-import { errorHandler } from '../../src/middleware/errorHandler';
+import { AppError, errorHandler } from '../../src/middleware/errorHandler';
+import discogs from '../../src/services/discogs';
+
+vi.mock('../../src/services/discogs', () => ({
+  default: { isEnabled: () => true, getRelease: vi.fn() },
+}));
 
 describe('Album CRUD Operations', () => {
   let app: express.Application;
@@ -26,6 +31,7 @@ describe('Album CRUD Operations', () => {
     app.delete('/api/albums/:id', albumController.deleteAlbum);
     app.patch('/api/albums/:id/notes', albumController.updateAlbumNotes);
     app.patch('/api/albums/:id/status', albumController.updateAlbumStatus);
+    app.patch('/api/albums/:id/pressing', albumController.updateAlbumPressing);
     app.use(errorHandler);
   });
 
@@ -254,6 +260,126 @@ describe('Album CRUD Operations', () => {
         .get(`/api/albums/${albumId}`);
 
       expect(getResponse.body.album.notes).toBe('First pressing, mint condition');
+    });
+  });
+
+  describe('PATCH /api/albums/:id/pressing', () => {
+    const getRelease = vi.mocked(discogs.getRelease);
+    const release = { id: 101, discogsId: 101, artist: 'Björk (2)', album: 'Debut – Live', year: 2020 };
+    const otherPressing = { ...release, id: 102, discogsId: 102 };
+    const barcode = '0123456789012';
+    let albumId: number;
+
+    beforeEach(async () => {
+      getRelease.mockReset();
+      getRelease.mockImplementation(async id => id === release.id ? release : otherPressing);
+      const created = await request(app).post('/api/albums').send({
+        artist: 'bjork', album: 'Debut - Live', year: 1993, status: 'wishlist', barcode,
+        catalogListing: { source: 'discogs', kind: 'master', id: 60 },
+      }).expect(201);
+      albumId = created.body.album.id;
+    });
+
+    const changePressing = (discogsId: number, expectedDiscogsId: number | null) => request(app)
+      .patch(`/api/albums/${albumId}/pressing`).send({ discogsId, expectedDiscogsId });
+
+    it('confirms and corrects a pressing, changing only the Discogs reference', async () => {
+      await testPool.query(`UPDATE albums SET cover_image_url = 'https://example.com/cover.jpg',
+        local_cover_path = '/stored/cover.jpg', cover_art_fetched = TRUE,
+        musicbrainz_id = '317df805-36be-42cc-87a5-8ce7f438ed3a' WHERE id = $1`, [albumId]);
+      await request(app).patch(`/api/albums/${albumId}/notes`).send({ notes: 'Original sleeve' }).expect(200);
+      const before = await request(app).get(`/api/albums/${albumId}`).expect(200);
+      const mappingsBefore = await testPool.query('SELECT * FROM barcodes WHERE album_id = $1', [albumId]);
+
+      const confirmed = await changePressing(release.id, null).expect(200);
+      const corrected = await changePressing(otherPressing.id, release.id).expect(200);
+      expect(confirmed.body.album).toEqual({ ...before.body.album, discogs_id: release.id, catalog_listing: null });
+      const expected = { ...before.body.album, discogs_id: otherPressing.id, catalog_listing: null };
+      expect(corrected.body.album).toEqual(expected);
+      expect((await request(app).get('/api/albums?status=wishlist').expect(200)).body.albums).toEqual([expected]);
+      expect((await testPool.query('SELECT * FROM barcodes WHERE album_id = $1', [albumId])).rows).toEqual(mappingsBefore.rows);
+      expect(mappingsBefore.rows).toHaveLength(1);
+      expect(getRelease).toHaveBeenCalledWith(release.id, { reportUnavailable: true });
+    });
+
+    it.each([{ artist: 'Another artist' }, { album: 'Another album' }])('rejects a different release identity %j', async mismatch => {
+      getRelease.mockResolvedValueOnce({ ...release, ...mismatch });
+      await changePressing(release.id, null).expect(422);
+      expect((await request(app).get(`/api/albums/${albumId}`)).body.album.discogs_id).toBeNull();
+    });
+
+    it('rejects conflicting Discogs artist suffixes', async () => {
+      await testPool.query('UPDATE artists SET name = $1 WHERE id = (SELECT artist_id FROM albums WHERE id = $2)', ['Björk (3)', albumId]);
+      await changePressing(release.id, null).expect(422);
+    });
+
+    it('lets only one concurrent edit with the same expected pressing succeed', async () => {
+      const bothLookups = Promise.withResolvers<void>();
+      let lookupCount = 0;
+      getRelease.mockImplementation(async id => {
+        if (++lookupCount === 2) bothLookups.resolve();
+        await bothLookups.promise;
+        return id === release.id ? release : otherPressing;
+      });
+      const responses = await Promise.all([changePressing(release.id, null), changePressing(otherPressing.id, null)]);
+      expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
+      const winningId = responses.find(response => response.status === 200)?.body.album.discogs_id;
+      expect((await request(app).get(`/api/albums/${albumId}`)).body.album.discogs_id).toBe(winningId);
+    });
+
+    it('rejects a release already linked to a different record', async () => {
+      await request(app).post('/api/albums').send({ artist: 'Legacy artist', album: 'Legacy album', discogsId: release.id }).expect(201);
+      const response = await changePressing(release.id, null).expect(409);
+      expect(response.body.error).toContain('already linked');
+      expect((await request(app).get(`/api/albums/${albumId}`)).body.album.discogs_id).toBeNull();
+    });
+
+    it('rejects a removed record before contacting Discogs', async () => {
+      await request(app).delete(`/api/albums/${albumId}`).expect(200);
+      await changePressing(release.id, null).expect(404);
+      expect(getRelease).not.toHaveBeenCalled();
+    });
+
+    it('rechecks shelf membership after Discogs verification', async () => {
+      const lookupStarted = Promise.withResolvers<void>();
+      const lookupResult = Promise.withResolvers<typeof release>();
+      getRelease.mockImplementationOnce(() => {
+        lookupStarted.resolve();
+        return lookupResult.promise;
+      });
+      const pending = changePressing(release.id, null).then(response => response);
+      await lookupStarted.promise;
+      try {
+        await request(app).delete(`/api/albums/${albumId}`).expect(200);
+      } finally {
+        lookupResult.resolve(release);
+      }
+      expect((await pending).status).toBe(404);
+      const result = await testPool.query('SELECT discogs_id FROM albums WHERE id = $1', [albumId]);
+      expect(result.rows[0].discogs_id).toBeNull();
+    });
+
+    it('distinguishes a missing release from a retryable provider failure', async () => {
+      getRelease.mockResolvedValueOnce(null);
+      await changePressing(release.id, null).expect(422);
+      getRelease.mockRejectedValueOnce(new AppError('Discogs took too long to respond. Please try again.', 503));
+      const response = await changePressing(release.id, null).expect(503);
+      expect(response.body.error).toContain('try again');
+      expect((await request(app).get(`/api/albums/${albumId}`)).body.album.discogs_id).toBeNull();
+    });
+
+    it.each([
+      { discogsId: 101 }, { discogsId: 0, expectedDiscogsId: null },
+      { discogsId: '101', expectedDiscogsId: null }, { discogsId: 2_147_483_648, expectedDiscogsId: null },
+      { discogsId: 101, expectedDiscogsId: 2_147_483_648 },
+    ])('validates release IDs and requires an explicit expectation %j', async body => {
+      await request(app).patch(`/api/albums/${albumId}/pressing`).send(body).expect(400);
+      expect(getRelease).not.toHaveBeenCalled();
+    });
+
+    it('rejects saved album IDs out of database range', async () => {
+      await request(app).patch('/api/albums/2147483648/pressing').send({ discogsId: release.id, expectedDiscogsId: null }).expect(400);
+      expect(getRelease).not.toHaveBeenCalled();
     });
   });
 });

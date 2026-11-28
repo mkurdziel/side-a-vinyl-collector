@@ -4,6 +4,7 @@ interface AddMenuProps {
   onBarcodeClick: () => void;
   onImageClick: () => void;
   onSearchClick: () => void;
+  onCatalogNumberClick: () => void;
   onManualClick: () => void;
   onImportClick: () => void;
   onClose: () => void;
@@ -13,16 +14,8 @@ interface AddMenuProps {
 }
 
 export const AddMenu = ({
-  onBarcodeClick, onImageClick, onSearchClick, onManualClick, onImportClick, onClose, discogsConfigured, discogsCheckFailed, viewMode,
+  onBarcodeClick, onImageClick, onSearchClick, onCatalogNumberClick, onManualClick, onImportClick, onClose, discogsConfigured, discogsCheckFailed, viewMode,
 }: AddMenuProps) => {
-  const importIcon = (
-    <span className={`shrink-0 rounded-lg p-3 ${discogsConfigured ? 'bg-blue-50 group-hover:bg-blue-100' : 'bg-gray-50'}`}>
-      <svg className={`h-6 w-6 ${discogsConfigured ? 'text-blue-600' : 'text-gray-400'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-      </svg>
-    </span>
-  );
-
   return (
     <ModalDialog labelledBy="add-album-title" onClose={onClose}>
       <div className="rh-dialog-panel max-w-3xl">
@@ -54,6 +47,18 @@ export const AddMenu = ({
             </span>
           </button>
 
+          <button type="button" className="rh-add-method group" onClick={onCatalogNumberClick}>
+            <span className="p-3 bg-blue-50 rounded-lg group-hover:bg-blue-100 transition-colors">
+              <svg className="w-6 h-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7V5a1 1 0 0 1 1-1h5a2 2 0 0 1 1.4.6l8 8a2 2 0 0 1 0 2.8l-4 4a2 2 0 0 1-2.8 0l-8-8A2 2 0 0 1 4 10V7Zm4 1h.01" />
+              </svg>
+            </span>
+            <span className="min-w-0">
+              <span className="block text-base font-semibold text-gray-900 mb-1">Look up a catalog number</span>
+              <span className="block text-sm text-gray-600">Use the number on the sleeve or record label.</span>
+            </span>
+          </button>
+
           <button
             className="rh-add-method group"
             onClick={onBarcodeClick}
@@ -65,7 +70,7 @@ export const AddMenu = ({
             </span>
             <span className="min-w-0">
               <span className="block text-base font-semibold text-gray-900 mb-1">Look up a barcode</span>
-              <span className="block text-sm text-gray-600">Scan with your camera or type the digits.</span>
+              <span className="block text-sm text-gray-600">Scan the barcode or type the digits below it.</span>
             </span>
           </button>
 
@@ -84,19 +89,19 @@ export const AddMenu = ({
             </span>
           </button>
 
+        </div>
+        <div className="flex flex-wrap items-start gap-2 border-t border-gray-200 px-4 py-2 sm:px-6">
+          <button type="button" onClick={onManualClick}
+            className="min-h-11 rounded-lg px-2 text-sm font-semibold text-purple-600 hover:bg-gray-100">
+            Add album manually
+          </button>
           {discogsConfigured ? (
-            <button type="button" className="rh-add-method group" onClick={onImportClick}>
-              {importIcon}
-              <span className="min-w-0">
-                <span className="mb-1 block text-base font-semibold text-gray-900">Import from Discogs</span>
-                <span className="block text-sm text-gray-600">Copy records from Discogs into your {viewMode}.</span>
-              </span>
-            </button>
+            <button type="button" className="rh-lookup-link" aria-description={`Import into your ${viewMode}.`}
+              onClick={onImportClick}>Import from Discogs</button>
           ) : (
-            <div className="flex items-start gap-4 rounded-xl border border-gray-300 p-4">
-              {importIcon}
-              <div className="min-w-0">
-                <p className="mb-1 text-base font-semibold text-gray-900">Import from Discogs</p>
+            <details className="rh-lookup-recovery min-w-0">
+              <summary>Import from Discogs</summary>
+              <div className="px-2 pb-2">
                 {discogsCheckFailed ? (
                   <p className="text-sm text-gray-600" role="status">Could not check the Discogs connection. You can still add records by name.</p>
                 ) : discogsConfigured === null ? (
@@ -104,25 +109,13 @@ export const AddMenu = ({
                 ) : (
                   <>
                     <p className="text-sm text-gray-600">Ask your server administrator to connect Discogs before importing.</p>
-                    <a
-                      href="https://github.com/mkurdziel/side-a-vinyl-collector#configuration"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex min-h-11 items-center text-sm font-medium text-blue-600 underline underline-offset-2 hover:text-blue-700"
-                    >
-                      Discogs setup instructions
-                    </a>
+                    <a href="https://github.com/mkurdziel/side-a-vinyl-collector#configuration" target="_blank" rel="noreferrer"
+                      className="rh-comparison-source">Discogs setup instructions</a>
                   </>
                 )}
               </div>
-            </div>
+            </details>
           )}
-        </div>
-        <div className="border-t border-gray-200 px-4 py-2 sm:px-6">
-          <button type="button" onClick={onManualClick}
-            className="min-h-11 rounded-lg px-2 text-sm font-semibold text-purple-600 hover:bg-gray-100">
-            Add album manually
-          </button>
         </div>
       </div>
     </ModalDialog>

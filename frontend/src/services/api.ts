@@ -13,6 +13,7 @@ export interface PressingDetails {
   label?: string;
   catalogNumber?: string;
   country?: string;
+  year?: number;
 }
 
 export function isExactSavedMatch(match?: SavedMatch | null): boolean {
@@ -179,6 +180,13 @@ class ApiService {
     return this.request(`/api/albums/${id}/status`, {
       method: 'PATCH',
       body: JSON.stringify({ status, expectedStatus }),
+    });
+  }
+
+  updatePressing(id: number, discogsId: number, expectedDiscogsId: number | null): Promise<{ album: Album }> {
+    return this.request(`/api/albums/${id}/pressing`, {
+      method: 'PATCH',
+      body: JSON.stringify({ discogsId, expectedDiscogsId }),
     });
   }
 

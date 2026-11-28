@@ -12,11 +12,20 @@ const maxPressingChoices = 8;
 
 const words = (value: string): string[] =>
   value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
-const artistName = (value: string) => value.replace(/\s+\(\d+\)$/, '');
+const discogsArtistSuffix = /\s+\((\d+)\)$/;
+const artistName = (value: string) => value.trim().replace(discogsArtistSuffix, '');
 const numberQuery = (key: string) => /^\p{N}+$/u.test(key);
 
 export function catalogNameKey(value: string) {
   return words(value).join('');
+}
+
+export function sameCatalogArtistCredit(saved: string, release: string) {
+  const savedKey = catalogNameKey(artistName(saved));
+  if (!savedKey || savedKey !== catalogNameKey(artistName(release))) return false;
+  const savedSuffix = saved.trim().match(discogsArtistSuffix)?.[1];
+  const releaseSuffix = release.trim().match(discogsArtistSuffix)?.[1];
+  return !savedSuffix || !releaseSuffix || savedSuffix === releaseSuffix;
 }
 
 export function canExpandArtist(query: string) {

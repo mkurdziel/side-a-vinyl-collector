@@ -1,7 +1,10 @@
 import type { Request, Response } from 'express';
+import type { PoolClient } from 'pg';
 import pool from '../config/database';
 import { asyncHandler, AppError } from '../middleware/errorHandler';
 import type { AlbumWithArtist, CatalogListing } from '../types';
+import { catalogNameKey, sameCatalogArtistCredit } from '../services/catalogRelevance';
+import discogs from '../services/discogs';
 import musicbrainzService from '../services/musicbrainz';
 import storageService from '../services/storage';
 
@@ -84,10 +87,7 @@ export const getAllAlbums = asyncHandler(async (req: Request, res: Response) => 
   res.json({ albums: result.rows });
 });
 
-export const getAlbumById = asyncHandler(async (req: Request, res: Response) => {
-  const { id } = req.params;
-
-  const result = await pool.query<AlbumWithArtist>(`
+const savedAlbumQuery = `
     SELECT
       albums.*,
       artists.name as artist_name,
@@ -98,7 +98,10 @@ export const getAlbumById = asyncHandler(async (req: Request, res: Response) => 
     JOIN albums ON collections.album_id = albums.id
     JOIN artists ON albums.artist_id = artists.id
     WHERE albums.id = $1
-  `, [id]);
+`;
+
+export const getAlbumById = asyncHandler(async (req: Request, res: Response) => {
+  const result = await pool.query<AlbumWithArtist>(savedAlbumQuery, [req.params.id]);
 
   if (result.rows.length === 0) {
     throw new AppError('Album not found', 404);
@@ -106,6 +109,15 @@ export const getAlbumById = asyncHandler(async (req: Request, res: Response) => 
 
   res.json({ album: result.rows[0] });
 });
+
+async function lockAlbumIdentity(client: PoolClient, artist: string, ...releaseIds: (number | null)[]) {
+  // Take release locks in a consistent order before the artist lock shared with additions.
+  const ids = [...new Set(releaseIds)].filter(id => id !== null).sort((a, b) => a - b);
+  for (const id of ids) {
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended('discogs:' || $1::text, 0))", [id]);
+  }
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended('artist:' || lower($1), 0))", [artist]);
+}
 
 function parseCatalogListing(value: unknown): CatalogListing | null {
   if (value == null) return null;
@@ -144,9 +156,7 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
   try {
     await client.query('BEGIN');
 
-    // Serialize same-artist additions across requests. Artist names are not unique in older libraries.
-    if (discogsId) await client.query("SELECT pg_advisory_xact_lock(hashtextextended('discogs:' || $1::text, 0))", [discogsId]);
-    await client.query("SELECT pg_advisory_xact_lock(hashtextextended('artist:' || lower($1), 0))", [artist]);
+    await lockAlbumIdentity(client, artist, discogsId || null);
     const existing = await client.query<{ id: number }>(`
       SELECT albums.id FROM albums JOIN artists ON artists.id = albums.artist_id
       LEFT JOIN collections ON collections.album_id = albums.id
@@ -239,6 +249,69 @@ export const addAlbum = asyncHandler(async (req: Request, res: Response) => {
 function isShelf(status: unknown): status is 'collection' | 'wishlist' {
   return status === 'collection' || status === 'wishlist';
 }
+
+function isDatabaseId(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= 2_147_483_647;
+}
+
+function checkExpectedPressing(album: AlbumWithArtist | undefined, expectedDiscogsId: number | null): asserts album is AlbumWithArtist {
+  if (!album) throw new AppError('This album is no longer saved.', 404);
+  if ((album.discogs_id ?? null) !== expectedDiscogsId) {
+    throw new AppError('The saved pressing changed. Reopen the album and check the current pressing.', 409);
+  }
+}
+
+export const updateAlbumPressing = asyncHandler(async (req: Request, res: Response) => {
+  const rawId = String(req.params.id);
+  const id = Number(rawId);
+  const { discogsId, expectedDiscogsId } = req.body ?? {};
+  if (!/^\d+$/.test(rawId) || !isDatabaseId(id) || !isDatabaseId(discogsId)) {
+    throw new AppError('Choose a valid album and Discogs release ID.', 400);
+  }
+  if (expectedDiscogsId !== null && !isDatabaseId(expectedDiscogsId)) {
+    throw new AppError('Provide the current Discogs release ID, or null if the pressing is unconfirmed.', 400);
+  }
+
+  const { rows: [original] } = await pool.query<AlbumWithArtist>(savedAlbumQuery, [id]);
+  checkExpectedPressing(original, expectedDiscogsId);
+
+  if (!discogs.isEnabled()) throw new AppError('Discogs verification is unavailable. Try again later.', 503);
+  const release = await discogs.getRelease(discogsId, { reportUnavailable: true }).catch((error: unknown) => {
+    if (error instanceof AppError && error.statusCode === 503) throw error;
+    throw new AppError('Discogs verification is unavailable. Try again later.', 503);
+  });
+  if (!release || release.discogsId !== discogsId) {
+    throw new AppError('Discogs could not find this release. Choose another pressing.', 422);
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await lockAlbumIdentity(client, original.artist_name, expectedDiscogsId, discogsId);
+    const { rows: [saved] } = await client.query<AlbumWithArtist>(`${savedAlbumQuery} FOR UPDATE OF albums, collections`, [id]);
+    checkExpectedPressing(saved, expectedDiscogsId);
+    if (saved.artist_name !== original.artist_name || saved.title !== original.title) {
+      throw new AppError('This saved album changed. Reopen it and check the current pressing.', 409);
+    }
+
+    const title = catalogNameKey(release.album);
+    if (!title || title !== catalogNameKey(saved.title) || !sameCatalogArtistCredit(saved.artist_name, release.artist)) {
+      throw new AppError('This Discogs release is for a different artist or album. Choose another pressing.', 422);
+    }
+
+    await client.query('UPDATE albums SET discogs_id = $2, catalog_listing = NULL WHERE id = $1', [id, discogsId]);
+    await client.query('COMMIT');
+    res.json({ album: { ...saved, discogs_id: discogsId, catalog_listing: null } });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (error instanceof Error && 'code' in error && error.code === '23505') {
+      throw new AppError('This Discogs release is already linked to another album. Choose another pressing.', 409);
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+});
 
 export const deleteAlbum = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
