@@ -218,6 +218,49 @@ export function PressingPreview({ reference, target, searchedNumber, showAll = f
   </table>;
 }
 
+export function PressingPairSelects({ choices, firstId, secondId, onChangeFirst, onChangeSecond, searchedNumber, savedReleaseId }: {
+  choices: readonly PressingCandidate[];
+  firstId: number;
+  secondId: number;
+  onChangeFirst: (releaseId: number) => void;
+  onChangeSecond: (releaseId: number) => void;
+  searchedNumber?: string;
+  savedReleaseId?: number;
+}) {
+  const id = useId();
+  const formats = choices.map(choice => choiceField(choice, 'format'));
+  const options = choices.map(choice => ({
+    id: choice.releaseId,
+    label: [
+      `Discogs ${choice.releaseId}`,
+      choice.releaseId === savedReleaseId && 'Saved pressing',
+      candidateNumber(choice, searchedNumber),
+      summaryField(choice, 'format', formats),
+      summaryField(choice, 'country'),
+      summaryField(choice, 'year'),
+    ].filter(Boolean).join(' · '),
+  }));
+
+  return (
+    <div className="rh-pressing-pair" role="group" aria-label="Listings to compare">
+      {[
+        { label: 'First listing', value: firstId, excludedId: secondId, onChange: onChangeFirst },
+        { label: 'Second listing', value: secondId, excludedId: firstId, onChange: onChangeSecond },
+      ].map(({ label, value, excludedId, onChange }, index) => (
+        <div key={label} className="grid min-w-0 gap-1">
+          <label htmlFor={`${id}-${index}`} className="text-xs font-medium text-gray-600">{label}</label>
+          <select id={`${id}-${index}`} value={value} className="min-h-11 w-full min-w-0 rounded-lg border border-gray-300 px-2 text-sm"
+            onChange={event => onChange(Number(event.target.value))}>
+            {options.filter(option => option.id !== excludedId).map(option => (
+              <option key={option.id} value={option.id}>{option.label}</option>
+            ))}
+          </select>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function RecordEvidenceHelp() {
   return <details className="rh-pressing-secondary text-sm text-gray-600">
     <summary>Where to check your record</summary>
@@ -456,6 +499,7 @@ export function PressingCandidates({
   const candidateList = useRef<HTMLUListElement>(null);
   const { checkingRunouts: showRunouts, comparing: showComparison, page: requestedPage, medium, pins: pinnedIds, update } = preparation;
   const [focusRequest, setFocusRequest] = useState<{ releaseId: number }>();
+  const [chosenPair, setChosenPair] = useState<{ firstId: number; secondId: number }>();
   const focusShortlist = useRef(false);
   const shortlistOrigin = useRef<number>(undefined);
   const focusComparison = useRef(false);
@@ -475,6 +519,7 @@ export function PressingCandidates({
   });
   const formats = withDetails.map(choice => choiceField(choice, 'format'));
   const media = [...new Set(formats.flatMap(pressingMedia))];
+  const allowPairChoice = withDetails.length > 2;
   const allowPinning = withDetails.length > pageSize;
   const offerMediaFilter = !!medium || (showComparison && allowPinning && media.length > 1);
   const available = withDetails.filter(choice => matchesPressingMedium(choice, medium));
@@ -514,6 +559,14 @@ export function PressingCandidates({
       : example ? 'Catalog example' : 'Saved pressing';
   const cue = example && exampleCue(example, reference, searchedNumber);
   const needsChoiceJump = (morePressingsUrl || cue?.describeMarket) && visible.length > 0;
+  const comparisonChoices = saved ? [saved, ...withDetails.filter(choice => choice.releaseId !== savedReleaseId)] : withDetails;
+  const firstChoice = chosenPair && comparisonChoices.find(choice => choice.releaseId === chosenPair.firstId);
+  const secondChoice = chosenPair && comparisonChoices.find(choice => choice.releaseId === chosenPair.secondId);
+  const customPair = allowPairChoice && firstChoice && secondChoice ? { firstChoice, secondChoice } : undefined;
+  const rightListing = customPair?.secondChoice ?? target;
+  const leftListing = customPair?.firstChoice ?? reference ?? (allowPairChoice && rightListing
+    ? comparisonChoices.find(choice => choice.releaseId !== rightListing.releaseId) : undefined);
+  const canChoosePair = allowPairChoice && leftListing && rightListing;
 
   useLayoutEffect(() => {
     if (!showComparison || !focusComparison.current) return;
@@ -609,6 +662,11 @@ export function PressingCandidates({
     if (requests.some(request => request.releaseId === choice.releaseId)) return 'pending';
     return choice.releaseId === selectedId ? selectedEvidenceState : undefined;
   };
+  const listingColumn = (choice: PressingCandidate, label: string): PreviewColumn => ({
+    choice: choice.releaseId === selectedId ? withPressingEvidence(choice, selectedEvidence, 'release') : choice,
+    label,
+    state: evidenceState(choice),
+  });
 
   if (!unique.length) return null;
 
@@ -744,13 +802,21 @@ export function PressingCandidates({
             <button type="button" className="rh-lookup-link" aria-controls={candidatesId}
               onClick={() => returnToChoices()}>Back to pressings</button>
           </div>
-          {target && (unique.length > 1 || reference || !savedComparison) && <PressingPreview searchedNumber={searchedNumber}
-            reference={reference && { choice: reference, label: saved ? 'Saved pressing' : 'Catalog reference', state: evidenceState(reference) }}
-            target={{
-              choice: target.releaseId === savedReleaseId && saved ? saved : withPressingEvidence(target, selectedEvidence, 'release'),
-              label: targetLabel,
-              state: evidenceState(target),
-            }} />}
+          {rightListing && (unique.length > 1 || leftListing || !savedComparison) && <PressingPreview searchedNumber={searchedNumber}
+            reference={leftListing && listingColumn(leftListing, leftListing.releaseId === savedReleaseId ? 'Saved pressing'
+              : customPair ? 'First listing' : 'Catalog reference')}
+            target={listingColumn(rightListing.releaseId === savedReleaseId && saved ? saved : rightListing,
+              customPair ? (rightListing.releaseId === savedReleaseId ? 'Saved pressing' : 'Second listing') : targetLabel)} />}
+          {canChoosePair && <>
+            <p className="text-xs text-gray-600">Compare any two listings before choosing a pressing.</p>
+            <PressingPairSelects choices={comparisonChoices} searchedNumber={searchedNumber} savedReleaseId={savedReleaseId}
+              firstId={leftListing.releaseId} secondId={rightListing.releaseId}
+              onChangeFirst={firstId => setChosenPair({ firstId, secondId: rightListing.releaseId })}
+              onChangeSecond={secondId => setChosenPair({ firstId: leftListing.releaseId, secondId })} />
+            <p role="status" className="sr-only">
+              {customPair && `Comparing Discogs releases ${customPair.firstChoice.releaseId} and ${customPair.secondChoice.releaseId}.`}
+            </p>
+          </>}
           {savedComparison}
         </div>}
       </div>

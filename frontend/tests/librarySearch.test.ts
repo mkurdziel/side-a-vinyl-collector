@@ -108,7 +108,7 @@ describe('library and catalog search', () => {
     const shortTitle = { ...saved, id: 20, title: 'O', artist_name: 'Unknown Fixture Artist' };
     search.mockResolvedValue({ local: [shortTitle], discogs: [] });
     await renderLibrary();
-    await chooseScope('catalog');
+    await act(async () => button('Include catalogs').props.onClick());
     await editSearch('O');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
     expect(search).not.toHaveBeenCalled();
@@ -122,6 +122,7 @@ describe('library and catalog search', () => {
     expect(search).toHaveBeenCalledExactlyOnceWith('O', expect.any(AbortSignal), 'saved', undefined, 0, 'title');
     expect(button('Open O by Unknown Fixture Artist, Wishlist, saved record 20')).toBeDefined();
     expect(button('Search online catalogs')).toBeUndefined();
+    expect(button('Include catalogs')).toBeUndefined();
     expect(renderer.root.findByProps({ className: 'rh-lookup-source' }).children.join('')).toBe('Both shelves · Exact name');
     expect(renderer.root.findByProps({ id: 'search-scope' }).props.value).toBe('catalog');
     expect(readSearchSession()?.drafts.name).toMatchObject({ query: 'O', scope: 'catalog', exactName: true });
@@ -160,8 +161,11 @@ describe('library and catalog search', () => {
 
     const options = button('Search options, Name search, Both shelves');
     expect(options.props['aria-expanded']).toBe(false);
+    expect(renderer.root.findByType('header').findByProps({ htmlFor: 'sort-select' }).children).toEqual(['Sort']);
     await act(async () => options.props.onClick());
     expect(options.props['aria-expanded']).toBe(true);
+    expect(renderer.root.findByProps({ id: 'lookup-options' }).findAllByType('select').map(select => select.props.id))
+      .toEqual(['search-scope']);
     expect(button('Catalog number').props['aria-describedby']).toBe('catalog-number-clue');
     expect(button('Barcode').props['aria-describedby']).toBe('barcode-clue');
 
@@ -187,7 +191,7 @@ describe('library and catalog search', () => {
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('4006381333931');
     expect(saveDestination().props.value).toBe('wishlist');
     expect(searchCatalogNumber).toHaveBeenCalledTimes(1);
-    await act(async () => button('Album or artist').props.onClick());
+    await act(async () => button('Name').props.onClick());
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Coltrane');
     expect(saveDestination().props.value).toBe('wishlist');
   });
@@ -201,7 +205,10 @@ describe('library and catalog search', () => {
 
     expect(JSON.stringify(renderer.toJSON())).toContain('For digits below the bars, use barcode lookup.');
     await act(async () => button('Look up a barcode').props.onClick());
-    expect(renderer.root.findByProps({ id: 'manual-barcode' }).props.value).toBe('');
+    const barcodeField = renderer.root.findByProps({ id: 'manual-barcode' });
+    expect(barcodeField.props.value).toBe('');
+    expect(barcodeField.props['aria-describedby']).toBe('barcode-entry-hint');
+    expect(renderer.root.findByProps({ id: 'barcode-entry-hint' }).children.join('')).toContain('Your previous query wasn’t recognized as a barcode.');
     await act(async () => button('Back to search').props.onClick());
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('4006381333932');
     expect(searchCatalogNumber).toHaveBeenCalledTimes(1);
@@ -213,7 +220,7 @@ describe('library and catalog search', () => {
     const dialog = renderer.root.findByType(BarcodeScanner);
     await act(async () => dialog.findByProps({ id: 'manual-barcode' }).props.onChange({ target: { value: 'ABC-123' } }));
     await act(async () => dialog.findByType('form').props.onSubmit({ preventDefault: () => {} }));
-    await act(async () => button('Look up the catalog number on the sleeve or label').props.onClick());
+    await act(async () => button('Look up a catalog number').props.onClick());
 
     expect(renderer.root.findAllByType(BarcodeScanner)).toHaveLength(0);
     expect(button('Search options, Catalog number, Discogs')).toBeDefined();
@@ -249,13 +256,20 @@ describe('library and catalog search', () => {
 
   it('keeps a late shelf response out of the selected shelf and offers retry after failure', async () => {
     const collection = Promise.withResolvers<{ albums: Album[] }>();
+    const wishlist = Promise.withResolvers<{ albums: Album[] }>();
     getAlbums.mockReturnValueOnce(collection.promise)
-      .mockRejectedValueOnce(new Error('Offline'))
+      .mockReturnValueOnce(wishlist.promise)
       .mockResolvedValueOnce({ albums: [saved] });
     await renderLibrary();
+    const countStatus = () => renderer.root.findByType('header').findByProps({ role: 'status' });
+    expect(countStatus().children).toEqual(['Loading Collection…']);
+    expect(renderer.root.findByProps({ id: 'album-search' }).props.disabled).toBeUndefined();
 
     await act(async () => button('Wishlist').props.onClick());
     expect(getAlbums.mock.calls[0][1].aborted).toBe(true);
+    expect(countStatus().children).toEqual(['Loading Wishlist…']);
+    expect(JSON.stringify(renderer.toJSON()).match(/Loading Wishlist…/g)).toHaveLength(1);
+    await act(async () => wishlist.reject(new Error('Offline')));
     expect(JSON.stringify(renderer.toJSON())).toContain('Couldn’t load');
     expect(JSON.stringify(renderer.toJSON())).not.toContain('is empty');
     await act(async () => button('Retry').props.onClick());
@@ -277,7 +291,7 @@ describe('library and catalog search', () => {
     expect(search).toHaveBeenCalledExactlyOnceWith('Coltrane', expect.any(AbortSignal), 'saved', undefined, 0, 'title');
     expect(button('Open Blue Train by John Coltrane, Wishlist, saved record 1')).toBeDefined();
 
-    await chooseScope('catalog');
+    await act(async () => button('Include catalogs').props.onClick());
     expect(button('Open Blue Train by John Coltrane, Wishlist, saved record 1')).toBeDefined();
     expect(button('Add to Wishlist · Giant Steps by John Coltrane')).toBeUndefined();
     expect(renderer.root.findAllByProps({ 'aria-label': 'Save new matches to' })).toHaveLength(0);
@@ -559,7 +573,7 @@ describe('library and catalog search', () => {
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('ABC-123');
     expect(button('Return to Collection')).toBeDefined();
     expect(searchCatalogNumber).toHaveBeenCalledOnce();
-    await act(async () => button('Album or artist').props.onClick());
+    await act(async () => button('Name').props.onClick());
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Blue Train');
     expect(button('Return to Collection')).toBeDefined();
 
@@ -606,7 +620,7 @@ describe('library and catalog search', () => {
     await act(async () => button('Catalog number').props.onClick());
     await editSearch('ABC-404');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
-    await act(async () => button('Search by album or artist').props.onClick());
+    await act(async () => button('Search by name').props.onClick());
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Blue Train');
     expect(renderer.root.findByProps({ id: 'search-scope' }).props.value).toBe('catalog');
     expect(search).toHaveBeenLastCalledWith('Blue Train', expect.any(AbortSignal), 'catalog', undefined, 0, 'title');
@@ -929,7 +943,7 @@ describe('library and catalog search', () => {
     await editSearch('ABC-123');
     await act(async () => { await vi.advanceTimersByTimeAsync(400); });
 
-    await act(async () => button('Album or artist').props.onClick());
+    await act(async () => button('Name').props.onClick());
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Coltrane');
     expect(renderer.root.findByProps({ id: 'search-scope' }).props.value).toBe('catalog');
     expect(button('Open Blue Train by John Coltrane, Wishlist, saved record 1')).toBeDefined();
@@ -999,7 +1013,7 @@ describe('library and catalog search', () => {
     expect(addAlbum).not.toHaveBeenCalled();
     await act(async () => button('Close pressing review').props.onClick());
     search.mockClear();
-    await act(async () => button('Album or artist').props.onClick());
+    await act(async () => button('Name').props.onClick());
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Blue Train');
     expect(search).toHaveBeenCalledExactlyOnceWith('Blue Train', expect.any(AbortSignal), 'saved', 'collection', 0, 'title');
   });

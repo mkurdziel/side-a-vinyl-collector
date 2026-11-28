@@ -30,6 +30,10 @@ const album: Album = {
 const callbacks = { onClose: vi.fn(), onRefresh: vi.fn() };
 const renderAlbum = (value: Album) => createElement(AlbumDetailModal, { ...callbacks, album: value });
 const textOf = (node: ReactTestInstance): string => node.children.map(child => typeof child === 'string' ? child : textOf(child)).join('');
+const mediaFilter = () => {
+  const label = renderer!.root.findAllByType('label').find(control => textOf(control) === 'Media')!;
+  return renderer!.root.findByProps({ id: label.props.htmlFor });
+};
 
 afterEach(async () => {
   await act(async () => renderer?.unmount());
@@ -239,7 +243,7 @@ describe('pressing comparison evidence', () => {
     await act(async () => button('Use this pressing').props.onClick());
     expect(button('Confirm pressing')).toBeDefined();
     await act(async () => button('Compare listings').props.onClick());
-    await act(async () => renderer!.root.findByType('select').props.onChange({ target: { value: 'CD' } }));
+    await act(async () => mediaFilter().props.onChange({ target: { value: 'CD' } }));
     expect(button('Confirm pressing')).toBeUndefined();
     expect(button('Use this pressing')).toBeUndefined();
     expect(textOf(renderer!.root)).toContain('The selected pressing is outside the CD filter.');
@@ -288,7 +292,7 @@ describe('pressing comparison evidence', () => {
     expect(button('Use this pressing').props['aria-describedby']).toBe(selectionSummary.props.id);
     expect(actions.findAllByType('button').map(textOf)).toContain('Keep current pressing');
     await act(async () => button('Use this pressing').props.onClick());
-    const confirmation = renderer!.root.findByProps({ role: 'group' });
+    const confirmation = actions.findByProps({ role: 'group' });
     expect(textOf(confirmation)).toContain('Replace the pressing for Dummy in Collection?');
     expect(textOf(confirmation)).toContain('This replaces Discogs release 420 with the selected release.');
     expect(confirmation.findByType(PressingSelectionSummary).props).toMatchObject({
@@ -578,7 +582,7 @@ describe('saving a new catalog pressing', () => {
       renderer = create(createPicker({ album: { ...choices[0], pressingChoices: choices }, onSave, onSaveWithoutPressing }));
     });
     await act(async () => button('Compare listings').props.onClick());
-    const select = renderer!.root.findByType('select');
+    const select = mediaFilter();
     const submit = () => renderer!.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() });
     await act(async () => renderer!.root.findByProps({ type: 'radio', value: 410 }).props.onChange());
     await act(async () => select.props.onChange({ target: { value: 'CD' } }));

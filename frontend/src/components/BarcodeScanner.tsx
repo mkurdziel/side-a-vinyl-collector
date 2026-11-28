@@ -30,6 +30,7 @@ interface BarcodeScannerProps {
   onBack?: () => void;
   backLabel?: string;
   initialBarcode?: string;
+  unrecognizedSearchQuery?: boolean;
   onSearchByCatalogNumber?: () => void;
   onSuccess: () => void;
   onSearchByName: (query?: string, draft?: ManualAlbumDraft) => void;
@@ -46,7 +47,7 @@ interface BarcodeScannerProps {
 }
 
 export const BarcodeScanner = ({
-  onClose, onBack, backLabel, initialBarcode, onSearchByCatalogNumber,
+  onClose, onBack, backLabel, initialBarcode, unrecognizedSearchQuery, onSearchByCatalogNumber,
   onSuccess, onSearchByName, onManual, onMoveSaved, onUndoMove, onOpenSaved, onSavePressing,
   onUndoPressing, onSavedCopyRemoved, lookupShelfEdits, lookupPressingEdits, viewMode,
 }: BarcodeScannerProps) => {
@@ -311,18 +312,21 @@ export const BarcodeScanner = ({
                     aria-invalid={failure === 'invalid'}
                     aria-describedby={failure ? 'barcode-lookup-error' : 'barcode-entry-hint'}
                     required
-                    className="min-h-11 min-w-0 flex-1 rounded-lg border border-gray-300 p-2"
+                    className="min-h-11 min-w-0 flex-1 rounded-lg border border-gray-300 px-3 text-base"
                   />
                   <button
                     type="submit"
                     disabled={!manualBarcode.trim()}
                     aria-disabled={lookingUp || undefined}
-                    className="rh-filled-action min-h-11 rounded-lg bg-purple-600 px-3 py-2 disabled:opacity-50 aria-disabled:opacity-60"
+                    className="rh-primary-action min-h-11 rounded-lg px-3 py-2 disabled:opacity-50 aria-disabled:opacity-60"
                   >
                     {lookingUp ? 'Looking up…' : failure === 'unavailable' ? 'Retry lookup' : 'Look up'}
                   </button>
                 </div>
-                {!failure && <p id="barcode-entry-hint" className="mt-1 text-xs text-gray-600">Use the digits printed below the barcode.</p>}
+                {!failure && <p id="barcode-entry-hint" className="mt-1 text-xs text-gray-600">
+                  {unrecognizedSearchQuery && !manualBarcode ? 'Your previous query wasn’t recognized as a barcode. Enter the digits printed below the bars.'
+                    : 'Use the digits printed below the barcode.'}
+                </p>}
               </form>
 
               {lookingUp && <p className="my-2 text-sm text-gray-600" role="status">Looking up barcode…</p>}
@@ -332,14 +336,16 @@ export const BarcodeScanner = ({
                 </p>
               )}
 
-              {failure && !lookingUp && onSearchByCatalogNumber && <button type="button" className="rh-lookup-link text-left"
-                onClick={onSearchByCatalogNumber}>Look up the catalog number on the sleeve or label</button>}
-
-              <div className="mb-4 flex flex-wrap gap-x-3">
+              <div className="mb-4 flex flex-wrap items-start gap-x-2">
+                {failure && !lookingUp && onSearchByCatalogNumber && <button type="button" className="rh-lookup-link text-left"
+                  aria-label="Look up a catalog number" aria-describedby="barcode-catalog-clue" onClick={onSearchByCatalogNumber}>
+                  Look up a catalog number
+                  <span id="barcode-catalog-clue" className="block text-xs font-normal text-gray-600">Number on the sleeve or label</span>
+                </button>}
                 <button
                   type="button"
                   onClick={() => onSearchByName()}
-                  className="min-h-11 rounded-lg px-2 text-sm font-medium text-purple-600 hover:bg-gray-100"
+                  className="rh-lookup-link text-left"
                 >
                   Search by name
                 </button>
