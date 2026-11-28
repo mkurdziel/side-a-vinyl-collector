@@ -8,6 +8,19 @@ export type DestinationAction = Shelf | 'move';
 
 const shelfNames: Record<Shelf, string> = { collection: 'Collection', wishlist: 'Wishlist' };
 
+export function SaveShelfSelect({ value, onChange, albumTitle, disabled }: {
+  value: Shelf; onChange: (shelf: Shelf) => void; albumTitle?: string; disabled?: boolean;
+}) {
+  return <label className="rh-save-destination">
+    <span>Save to</span>
+    <select value={value} disabled={disabled} aria-label={albumTitle ? `Save to · ${albumTitle}` : undefined}
+      onChange={event => onChange(event.target.value as Shelf)}>
+      <option value="collection">Collection</option>
+      <option value="wishlist">Wishlist</option>
+    </select>
+  </label>;
+}
+
 interface SaveDestinationActionsProps {
   albumTitle: string;
   catalogLabel?: string;
@@ -27,7 +40,7 @@ interface SaveDestinationActionsProps {
   disabled?: boolean;
   onSelect: (action: DestinationAction) => void;
   onOpenSaved?: OpenSavedAlbum;
-  onReviewPressings?: (opener: HTMLButtonElement) => void;
+  onReviewPressings?: (destination: Shelf, opener: HTMLButtonElement) => void;
   onReviewNewPressings?: (destination: Shelf, opener: HTMLButtonElement) => void;
   reviewFirst?: boolean;
   onSavePressing?: SavePressing;
@@ -46,6 +59,8 @@ export function SaveDestinationActions({
   onSavePressing, onUndoPressing, onSavedCopyRemoved,
 }: SaveDestinationActionsProps) {
   const [comparing, setComparing] = useState(false);
+  const [chosenShelf, setChosenShelf] = useState<Shelf>();
+  const destination = pending && pending !== 'move' ? pending : chosenShelf ?? preferred;
   const statusId = useId();
   const compareButton = useRef<HTMLButtonElement>(null);
   const addButton = useRef<HTMLButtonElement>(null);
@@ -69,7 +84,6 @@ export function SaveDestinationActions({
   );
 
   if (catalogLabel) {
-    const destination = pending && pending !== 'move' ? pending : preferred;
     const name = shelfNames[destination];
     const canOpen = !!onOpenSaved && savedId != null;
     const canCompare = (titleOnly || !!lookupChoices?.some(choice => choice.releaseId !== lookup?.releaseId)) && !!onOpenSaved && matches.length > 0;
@@ -92,6 +106,7 @@ export function SaveDestinationActions({
           {existingStatus && <>{savedLabel}{titleOnly && savedPressing && ` · ${savedEdition}`}</>}
         </p>
         {titleOnly && !savedHere && <p className="rh-album-level-hint">One saved entry per artist and title.</p>}
+        {!existingStatus && <SaveShelfSelect value={destination} onChange={setChosenShelf} albumTitle={albumTitle} disabled={blocked} />}
         {/* The Add control becomes the saved-record action on the same DOM node. */}
         <button type="button" data-catalog-primary ref={element => {
           addButton.current = element;
@@ -104,7 +119,7 @@ export function SaveDestinationActions({
           aria-haspopup={opensDialog ? 'dialog' : undefined}
           onClick={event => {
             if (blocked) return;
-            if (reviewIsPrimary) onReviewPressings(event.currentTarget);
+            if (reviewIsPrimary) onReviewPressings(destination, event.currentTarget);
             else if (!existingStatus) onSelect(destination);
             else if (compareFirst) compare();
             else if (canOpen) void onOpenSaved(savedId, event.currentTarget);
@@ -116,7 +131,7 @@ export function SaveDestinationActions({
           onClick={() => { if (!blocked) onSelect(destination); }}>Save without pressing to {name}</button>}
         {!existingStatus && onReviewPressings && !reviewIsPrimary && <button type="button" className="rh-lookup-link text-left"
           aria-disabled={blocked} aria-haspopup="dialog" aria-label={reviewLabel}
-          onClick={event => { if (!blocked) onReviewPressings(event.currentTarget); }}>Review pressings</button>}
+          onClick={event => { if (!blocked) onReviewPressings(destination, event.currentTarget); }}>Review pressings</button>}
         {canCompare && !compareFirst && <button ref={compareButton} type="button" className="rh-lookup-link text-left"
           aria-disabled={blocked} aria-haspopup="dialog" aria-label={reviewLabel}
           onClick={() => { if (!blocked) compare(); }}>Review pressings</button>}
@@ -148,11 +163,9 @@ export function SaveDestinationActions({
     );
   }
 
-  const firstShelf = preferred;
-  const alternative = firstShelf === 'collection' ? 'wishlist' : 'collection';
   const choices: DestinationChoice[] = existingStatus
     ? [{ shelf: existingStatus }]
-    : [{ shelf: firstShelf, action: firstShelf }];
+    : [{ shelf: destination, action: destination }];
 
   if (existingStatus === 'wishlist' && existingAlbumId != null && isExactSavedMatch(existingMatch)) {
     choices.push({ shelf: 'collection', action: 'move' });
@@ -171,7 +184,7 @@ export function SaveDestinationActions({
       : `${albumTitle}: ${label}`;
     const color = !action
       ? 'border-gray-300 text-gray-600'
-      : moving || shelf === firstShelf
+      : moving || shelf === destination
         ? 'rh-filled-action border-transparent bg-purple-600 hover:bg-purple-700'
         : 'border-gray-300 bg-gray-100 text-gray-900 hover:bg-gray-50';
 
@@ -182,7 +195,7 @@ export function SaveDestinationActions({
             if (!blocked) onReviewNewPressings(shelf, event.currentTarget);
           }}>Review pressings</button>}
         <button
-          ref={shelf === firstShelf && action === firstShelf ? addButton : undefined}
+          ref={shelf === destination && action === destination ? addButton : undefined}
           type="button"
           aria-label={accessibleLabel}
           aria-description={action ? undefined : matchReason}
@@ -205,13 +218,8 @@ export function SaveDestinationActions({
         {!existingStatus && lookup?.source?.kind === 'album' && (
           <p className="rh-album-level-hint">Saves the album. Pressing unconfirmed.</p>
         )}
+        {!existingStatus && <SaveShelfSelect value={destination} onChange={setChosenShelf} albumTitle={albumTitle} disabled={blocked} />}
         {choices.map(renderChoice)}
-        {!existingStatus && (
-          <details className="rh-destination-options min-w-0">
-            <summary aria-label={`Other shelf for ${catalogLabel ?? albumTitle}`}>Other shelf</summary>
-            <div className="grid">{renderChoice({ shelf: alternative, action: alternative })}</div>
-          </details>
-        )}
         {onOpenSaved && existingAlbumId != null && (
           <button type="button" aria-disabled={blocked} aria-busy={!!openingSaved}
             className="min-h-11 rounded-lg px-2 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-100"

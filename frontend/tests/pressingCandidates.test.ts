@@ -2,7 +2,7 @@ import { createElement, useState } from 'react';
 import { act, create, type ReactTestInstance } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PressingDetails } from '../src/services/api';
-import { PressingCandidates, type PressingCandidate } from '../src/components/PressingCandidates';
+import { PressingCandidates, PressingSelectionSummary, type PressingCandidate } from '../src/components/PressingCandidates';
 import { createPressingDetailsLoader, sharedCatalogNumber } from '../src/services/pressingEvidence';
 
 const { getPressingDetails } = vi.hoisted(() => ({ getPressingDetails: vi.fn() }));
@@ -43,6 +43,49 @@ describe('pressing candidate evidence', () => {
       { releaseId: 1, pressing: { catalogNumber: 'none · ALT-1 · ALT 1' } },
       { releaseId: 2, pressing: { catalogNumber: 'NONE' } },
     ])).toBeUndefined();
+  });
+
+  it('puts matching numbers and distinguishing physical facts ahead of long Discogs credits', async () => {
+    const credits = 'Apple Records · Universal Music Group · EMI Records · Capitol Records · Abbey Road Studios · Calderstone Productions · Optimal Media GmbH · Universal Music Operations';
+    const vinyl: PressingCandidate = {
+      releaseId: 9269057, year: 2016,
+      pressing: { catalogNumber: '0602547298819 · PCS 7088', format: 'Vinyl · LP · Album', country: 'UK & Ireland', label: credits },
+    };
+    const compactDisc: PressingCandidate = {
+      releaseId: 1840188, year: 1987,
+      pressing: { catalogNumber: 'PCS 7088', format: 'CD · Album', country: 'Japan', label: credits },
+    };
+    const matching = [vinyl, ...choices.slice(0, 2), compactDisc];
+    getPressingDetails.mockResolvedValue({ pressing: null });
+    await act(async () => {
+      renderer = create(createElement(PressingCandidates, { choices: matching, onSelect: vi.fn(), searchedNumber: 'PCS 7088' }));
+    });
+
+    const vinylRadio = renderer!.root.findAllByType('label')[0];
+    expect(textOf(vinylRadio)).toMatch(/Catalog number PCS 7088.*Format Vinyl · LP · Album.*Country UK & Ireland.*Release year 2016.*Discogs release 9269057.*Label Apple Records/);
+    expect(textOf(vinylRadio)).not.toContain('Universal Music Group');
+    const listing = renderer!.root.findAllByType('details').find(node => textOf(node).includes('release 9269057'))!;
+    expect(listing.props.open).toBeUndefined();
+    expect(textOf(listing)).toContain(credits);
+    expect(textOf(listing)).toContain('0602547298819 · PCS 7088');
+    const pinVinyl = renderer!.root.findByProps({ 'aria-label': 'Pin for comparison · PCS 7088, Vinyl · LP · Album, UK & Ireland, 2016, Discogs release 9269057' });
+    await act(async () => pinVinyl.props.onClick());
+    await act(async () => button('More pressings').props.onClick());
+
+    const cdRadio = renderer!.root.findByType('label');
+    expect(textOf(cdRadio)).toMatch(/Catalog number PCS 7088.*Format CD · Album.*Country Japan.*Release year 1987.*Discogs release 1840188/);
+    const pinCd = renderer!.root.findByProps({ 'aria-label': 'Pin for comparison · PCS 7088, CD · Album, Japan, 1987, Discogs release 1840188' });
+    await act(async () => pinCd.props.onClick());
+    const shortlist = renderer!.root.findByType('section');
+    expect(shortlist.findByProps({ 'aria-label': 'Select pressing · PCS 7088, CD · Album, Japan, 1987, Discogs release 1840188' })).toBeDefined();
+    expect(shortlist.findByProps({ 'aria-label': 'Unpin pressing · PCS 7088, Vinyl · LP · Album, UK & Ireland, 2016, Discogs release 9269057' })).toBeDefined();
+
+    await act(async () => renderer!.update(createElement(PressingSelectionSummary, {
+      choice: vinyl, searchedNumber: 'PCS 7088', compact: true,
+    })));
+    expect(textOf(renderer!.root)).toMatch(/Catalog number PCS 7088.*Format Vinyl · LP · Album.*Country UK & Ireland.*Release year 2016.*Discogs release 9269057/);
+    expect(textOf(renderer!.root)).not.toContain('Apple Records');
+    expect(renderer!.root.findAllByType('details')).toHaveLength(0);
   });
 
   it('shows evidence before a radio selection and only fetches runouts for visible pressings on request', async () => {
@@ -133,7 +176,8 @@ describe('pressing candidate evidence', () => {
     await act(async () => button('More pressings').props.onClick());
     const unpin = shortlist.findAllByType('button').find(control => control.props['aria-label']?.startsWith('Unpin pressing · S 5233'))!;
     await act(async () => unpin.props.onClick());
-    expect(textOf(renderer!.root.findByType('fieldset'))).toContain('Selected pressingS 5233Label Alshire · Country Canada · Format LP · Mono');
+    const offPage = renderer!.root.findByType(PressingSelectionSummary);
+    expect(textOf(offPage)).toMatch(/Selected pressing.*S 5233.*Format LP · Mono.*Country Canada.*Discogs release 2.*Label Alshire/);
   });
 
   it('announces missing runouts once and keeps retry separate from known absence', async () => {
@@ -152,8 +196,8 @@ describe('pressing candidate evidence', () => {
     expect(missing()).toEqual(['Discogs lists no runout markings for these pressings. Compare the format with your record. If you’re unsure, save the album without a pressing.']);
 
     await act(async () => button('More pressings').props.onClick());
-    await act(async () => button('Pin for comparison').props.onClick());
-    await act(async () => button('Pin for comparison').props.onClick());
+    await act(async () => button('Pin').props.onClick());
+    await act(async () => button('Pin').props.onClick());
     expect(radios()).toEqual([4, 5]);
     expect(missing()).toEqual(['Discogs lists no runout markings for these pressings. Check the label, country, format, and release year against your record. If you’re unsure, save the album without a pressing.']);
   });

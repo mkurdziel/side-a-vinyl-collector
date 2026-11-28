@@ -63,6 +63,7 @@ app.get('/api/albums', albumController.getAllAlbums);
 app.get('/api/albums/:id', albumController.getAlbumById);
 app.post('/api/albums', albumController.addAlbum);
 app.delete('/api/albums/:id', albumController.deleteAlbum);
+app.post('/api/albums/:id/removal/undo', albumController.undoAlbumRemoval);
 app.patch('/api/albums/:id/notes', albumController.updateAlbumNotes);
 app.patch('/api/albums/:id/status', albumController.updateAlbumStatus);
 app.patch('/api/albums/:id/pressing', albumController.updateAlbumPressing);

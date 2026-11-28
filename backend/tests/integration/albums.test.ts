@@ -29,6 +29,7 @@ describe('Album CRUD Operations', () => {
     app.get('/api/albums/:id', albumController.getAlbumById);
     app.post('/api/albums', albumController.addAlbum);
     app.delete('/api/albums/:id', albumController.deleteAlbum);
+    app.post('/api/albums/:id/removal/undo', albumController.undoAlbumRemoval);
     app.patch('/api/albums/:id/notes', albumController.updateAlbumNotes);
     app.patch('/api/albums/:id/status', albumController.updateAlbumStatus);
     app.patch('/api/albums/:id/pressing', albumController.updateAlbumPressing);
@@ -273,6 +274,94 @@ describe('Album CRUD Operations', () => {
         .get('/api/albums?status=collection');
 
       expect(getResponse.body.albums).toHaveLength(0);
+    });
+  });
+
+  describe('POST /api/albums/:id/removal/undo', () => {
+    const record = { artist: 'Fixture Artist', album: 'Original Sleeve', status: 'wishlist', discogsId: 112233 };
+    let id: number;
+    const undo = (undoToken?: string, albumId: number | string = id) => request(app)
+      .post(`/api/albums/${albumId}/removal/undo`).send({ undoToken });
+    const remove = () => request(app).delete(`/api/albums/${id}?expectedStatus=wishlist`).expect(200);
+
+    beforeEach(async () => {
+      const created = await request(app).post('/api/albums').send({ ...record, barcode: '0602537340436' }).expect(201);
+      id = created.body.album.id;
+    });
+
+    it('restores the original shelf row and preserves its full album, pressing, barcode and artwork data', async () => {
+      await testPool.query(`UPDATE collections SET notes = 'Original sleeve notes',
+        added_at = TIMESTAMP '2011-12-13 01:02:03.123456' WHERE album_id = $1`, [id]);
+      await testPool.query(`UPDATE albums SET cover_image_url = 'https://example.com/original.jpg',
+        local_cover_path = 'original-cover.jpg', cover_art_fetched = TRUE,
+        musicbrainz_id = '317df805-36be-42cc-87a5-8ce7f438ed3a' WHERE id = $1`, [id]);
+      const original = (await request(app).get(`/api/albums/${id}`).expect(200)).body.album;
+      const shelfRow = (await testPool.query('SELECT id, added_at::text FROM collections WHERE album_id = $1', [id])).rows[0];
+      const startedAt = Date.now();
+      const removed = await remove();
+      const { undoToken, expiresAt } = removed.body;
+      expect(removed.body.message).toBe('Album removed from collection');
+      expect(removed.headers['cache-control']).toBe('no-store');
+      expect(undoToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(Date.parse(expiresAt)).toBeGreaterThan(startedAt + 599_000);
+      expect(Date.parse(expiresAt)).toBeLessThanOrEqual(Date.now() + 601_000);
+      await request(app).get(`/api/albums/${id}`).expect(404);
+      const { rows: [receipt] } = await testPool.query('SELECT token_digest FROM album_removal_undo WHERE album_id = $1', [id]);
+      expect(receipt.token_digest).toMatch(/^[a-f0-9]{64}$/);
+      expect(receipt.token_digest).not.toBe(undoToken);
+
+      const restored = await undo(undoToken).expect(200);
+      expect(restored.headers['cache-control']).toBe('no-store');
+      expect(restored.body.album).toEqual(original);
+      expect((await testPool.query('SELECT id, added_at::text FROM collections WHERE album_id = $1', [id])).rows).toEqual([shelfRow]);
+      expect((await testPool.query('SELECT barcode FROM barcodes WHERE album_id = $1', [id])).rows).toEqual([{ barcode: '0602537340436' }]);
+      await undo(undoToken).expect(409);
+    });
+
+    it('rejects missing, malformed, forged, cross-album and expired tokens', async () => {
+      const { body: { undoToken } } = await remove();
+      const other = await request(app).post('/api/albums').send({ artist: 'Another Artist', album: 'Another Album' }).expect(201);
+      await undo().expect(400);
+      await undo('invalid').expect(400);
+      await undo(undoToken, '2147483648').expect(400);
+      await undo('x'.repeat(43)).expect(409);
+      await undo(undoToken, other.body.album.id).expect(409);
+      await testPool.query('UPDATE album_removal_undo SET expires_at = clock_timestamp() WHERE album_id = $1', [id]);
+      await undo(undoToken).expect(409);
+      await request(app).get(`/api/albums/${id}`).expect(404);
+    });
+
+    it('lets only one concurrent request restore the same removal', async () => {
+      const { body: { undoToken } } = await remove();
+      const responses = await Promise.all([undo(undoToken), undo(undoToken)]);
+      expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
+      expect((await request(app).get('/api/albums?status=wishlist').expect(200)).body.albums).toHaveLength(1);
+    });
+
+    it('invalidates removal undo when re-added, including after a later removal', async () => {
+      const { body: first } = await remove();
+      const readded = await request(app).post('/api/albums').send({ ...record, status: 'collection' }).expect(201);
+      expect(readded.body.album).toMatchObject({ id, status: 'collection' });
+      await undo(first.undoToken).expect(409);
+      const { body: second } = await request(app).delete(`/api/albums/${id}?expectedStatus=collection`).expect(200);
+      await undo(first.undoToken).expect(409);
+      const restored = await undo(second.undoToken).expect(200);
+      expect(restored.body.album).toEqual(readded.body.album);
+    });
+
+    it('serializes restoration with an ordinary re-add', async () => {
+      await request(app).patch(`/api/albums/${id}/notes`).send({ notes: 'Keep these only on undo' }).expect(200);
+      const { body: { undoToken } } = await remove();
+      const [restored, readded] = await Promise.all([
+        undo(undoToken),
+        request(app).post('/api/albums').send({ ...record, status: 'collection' }),
+      ]);
+      expect([restored.status, readded.status].sort()).toEqual([restored.status === 200 ? 200 : 201, 409]);
+      const saved = (await request(app).get(`/api/albums/${id}`).expect(200)).body.album;
+      expect(saved).toMatchObject(restored.status === 200
+        ? { id, status: 'wishlist', notes: 'Keep these only on undo' }
+        : { id, status: 'collection', notes: null });
+      await undo(undoToken).expect(409);
     });
   });
 

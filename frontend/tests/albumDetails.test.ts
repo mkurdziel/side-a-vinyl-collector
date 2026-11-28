@@ -235,12 +235,19 @@ describe('pressing comparison evidence', () => {
     await act(async () => choose(430));
     await act(async () => button('More pressings').props.onClick());
     expect(radio(430)).toBeUndefined();
+    const reviewEvidence = renderer!.root.findByProps({ 'aria-label': 'Pressing evidence' });
+    const actions = renderer!.root.findByProps({ 'aria-label': 'Pressing actions' });
+    expect(reviewEvidence.props.tabIndex).toBe(0);
+    expect(reviewEvidence.parent).toBe(actions.parent);
+    expect(reviewEvidence.findByType('table')).toBeDefined();
+    expect(actions.findByType(PressingSelectionSummary).props).toMatchObject({ compact: true, choice: { releaseId: 430 } });
+    expect(actions.findAllByType('button').map(textOf)).toContain('Keep current pressing');
     await act(async () => button('Use this pressing').props.onClick());
     const confirmation = renderer!.root.findByProps({ role: 'group' });
     expect(textOf(confirmation)).toContain('Replace the pressing for Dummy in Collection?');
     expect(textOf(confirmation)).toContain('Currently saved as Discogs release 420.');
-    expect(confirmation.findByType(PressingSelectionSummary).props.choice).toMatchObject({
-      releaseId: 430, pressing: { catalogNumber: 'ALT-30', format: 'Vinyl · LP' }, year: 2017,
+    expect(confirmation.findByType(PressingSelectionSummary).props).toMatchObject({
+      compact: true, choice: { releaseId: 430, pressing: { catalogNumber: 'ALT-30', format: 'Vinyl · LP' }, year: 2017 },
     });
     expect(onSavePressing).not.toHaveBeenCalled();
     await act(async () => button('Cancel').props.onClick());
@@ -427,14 +434,26 @@ describe('saving a new catalog pressing', () => {
     getPressingDetails.mockImplementation(async releaseId => ({ pressing: releaseId === 410 ? { label: 'Go! Beat' } : null }));
     const onSave = vi.fn().mockResolvedValue(true);
     const onClose = vi.fn();
-    await act(async () => { renderer = create(createPicker({ onSave, onClose })); });
+    const focusedRadio = { matches: vi.fn().mockReturnValue(true), scrollIntoView: vi.fn() };
+    const evidenceNode = { ownerDocument: { activeElement: focusedRadio }, contains: vi.fn().mockReturnValue(true) };
+    await act(async () => {
+      renderer = create(createPicker({ onSave, onClose }), {
+        createNodeMock: node => node.props['aria-label'] === 'Pressing evidence' ? evidenceNode : null,
+      });
+    });
+    expect(focusedRadio.scrollIntoView).not.toHaveBeenCalled();
     await act(async () => renderer!.root.findAllByType('input').find(control => control.props.value === 410)!.props.onChange());
+    expect(focusedRadio.scrollIntoView).toHaveBeenCalledExactlyOnceWith({ block: 'nearest', inline: 'nearest' });
     await act(async () => button('Compare runout markings').props.onClick());
     await act(async () => button('More pressings').props.onClick());
     expect(renderer!.root.findAllByType('input').some(control => control.props.value === 410)).toBe(false);
     const commit = renderer!.root.findByProps({ 'aria-label': 'Save album' });
-    expect(commit.findByType(PressingSelectionSummary).props.choice).toMatchObject({
-      releaseId: 410, pressing: { catalogNumber: 'PL-410', label: 'Go! Beat', country: 'UK', format: 'Vinyl LP' },
+    const reviewEvidence = renderer!.root.findByProps({ 'aria-label': 'Pressing evidence' });
+    expect(reviewEvidence.props.tabIndex).toBe(0);
+    expect(reviewEvidence.parent).toBe(commit.parent);
+    expect(textOf(renderer!.root.findByType('header'))).toContain('Save to Collection');
+    expect(commit.findByType(PressingSelectionSummary).props).toMatchObject({
+      compact: true, choice: { releaseId: 410, pressing: { catalogNumber: 'PL-410', label: 'Go! Beat', country: 'UK', format: 'Vinyl LP' } },
     });
     await act(async () => renderer!.root.findByType('form').props.onSubmit({ preventDefault: vi.fn() }));
     expect(onSave).toHaveBeenCalledExactlyOnceWith(releases[0]);

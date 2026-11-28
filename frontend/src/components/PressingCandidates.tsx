@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { discogsReleaseSource } from '../albumDisplay';
 import {
   createPressingDetailsLoader,
+  preferredCatalogNumber,
   sharedCatalogNumber,
   withPressingEvidence,
   type LoadPressingDetails,
@@ -13,11 +14,13 @@ export type { PressingCandidate } from '../services/pressingEvidence';
 
 const pageSize = 3;
 const pinLimit = 2;
-const optionFields = ['label', 'country', 'format', 'year'] as const;
+const optionFields = ['format', 'country', 'year', 'label'] as const;
 const fieldLabels = { label: 'Label', country: 'Country', format: 'Format', year: 'Release year' };
+const fieldLimits = { label: 32, format: 36, country: 28, year: 4 };
 
 type MatrixRunouts = NonNullable<PressingDetails['matrixRunouts']>;
 type EvidenceResult = { status: 'error' } | { status: 'ready'; details: PressingDetails | null };
+type OptionField = typeof optionFields[number];
 
 interface Props {
   choices: readonly PressingCandidate[];
@@ -31,58 +34,129 @@ interface Props {
   uncertainAction?: string;
 }
 
-function choiceField(choice: PressingCandidate, field: typeof optionFields[number]) {
+function choiceField(choice: PressingCandidate, field: OptionField | 'catalogNumber') {
   const value = choice.pressing?.[field] ?? (field === 'year' ? choice.year : undefined);
   return String(value ?? '').trim();
 }
 
-function catalogNumber(choice: PressingCandidate) {
-  return choice.pressing?.catalogNumber || 'Catalog number unavailable';
+function conciseValue(value: string, limit: number) {
+  if (value.length <= limit) return value;
+  const separator = value.lastIndexOf(' · ', limit - 1);
+  return `${value.slice(0, separator > 0 ? separator : limit - 1).trimEnd()}…`;
 }
 
-function candidateLabel(choice: PressingCandidate) {
-  return [catalogNumber(choice), ...optionFields.map(field => choiceField(choice, field)).filter(Boolean),
-    `Discogs release ${choice.releaseId}`].join(', ');
+function summaryField(choice: PressingCandidate, field: OptionField) {
+  const value = choiceField(choice, field);
+  // Discogs search labels may include a long list of company credits.
+  return conciseValue(field === 'label' ? value.split(' · ', 1)[0] : value, fieldLimits[field]);
+}
+
+function candidateNumber(choice: PressingCandidate, searchedNumber?: string) {
+  const number = preferredCatalogNumber(choiceField(choice, 'catalogNumber'), searchedNumber);
+  return conciseValue(number ?? '', 26);
+}
+
+function candidateLabel(choice: PressingCandidate, searchedNumber?: string) {
+  return [
+    candidateNumber(choice, searchedNumber),
+    summaryField(choice, 'format'),
+    summaryField(choice, 'country'),
+    summaryField(choice, 'year'),
+    `Discogs release ${choice.releaseId}`,
+  ].filter(Boolean).join(', ');
 }
 
 function differingFields(choices: readonly PressingCandidate[]) {
   return new Set(optionFields.filter(field => (
-    new Set(choices.map(choice => choiceField(choice, field).toLowerCase()).filter(Boolean)).size > 1
+    new Set(choices.map(choice => summaryField(choice, field).toLowerCase()).filter(Boolean)).size > 1
   )));
 }
 
-function PressingFacts({ choice, varying }: { choice: PressingCandidate; varying?: ReadonlySet<typeof optionFields[number]> }) {
-  const fields = optionFields.filter(field => choiceField(choice, field));
+function PressingFacts({ choice, varying, searchedNumber, compact }: {
+  choice: PressingCandidate;
+  varying?: ReadonlySet<OptionField>;
+  searchedNumber?: string;
+  compact?: boolean;
+}) {
+  const number = candidateNumber(choice, searchedNumber);
+  const label = summaryField(choice, 'label');
+  const fact = (field: OptionField) => {
+    const value = summaryField(choice, field);
+    if (!value) return null;
+    return <span className={`min-w-0 max-w-full ${compact && field !== 'year' ? 'truncate' : 'shrink-0'} ${varying?.has(field) ? 'font-semibold text-gray-900' : ''}`}>
+      <span className="sr-only">{fieldLabels[field]} </span>{value}
+    </span>;
+  };
+  const line = `flex min-w-0 gap-x-2 text-gray-600 ${compact ? '' : 'flex-wrap'}`;
   return <>
-    <span className="block font-semibold">{catalogNumber(choice)}</span>
-    {fields.length > 0 && <span className="block text-gray-600">
-      {fields.map((field, index) => <span key={field}>
-        {index > 0 && <span aria-hidden="true"> · </span>}
-        <span className="sr-only">{fieldLabels[field]} </span>
-        <span className={varying?.has(field) ? 'font-medium text-gray-900' : undefined}>{choiceField(choice, field)}</span>
-      </span>)}
+    <span className={line}>
+      <span className={`min-w-0 max-w-full font-semibold text-gray-900 ${compact ? 'truncate' : ''}`}>
+        {number ? <><span className="sr-only">Catalog number </span>{number}</> : 'Catalog number unavailable'}
+      </span>
+      {fact('format')}
+    </span>
+    <span className={line}>
+      {fact('country')}
+      {fact('year')}
+      <span className="max-w-full shrink-0">Discogs<span className="sr-only"> release</span> {choice.releaseId}</span>
+    </span>
+    {!compact && label && <span className={`block ${varying?.has('label') ? 'font-semibold text-gray-900' : 'text-gray-600'}`}>
+      <span className="sr-only">Label </span>{label}
     </span>}
   </>;
 }
 
-function PressingSource({ releaseId, className = '' }: { releaseId: number; className?: string }) {
+function PressingListingDetails({ choice, searchedNumber }: { choice: PressingCandidate; searchedNumber?: string }) {
+  const fullNumber = choiceField(choice, 'catalogNumber');
+  const rows = [
+    { label: 'Catalog numbers', value: fullNumber, summary: candidateNumber(choice, searchedNumber) },
+    ...optionFields.map(field => ({
+      label: field === 'label' ? 'Labels and credits' : fieldLabels[field],
+      value: choiceField(choice, field), summary: summaryField(choice, field),
+    })),
+  ].filter(({ value, summary }) => value && value !== summary);
+  if (!rows.length) return null;
+  return (
+    <details className="min-w-0 text-gray-600 open:basis-full">
+      <summary className="min-h-11 cursor-pointer content-center px-2 text-sm">
+        Listing details<span className="sr-only"> for Discogs release {choice.releaseId}</span>
+      </summary>
+      <dl className="grid gap-2 px-2 pb-2 text-sm">
+        {rows.map(({ label, value }) => <div key={label}>
+          <dt className="text-xs">{label}</dt><dd className="text-gray-900">{value}</dd>
+        </div>)}
+      </dl>
+    </details>
+  );
+}
+
+function PressingSource({ releaseId }: { releaseId: number }) {
   const source = discogsReleaseSource(releaseId);
   if (!source?.url) return null;
-  return <a className={`rh-comparison-source w-fit max-w-full ${className}`} href={source.url} target="_blank" rel="noreferrer">
-    Discogs {releaseId}<span className="sr-only"> (opens in a new tab)</span>
+  return <a className="rh-comparison-source w-fit max-w-full" href={source.url} target="_blank" rel="noreferrer">
+    View on Discogs<span className="sr-only"> · release {releaseId} (opens in a new tab)</span>
   </a>;
 }
 
-export function PressingSelectionSummary({ choice }: { choice: PressingCandidate }) {
+export function PressingSelectionSummary({ choice, compact, searchedNumber }: {
+  choice: PressingCandidate;
+  compact?: boolean;
+  searchedNumber?: string;
+}) {
   const markings = choice.pressing?.matrixRunouts ?? [];
-  return <div className="min-w-0 border-t border-gray-200 pt-2 text-sm [overflow-wrap:anywhere]">
-    <p className="mb-0.5 text-xs text-gray-600">Selected pressing</p>
-    <PressingFacts choice={choice} />
-    {markings.length > 0 && <div className="mt-1">
-      <p className="mb-0.5 text-xs text-gray-600">Runout markings</p>
-      <RunoutMarkings markings={markings} />
-    </div>}
-    <PressingSource releaseId={choice.releaseId} />
+  return <div className={`min-w-0 text-gray-600 [overflow-wrap:anywhere] ${compact ? 'text-xs' : 'border-t border-gray-200 pt-2 text-sm'}`}>
+    <p className={compact ? 'sr-only' : 'mb-0.5 text-xs'}>Selected pressing</p>
+    <PressingFacts choice={choice} compact={compact} searchedNumber={searchedNumber} />
+    {!compact && <>
+      {markings.length > 0 && <div className="mt-1">
+        <p className="mb-0.5 text-xs text-gray-600">Runout markings</p>
+        <RunoutMarkings markings={markings} />
+      </div>}
+      <div className="flex flex-wrap gap-x-2">
+        <PressingSource releaseId={choice.releaseId} />
+        <PressingListingDetails choice={choice} searchedNumber={searchedNumber} />
+      </div>
+    </>}
   </div>;
 }
 
@@ -265,17 +339,20 @@ export function PressingCandidates({
               const { releaseId } = choice;
               const checked = releaseId === selectedId;
               return <li key={releaseId} className="grid min-w-0 content-start gap-1 border-t border-gray-200 px-2 py-2 text-sm">
-                <div><PressingFacts choice={choice} varying={pinnedDifferences} /></div>
+                <div><PressingFacts choice={choice} varying={pinnedDifferences} searchedNumber={searchedNumber} /></div>
                 {releaseId === savedReleaseId && <p className="text-gray-600">Your saved pressing</p>}
-                <PressingSource releaseId={releaseId} />
+                <div className="flex min-w-0 flex-wrap gap-x-2">
+                  <PressingSource releaseId={releaseId} />
+                  <PressingListingDetails choice={choice} searchedNumber={searchedNumber} />
+                </div>
                 {!pinnedMissing && <CandidateRunout choice={choice} result={evidence[releaseId]} onRetry={retry} disabled={disabled} />}
                 <div className="flex flex-wrap gap-x-1">
                   <button type="button" className="rh-lookup-link -ml-2 text-left aria-disabled:opacity-60" aria-disabled={checked}
-                    aria-label={`${checked ? 'Selected pressing' : 'Select pressing'} · ${candidateLabel(choice)}`}
+                    aria-label={`${checked ? 'Selected pressing' : 'Select pressing'} · ${candidateLabel(choice, searchedNumber)}`}
                     onClick={() => { if (!checked) onSelect(releaseId); }}>
                     {checked ? 'Selected pressing' : 'Select pressing'}
                   </button>
-                  <button type="button" className="rh-lookup-link" aria-label={`Unpin pressing · ${candidateLabel(choice)}`}
+                  <button type="button" className="rh-lookup-link" aria-label={`Unpin pressing · ${candidateLabel(choice, searchedNumber)}`}
                     onClick={() => {
                       (pinned.length > 1 ? shortlistHeading.current : runoutToggle.current)?.focus({ preventScroll: true });
                       togglePin(releaseId);
@@ -287,7 +364,7 @@ export function PressingCandidates({
           {pinnedMissing && <MissingRunouts choices={pinned} uncertainAction={uncertainAction} />}
         </section>
       )}
-      {selectedOffPage && <PressingSelectionSummary choice={selectedOffPage} />}
+      {selectedOffPage && <PressingSelectionSummary choice={selectedOffPage} searchedNumber={searchedNumber} />}
       <button type="button" ref={runoutToggle} className="rh-lookup-link -ml-2 text-left" aria-expanded={checkingRunouts} aria-controls={candidatesId}
         onClick={() => setCheckingRunouts(current => !current)}>
         {checkingRunouts ? 'Hide runout markings' : unique.length > 1 ? 'Compare runout markings' : 'Check runout markings'}
@@ -317,18 +394,18 @@ export function PressingCandidates({
                   <input type="radio" name={name} value={releaseId} checked={checked} onChange={() => onSelect(releaseId)}
                     className="mt-1 shrink-0 accent-blue-600" />
                   <span className="min-w-0">
-                    <PressingFacts choice={choice} varying={varying} />
-                    <span className="sr-only">Discogs release {releaseId}.</span>
+                    <PressingFacts choice={choice} varying={varying} searchedNumber={searchedNumber} />
                     {releaseId === savedReleaseId && <span className="block text-gray-600">Your saved pressing</span>}
                     {choice.catalogNumberMatch === 'unverified' && <span className="block text-gray-600">Check the number on the listing.</span>}
                   </span>
                 </label>
-                <div className={`flex min-w-0 flex-wrap items-center gap-x-1 px-2 ${checkingRunouts ? '' : 'sm:justify-end'}`}>
+                <div className={`flex min-w-0 flex-wrap items-center gap-x-1 px-2 ${checkingRunouts ? '' : 'sm:max-w-64 sm:justify-end'}`}>
                   <PressingSource releaseId={releaseId} />
                   {lastPage > 0 && <button type="button" className="rh-lookup-link aria-disabled:opacity-60"
-                    aria-label={`${isPinned ? 'Unpin pressing' : 'Pin for comparison'} · ${candidateLabel(choice)}`}
+                    aria-label={`${isPinned ? 'Unpin pressing' : 'Pin for comparison'} · ${candidateLabel(choice, searchedNumber)}`}
                     aria-describedby={pinHintId} aria-disabled={!isPinned && pinned.length >= pinLimit}
-                    onClick={() => togglePin(releaseId)}>{isPinned ? 'Unpin' : 'Pin for comparison'}</button>}
+                    onClick={() => togglePin(releaseId)}>{isPinned ? 'Unpin' : 'Pin'}</button>}
+                  <PressingListingDetails choice={choice} searchedNumber={searchedNumber} />
                 </div>
               </div>
               {checkingRunouts && !isPinned && !visibleMissing && <CandidateRunout choice={choice} result={evidence[releaseId]} onRetry={retry} disabled={disabled} />}
