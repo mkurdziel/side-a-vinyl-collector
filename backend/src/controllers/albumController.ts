@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from 'node:crypto';
 import type { Request, Response } from 'express';
 import type { PoolClient } from 'pg';
 import pool from '../config/database';
@@ -261,6 +262,10 @@ function checkExpectedPressing(album: AlbumWithArtist | undefined, expectedDisco
   }
 }
 
+function pressingUndoDigest(token: string) {
+  return createHash('sha256').update(token).digest('hex');
+}
+
 export const updateAlbumPressing = asyncHandler(async (req: Request, res: Response) => {
   const rawId = String(req.params.id);
   const id = Number(rawId);
@@ -299,13 +304,94 @@ export const updateAlbumPressing = asyncHandler(async (req: Request, res: Respon
       throw new AppError('This Discogs release is for a different artist or album. Choose another pressing.', 422);
     }
 
+    const undoToken = randomBytes(32).toString('base64url');
     await client.query('UPDATE albums SET discogs_id = $2, catalog_listing = NULL WHERE id = $1', [id, discogsId]);
+    await client.query(`
+      INSERT INTO album_pressing_undo (
+        collection_id, token_digest, expected_discogs_id, previous_discogs_id, previous_catalog_listing, expires_at
+      )
+      SELECT id, $2, $3, $4, $5, clock_timestamp() + INTERVAL '10 minutes' FROM collections WHERE album_id = $1
+      ON CONFLICT (collection_id) DO UPDATE SET
+        token_digest = EXCLUDED.token_digest,
+        expected_discogs_id = EXCLUDED.expected_discogs_id,
+        previous_discogs_id = EXCLUDED.previous_discogs_id,
+        previous_catalog_listing = EXCLUDED.previous_catalog_listing,
+        expires_at = EXCLUDED.expires_at
+    `, [id, pressingUndoDigest(undoToken), discogsId, saved.discogs_id ?? null, saved.catalog_listing ?? null]);
     await client.query('COMMIT');
-    res.json({ album: { ...saved, discogs_id: discogsId, catalog_listing: null } });
+    res.set('Cache-Control', 'no-store').json({ album: { ...saved, discogs_id: discogsId, catalog_listing: null }, undoToken });
   } catch (error) {
     await client.query('ROLLBACK');
     if (error instanceof Error && 'code' in error && error.code === '23505') {
       throw new AppError('This Discogs release is already linked to another album. Choose another pressing.', 409);
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+const expiredPressingUndo = 'This pressing change can no longer be undone. Check the current saved pressing.';
+
+export const undoAlbumPressing = asyncHandler(async (req: Request, res: Response) => {
+  const rawId = String(req.params.id);
+  const id = Number(rawId);
+  const { undoToken } = req.body ?? {};
+  if (!/^\d+$/.test(rawId) || !isDatabaseId(id) || typeof undoToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(undoToken)) {
+    throw new AppError('Choose a valid saved pressing change to undo.', 400);
+  }
+
+  const digest = pressingUndoDigest(undoToken);
+  const { rows: [original] } = await pool.query<{
+    artist_name: string;
+    title: string;
+    collection_id: number | null;
+    expected_discogs_id: number;
+    previous_discogs_id: number | null;
+  }>(`
+    SELECT artists.name AS artist_name, albums.title, undo.collection_id, undo.expected_discogs_id, undo.previous_discogs_id
+    FROM collections
+    JOIN albums ON collections.album_id = albums.id
+    JOIN artists ON albums.artist_id = artists.id
+    LEFT JOIN album_pressing_undo undo ON undo.collection_id = collections.id
+      AND undo.token_digest = $2 AND undo.expires_at > clock_timestamp()
+    WHERE albums.id = $1
+  `, [id, digest]);
+  if (!original) throw new AppError('This album is no longer saved.', 404);
+  if (original.collection_id === null) throw new AppError(expiredPressingUndo, 409);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await lockAlbumIdentity(client, original.artist_name, original.expected_discogs_id, original.previous_discogs_id);
+    const { rows: [saved] } = await client.query<AlbumWithArtist>(`${savedAlbumQuery} FOR UPDATE OF albums, collections`, [id]);
+    checkExpectedPressing(saved, original.expected_discogs_id);
+    if (saved.artist_name !== original.artist_name || saved.title !== original.title || saved.catalog_listing != null) {
+      throw new AppError(expiredPressingUndo, 409);
+    }
+
+    // Consume the token in the same transaction as the restoration. The collection FK invalidates it on removal.
+    const { rows: [previous] } = await client.query<{
+      previous_discogs_id: number | null;
+      previous_catalog_listing: CatalogListing | null;
+    }>(`
+      DELETE FROM album_pressing_undo
+      WHERE collection_id = $1 AND token_digest = $2 AND expires_at > clock_timestamp()
+      RETURNING previous_discogs_id, previous_catalog_listing
+    `, [original.collection_id, digest]);
+    if (!previous) throw new AppError(expiredPressingUndo, 409);
+
+    const { previous_discogs_id, previous_catalog_listing } = previous;
+    await client.query('UPDATE albums SET discogs_id = $2, catalog_listing = $3 WHERE id = $1',
+      [id, previous_discogs_id, previous_catalog_listing]);
+    await client.query('COMMIT');
+    res.set('Cache-Control', 'no-store').json({
+      album: { ...saved, discogs_id: previous_discogs_id, catalog_listing: previous_catalog_listing },
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (error instanceof Error && 'code' in error && error.code === '23505') {
+      throw new AppError('The previous Discogs release is now linked to another album.', 409);
     }
     throw error;
   } finally {

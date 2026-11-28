@@ -16,6 +16,7 @@ export interface PressingDetails {
   catalogNumber?: string;
   country?: string;
   year?: number;
+  matrixRunouts?: Array<{ value: string; description?: string }>;
 }
 
 export type CatalogNumberMatch = 'exact' | 'unverified';

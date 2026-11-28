@@ -14,6 +14,7 @@ export interface PressingDetails {
   catalogNumber?: string;
   country?: string;
   year?: number;
+  matrixRunouts?: Array<{ value: string; description?: string }>;
 }
 
 export function isExactSavedMatch(match?: SavedMatch | null): boolean {
@@ -183,10 +184,17 @@ class ApiService {
     });
   }
 
-  updatePressing(id: number, discogsId: number, expectedDiscogsId: number | null): Promise<{ album: Album }> {
+  updatePressing(id: number, discogsId: number, expectedDiscogsId: number | null): Promise<{ album: Album; undoToken: string }> {
     return this.request(`/api/albums/${id}/pressing`, {
       method: 'PATCH',
       body: JSON.stringify({ discogsId, expectedDiscogsId }),
+    });
+  }
+
+  undoPressing(id: number, undoToken: string): Promise<{ album: Album }> {
+    return this.request(`/api/albums/${id}/pressing/undo`, {
+      method: 'POST',
+      body: JSON.stringify({ undoToken }),
     });
   }
 

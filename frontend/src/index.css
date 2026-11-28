@@ -384,11 +384,13 @@ summary:focus-visible,
 .rh-destination-actions button[aria-disabled="true"] { opacity: 0.75; }
 .rh-catalog-actions .rh-destination-actions { grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), max-content)); }
 .rh-catalog-actions .rh-saved-outcome { grid-column: 1 / -1; }
+.rh-catalog-actions .rh-saved-outcome { padding-inline: 0; }
 .rh-pressing-choice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 12px; border-top: 1px solid var(--rh-edge); }
 .rh-pressing-choice > label { flex: 1 0 12rem; }
 .rh-pressing-choice input { accent-color: var(--rh-info); }
 
 .rh-saved-section { margin-block-end: 16px; }
+.rh-saved-compare { grid-column: 2 / -1; justify-self: start; }
 
 .rh-saved-results {
   display: grid;
@@ -549,6 +551,8 @@ summary:focus-visible,
   gap: 4px 8px;
 }
 
+.rh-search-scope > .rh-lookup-link { padding-inline: 6px; }
+
 @media (641px <= width < 900px) {
   .rh-catalog-bar-sticky { top: 140px; }
 }
@@ -564,6 +568,12 @@ summary:focus-visible,
   flex-wrap: wrap;
   align-items: end;
   gap: 4px 10px;
+}
+
+.rh-comparison-variants {
+  border-block: 1px solid var(--rh-edge);
+  padding-block: 10px;
+  font-size: 0.875rem;
 }
 
 .rh-comparison-outcome {
@@ -613,6 +623,12 @@ summary:focus-visible,
 .rh-pressing-table th:first-child { width: 27%; }
 .rh-pressing-table tbody th { color: var(--rh-ink-2); font-weight: 500; }
 .rh-pressing-table td { font-variant-numeric: tabular-nums; }
+.rh-pressing-table .rh-evidence-priority th,
+.rh-pressing-table .rh-evidence-priority td {
+  background: var(--rh-info-wash);
+  color: var(--rh-ink);
+}
+.rh-pressing-table .rh-evidence-priority th { font-weight: 600; }
 
 .rh-comparison-links {
   display: flex;
@@ -828,9 +844,10 @@ html:has(.rh-dialog[open]) .rh-page-toaster { display: none; }
   }
   .rh-catalog-actions { grid-column: 1 / -1; }
   .rh-catalog-source { grid-column: 1 / -1; }
-  .rh-catalog-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+  .rh-catalog-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding-block: 4px; }
   .rh-catalog-destination { display: grid; min-width: 0; gap: 2px; font-size: 0.75rem; }
   .rh-catalog-bar-sticky { top: 0; }
+  .rh-pressing-choice { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
   .rh-dialog[open] {
     align-items: flex-end;
     padding: 0;

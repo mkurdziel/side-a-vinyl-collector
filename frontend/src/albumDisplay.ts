@@ -2,6 +2,23 @@ import type { Album, CatalogListing, DiscogsAlbum, SavedMatch, SavedTitleMatch }
 
 type Shelf = Album['status'];
 export type LookupShelfEdits = Partial<Record<number, Shelf | null>>;
+export type LookupPressingEdits = Partial<Record<number, SavedTitleMatch>>;
+
+export function applyLookupPressingEdits<T extends {
+  discogsId: number; existingStatus?: Shelf | null; existingAlbumId?: number | null;
+  existingMatch?: SavedMatch | null; titleMatches?: SavedTitleMatch[];
+}>(match: T, edits?: LookupPressingEdits): T {
+  if (!edits) return match;
+  const copies = match.titleMatches?.length ? match.titleMatches :
+    match.existingAlbumId != null && edits[match.existingAlbumId] ? [edits[match.existingAlbumId]!] : [];
+  if (!copies.some(copy => edits[copy.id])) return match;
+  const titleMatches = copies.map(copy => edits[copy.id] ?? copy);
+  const exact = match.existingMatch === 'barcode' ? titleMatches.find(copy => copy.id === match.existingAlbumId)
+    : titleMatches.find(copy => copy.discogs_id === match.discogsId);
+  const first = exact ?? titleMatches.find(copy => copy.status === 'collection') ?? titleMatches[0];
+  return { ...match, titleMatches, existingStatus: first.status, existingMatch: exact ? match.existingMatch === 'barcode' ? 'barcode' : 'release' : 'title',
+    existingAlbumId: exact ? exact.id : titleMatches.length === 1 ? first.id : null };
+}
 
 export function applyLookupShelfEdits<T extends {
   existingStatus?: Shelf | null;

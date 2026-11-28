@@ -1,6 +1,6 @@
-import { useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { toast } from 'react-hot-toast';
-import api, { type Album, type SearchCoverArtResult, getCoverArtUrl } from '../services/api';
+import api, { type Album, type PressingDetails, type SearchCoverArtResult, getCoverArtUrl } from '../services/api';
 import { savedCatalogSource, savedCopyLabel } from '../albumDisplay';
 import { ModalDialog } from './ModalDialog';
 
@@ -9,9 +9,62 @@ interface AlbumDetailModalProps {
   onClose: () => void;
   shelfActions?: ReactNode;
   onRefresh: (updatedAlbum?: Album) => void;
-  onFindPressing?: (album: Album) => void;
+  onFindPressing?: (album: Album, opener: HTMLButtonElement) => void;
   backToMatches?: boolean;
   returnFocusTo?: RefObject<HTMLElement | null>;
+}
+
+type PressingResult = { status: 'loading' | 'failed' } | { status: 'ready'; pressing: PressingDetails | null };
+
+function SavedPressingEvidence({ releaseId, heading }: { releaseId: number; heading: RefObject<HTMLHeadingElement | null> }) {
+  const [attempt, setAttempt] = useState(0);
+  const [result, setResult] = useState<PressingResult>({ status: 'loading' });
+
+  useEffect(() => {
+    const request = new AbortController();
+    void api.getPressingDetails(releaseId, request.signal).then(({ pressing }) => {
+      if (!request.signal.aborted) setResult({ status: 'ready', pressing });
+    }).catch(() => {
+      if (!request.signal.aborted) setResult({ status: 'failed' });
+    });
+    return () => request.abort();
+  }, [releaseId, attempt]);
+
+  const pressing = result.status === 'ready' ? result.pressing : null;
+  const fields = [
+    ['Catalog number', pressing?.catalogNumber?.trim()],
+    ['Label', pressing?.label?.trim()],
+    ['Format', pressing?.format?.trim()],
+    ['Country', pressing?.country?.trim()],
+    ['Release year', pressing?.year],
+  ].filter(([, value]) => value);
+
+  const message = result.status === 'loading' ? 'Checking Discogs…'
+    : result.status === 'failed' ? 'Couldn’t load saved pressing details.'
+      : fields.length ? 'Saved pressing details loaded.' : 'Discogs has no pressing details for this release.';
+
+  return (
+    <>
+      <p role="status" className={fields.length ? 'sr-only' : 'text-sm text-gray-600'}>{message}</p>
+      {result.status === 'failed' && (
+        <button type="button" className="rh-lookup-link -ml-2 w-fit" onClick={() => {
+          heading.current?.focus({ preventScroll: true });
+          setResult({ status: 'loading' });
+          setAttempt(current => current + 1);
+        }}>Retry pressing details</button>
+      )}
+      {fields.length > 0 && (
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
+          {fields.map(([label, value]) => (
+            <div key={label} className="min-w-0">
+              <dt className="text-gray-600">{label}</dt>
+              <dd className="font-medium text-gray-900">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </>
+  );
 }
 
 export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, shelfActions, backToMatches, returnFocusTo }: AlbumDetailModalProps) => {
@@ -24,6 +77,8 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
   const [imageDimensions, setImageDimensions] = useState<Record<string, string>>({});
   const [savingArtwork, setSavingArtwork] = useState(false);
   const [failedCoverUrl, setFailedCoverUrl] = useState('');
+  const savedPressingHeadingId = useId();
+  const savedPressingHeading = useRef<HTMLHeadingElement>(null);
   const artworkButtonRef = useRef<HTMLButtonElement>(null);
   const coverVersion = currentAlbum.local_cover_path ? `?v=${encodeURIComponent(currentAlbum.local_cover_path)}` : '';
   const coverUrl = getCoverArtUrl(currentAlbum.id) + coverVersion;
@@ -93,6 +148,7 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
         : currentAlbum.local_cover_path ? 'Saved artwork' : 'No cover art';
 
   const source = savedCatalogSource(currentAlbum);
+  const pressingId = source?.kind === 'pressing' ? currentAlbum.discogs_id : undefined;
   return (
     <ModalDialog labelledBy="album-details-title" onClose={onClose} returnFocusTo={returnFocusTo}>
       <div className="rh-dialog-panel max-w-2xl">
@@ -131,23 +187,28 @@ export const AlbumDetailModal = ({ album, onClose, onRefresh, onFindPressing, sh
             </div>
           </div>
 
+          <section aria-labelledby={savedPressingHeadingId} className="grid gap-2 border-t border-gray-200 pt-4 [overflow-wrap:anywhere]">
+            <h4 id={savedPressingHeadingId} ref={savedPressingHeading} tabIndex={-1} className="font-semibold text-gray-900">Saved pressing</h4>
+            {pressingId
+              ? <SavedPressingEvidence key={pressingId} releaseId={pressingId} heading={savedPressingHeading} />
+              : <p className="text-sm text-gray-600">Pressing unconfirmed</p>}
+            {(onFindPressing || source?.url) && (
+              <div className="-ml-2 flex flex-wrap items-center gap-x-2">
+                {onFindPressing && <button type="button" aria-haspopup="dialog" className="rh-lookup-link text-left"
+                  onClick={event => onFindPressing(currentAlbum, event.currentTarget)}>{pressingId ? 'Review other pressings' : 'Find a pressing'}</button>}
+                {source?.url && (
+                  <a className="rh-comparison-source" href={source.url} target="_blank" rel="noreferrer">
+                    {pressingId ? `Discogs release ${pressingId}` : `${source.label} · ${source.type}`}
+                    <span className="sr-only"> · {savedCopyLabel(currentAlbum)} (opens in a new tab)</span>
+                  </a>
+                )}
+              </div>
+            )}
+          </section>
+
           {shelfActions && <div className="border-t border-gray-200 pt-3">{shelfActions}</div>}
 
           <dl className="grid grid-cols-2 gap-3 border-t border-gray-200 pt-4">
-            <div className="min-w-0 [overflow-wrap:anywhere]">
-              <dt className="text-sm font-medium text-gray-700">Saved pressing</dt>
-              <dd className="text-sm text-gray-600">
-                {source?.kind !== 'pressing' && <p>Pressing unconfirmed</p>}
-                {source?.url ? (
-                  <a className="rh-comparison-source" href={source.url} target="_blank" rel="noreferrer">
-                    {source.kind === 'pressing' ? `Discogs release ${currentAlbum.discogs_id}` : `${source.label} · ${source.type}`}
-                    <span className="sr-only"> · {savedCopyLabel(currentAlbum)} (opens in a new tab)</span>
-                  </a>
-                ) : null}
-              </dd>
-              {onFindPressing && <dd><button type="button" className="rh-lookup-link text-left"
-                onClick={() => onFindPressing(currentAlbum)}>{source?.kind === 'pressing' ? 'Review other pressings' : 'Find a pressing'}</button></dd>}
-            </div>
             <div className="min-w-0 [overflow-wrap:anywhere]">
               <dt className="text-sm font-medium text-gray-700">Cover image source</dt>
               <dd className="text-sm text-gray-600">
