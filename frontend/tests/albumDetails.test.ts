@@ -398,7 +398,8 @@ describe('pressing comparison evidence', () => {
     expect(values('Discogs release ID')).toEqual(['410', '440']);
     expect(button('Retry saving pressing')).toBeUndefined();
     await act(async () => button('Use this pressing').props.onClick());
-    expect(textOf(renderer!.root.findByProps({ role: 'group' }))).toContain('This replaces Discogs release 440 with the selected release.');
+    const actions = renderer!.root.findByProps({ 'aria-label': 'Pressing actions' });
+    expect(textOf(actions.findByProps({ role: 'group' }))).toContain('This replaces Discogs release 440 with the selected release.');
     expect(onSavePressing).toHaveBeenCalledTimes(1);
   });
 

@@ -164,10 +164,14 @@ describe('pressing candidate evidence', () => {
     const querySelector = vi.fn(() => ({ focus: focusRadio, closest: () => null }));
     const onSelect = vi.fn();
     const editions: PressingCandidate[] = [
-      { releaseId: 101, pressing: { catalogNumber: 'ABC-1', label: 'Blues Note', format: 'Vinyl · LP', country: 'US' } },
-      { releaseId: 102, pressing: { catalogNumber: 'ABC-1', label: 'Blues Note', format: 'Vinyl · LP · Mono', country: 'US' } },
-      { releaseId: 103, pressing: { catalogNumber: 'ABC-1', label: 'Blues Note', format: 'Vinyl · LP · Stereo', country: 'Canada' } },
+      { releaseId: 101, pressing: { catalogNumber: 'ABC-1', label: 'Blue Note', format: 'Vinyl · LP', country: 'US' } },
+      { releaseId: 102, pressing: { catalogNumber: 'ABC-1', label: 'Blue Note', format: 'Vinyl · LP · Mono', country: 'US' } },
+      { releaseId: 103, pressing: { catalogNumber: 'ABC-1', label: 'Contemporary', format: 'Vinyl · LP · Stereo', country: 'Canada' } },
     ];
+    const firstRead = Promise.withResolvers<{ pressing: PressingDetails | null }>();
+    getPressingDetails.mockImplementationOnce(() => firstRead.promise)
+      .mockResolvedValueOnce({ pressing: null })
+      .mockResolvedValueOnce({ pressing: { matrixRunouts: [{ value: 'ETCH-102' }], year: 1963, format: 'Vinyl · LP · Mono · Blue' } });
     await act(async () => {
       renderer = create(createElement(CandidatePicker, { choices: editions, onSelect }), {
         createNodeMock: node => node.type === 'ul' ? { querySelector } : null,
@@ -180,15 +184,55 @@ describe('pressing candidate evidence', () => {
     expect(first.props.value).toBe(101);
     expect(second.props.value).toBe(103);
     expect(first.findAllByType('option').map(option => option.props.value)).toEqual([101, 102]);
-    expect(textOf(first.findByProps({ value: 102 }))).toContain('Discogs 102 · ABC-1 · Vinyl · LP · Mono · US');
+    expect(textOf(first.findAllByType('option').find(option => option.props.value === 102)!))
+      .toMatch(/^Blue Note · Vinyl · LP · Mono · US · Discogs 102/);
+    expect(textOf(second.findAllByType('option').find(option => option.props.value === 103)!))
+      .toMatch(/^Contemporary · Vinyl · LP · Stereo · Canada · Discogs 103/);
 
     await act(async () => first.props.onChange({ target: { value: '102' } }));
     expect(selectByLabel('First listing')).toBe(first);
     expect(selectByLabel('Second listing')).toBe(second);
     expect(second.findAllByType('option').map(option => option.props.value)).toEqual([101, 103]);
     expect(textOf(renderer!.root.findByType('thead'))).toBe('EvidenceFirst listing 102Second listing 103');
-    expect(textOf(renderer!.root.findByType('tbody').findAllByType('tr')[0])).toBe('MixDiffersMonoStereo');
-    expect(status()).toContain('Comparing Discogs releases 102 and 103.');
+    expect(textOf(renderer!.root.findByType('tbody').findAllByType('tr')[0])).toBe('LabelDiffersBlue NoteContemporary');
+    expect(textOf(renderer!.root.findByType('caption'))).toBe('Check the center label.');
+    expect(status()).toContain('Comparing Discogs releases 102 and 103. Label differs, Blue Note and Contemporary.');
+    expect(getPressingDetails).not.toHaveBeenCalled();
+    const moreEvidence = renderer!.root.findAllByType('details').find(disclosure => (
+      textOf(disclosure.findByType('summary')) === 'More evidence and runout marks'
+    ))!;
+    await act(async () => moreEvidence.props.onToggle({ currentTarget: { open: true } }));
+    expect(getPressingDetails.mock.calls.map(([id]) => id)).toEqual([102, 103]);
+    expect(status()).toContain('Discogs release 102. Checking Discogs…');
+    expect(status()).toContain('Discogs release 103. Discogs lists no runout markings for this release.');
+    await act(async () => firstRead.reject(new Error('Offline')));
+    expect(status()).toContain('Discogs release 102. Couldn’t load full Discogs evidence.');
+    await act(async () => button('Retry evidence for Discogs release 102').props.onClick());
+    expect(getPressingDetails.mock.calls.map(([id]) => id)).toEqual([102, 103, 102]);
+    expect(textOf(moreEvidence)).toContain('ETCH-102');
+    expect(textOf(moreEvidence)).toContain('Vinyl · LP · Mono · Blue');
+    expect(textOf(moreEvidence)).toContain('1963');
+    expect(moreEvidence.findAllByType('a').map(link => link.props.href)).toEqual([
+      'https://www.discogs.com/release/102', 'https://www.discogs.com/release/103',
+    ]);
+    getPressingDetails.mockResolvedValueOnce({ pressing: { matrixRunouts: [{ value: 'ETCH-101' }] } });
+    await act(async () => first.props.onChange({ target: { value: '101' } }));
+    expect(getPressingDetails.mock.calls.map(([id]) => id)).toEqual([102, 103, 102, 101]);
+    expect(textOf(moreEvidence)).toContain('ETCH-101');
+    expect(textOf(moreEvidence)).not.toContain('ETCH-102');
+    await act(async () => first.props.onChange({ target: { value: '102' } }));
+    expect(getPressingDetails).toHaveBeenCalledTimes(4);
+    expect(textOf(moreEvidence)).toContain('ETCH-102');
+    expect(textOf(moreEvidence)).not.toContain('ETCH-101');
+    for (const id of [102, 103]) {
+      querySelector.mockClear();
+      focusRadio.mockClear();
+      await act(async () => button(`Go to Discogs release ${id}`).props.onClick());
+      expect(querySelector).toHaveBeenCalledExactlyOnceWith(`input[value="${id}"]`);
+      expect(focusRadio).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    }
+    querySelector.mockClear();
+    focusRadio.mockClear();
     await act(async () => button('Back to pressings').props.onClick());
     expect(querySelector).toHaveBeenCalledExactlyOnceWith('input[value="101"]');
     expect(focusRadio).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });

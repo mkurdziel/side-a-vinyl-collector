@@ -121,7 +121,6 @@ describe('library and catalog search', () => {
     await act(async () => renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }));
     expect(search).toHaveBeenCalledExactlyOnceWith('O', expect.any(AbortSignal), 'saved', undefined, 0, 'title');
     expect(button('Open O by Unknown Fixture Artist, Wishlist, saved record 20')).toBeDefined();
-    expect(button('Search online catalogs')).toBeUndefined();
     expect(button('Include catalogs')).toBeUndefined();
     expect(renderer.root.findByProps({ className: 'rh-lookup-source' }).children.join('')).toBe('Both shelves · Exact name');
     expect(renderer.root.findByProps({ id: 'search-scope' }).props.value).toBe('catalog');
@@ -143,14 +142,29 @@ describe('library and catalog search', () => {
     expect(JSON.stringify(renderer.toJSON())).toContain('No exact title or artist matches “É” in Wishlist.');
   });
 
-  it('allows the phone field to widen for a longer catalog number and restores the browse layout when cleared', async () => {
+  it('keeps lookup controls in reading order as a long catalog number is typed and submitted', async () => {
+    searchCatalogNumber.mockResolvedValue({ local: [], discogs: [] });
     await renderLibrary();
     await act(async () => button('Catalog number').props.onClick());
-    await editSearch('AB-012345678');
-    expect(renderer.root.findByType('form').props['data-long-query']).toBe(true);
-    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('AB-012345678');
+
+    const form = renderer.root.findByType('form');
+    const tabOrder = () => form.findAll(node => node.type === 'input' || node.type === 'button')
+      .slice(0, 5).map(node => node.props['aria-label'] ?? node.props.id);
+    const lookupControls = ['album-search', 'Clear search', 'Look up in Discogs', 'Add Album', 'Search options, Catalog number, Discogs'];
+    await editSearch('4006381');
+    expect(tabOrder()).toEqual(lookupControls);
+    await editSearch('40063813');
+    expect(tabOrder()).toEqual(lookupControls);
+    await editSearch('4006381333931');
+    expect(tabOrder()).toEqual(lookupControls);
+    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('4006381333931');
+    expect(button('Look up in Discogs').props.type).toBe('submit');
+    await act(async () => form.props.onSubmit({ preventDefault: () => {} }));
+    expect(searchCatalogNumber).toHaveBeenCalledExactlyOnceWith('4006381333931', expect.any(AbortSignal), 0);
+
     await act(async () => button('Clear search').props.onClick());
-    expect(renderer.root.findByType('form').props['data-long-query']).toBe(false);
+    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('');
+    expect(button('Clear search')).toBeUndefined();
   });
 
   it('shows search method and source and resumes the lookup and destination after checking a barcode', async () => {
@@ -162,6 +176,11 @@ describe('library and catalog search', () => {
     const options = button('Search options, Name search, Both shelves');
     expect(options.props['aria-expanded']).toBe(false);
     expect(renderer.root.findByType('header').findByProps({ htmlFor: 'sort-select' }).children).toEqual(['Sort']);
+    const compactSortValue = () => renderer.root.findByProps({ className: 'rh-compact-sort-value' }).children.join('');
+    expect(compactSortValue()).toBe('Title');
+    await act(async () => renderer.root.findByProps({ id: 'sort-select' }).props.onChange({ target: { value: 'artist' } }));
+    expect(compactSortValue()).toBe('Artist');
+    expect(localStorage.getItem('albumSortBy')).toBe('artist');
     await act(async () => options.props.onClick());
     expect(options.props['aria-expanded']).toBe(true);
     expect(renderer.root.findByProps({ id: 'lookup-options' }).findAllByType('select').map(select => select.props.id))
@@ -511,7 +530,7 @@ describe('library and catalog search', () => {
     expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('Blue Train');
     expect(search).toHaveBeenCalledWith('Blue Train', expect.any(AbortSignal), 'saved', undefined, 0, 'title');
     expect(search).toHaveBeenLastCalledWith('Blue Train', expect.any(AbortSignal), 'catalog', undefined, 0, 'title');
-    expect(button('Search online catalogs')).toBeUndefined();
+    expect(button('Include catalogs')).toBeUndefined();
     expect(button('Return to Collection')).toBeDefined();
 
     await act(async () => button('Clear search').props.onClick());
