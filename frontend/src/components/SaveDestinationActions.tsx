@@ -109,7 +109,7 @@ export function SaveDestinationActions({
       : `${existingMatch === 'release' ? 'This pressing' : 'Album'} saved in ${matchedShelves}`;
     const savedEdition = matches.length === 1 && matches[0].discogs_id
       ? `Saved Discogs release ${matches[0].discogs_id}` : 'Saved pressing unconfirmed';
-    const guidance = !existingStatus ? (sharedDestination ? undefined : newSaveGuidance)
+    const guidance = !existingStatus ? (sharedDestination ? (reviewIsPrimary ? `Save this match to ${name}.` : undefined) : newSaveGuidance)
       : titleOnly && (!savedHere || (canCompare && onSavePressing)) ? savedTitleGuidance : undefined;
     const actionDescription = [existingStatus && statusId, guidance && guidanceId].filter(Boolean).join(' ');
     const compare = () => setComparing(true);

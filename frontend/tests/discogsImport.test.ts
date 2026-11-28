@@ -32,6 +32,8 @@ function findButton(label: string) {
   return button;
 }
 
+const releaseChoice = (id: number) => renderer.root.findByProps({ id: `discogs-import-release-${id}` });
+
 const content = () => renderer.root.findAllByType('p').map(node => node.children.join('')).join('\n');
 
 async function loadCollection(options?: Parameters<typeof create>[1]) {
@@ -192,14 +194,51 @@ describe('Discogs import', () => {
     await loadCollection();
     expect(content()).toContain('No new records on the pages loaded so far.');
     expect(content()).toContain('1 of 2 Discogs pages loaded');
-    expect(importDiscogsCollection.mock.calls).toEqual([[1]]);
-    await act(async () => findButton('Load more Discogs records').props.onClick());
+    expect(importDiscogsCollection.mock.calls.map(([page]) => page)).toEqual([1]);
+    await act(async () => findButton('Load next Discogs page').props.onClick());
     expect(content()).toContain('Could not load Discogs page 2');
     await act(async () => findButton('Retry Discogs page').props.onClick());
-    expect(importDiscogsCollection.mock.calls).toEqual([[1], [2], [2]]);
+    expect(importDiscogsCollection.mock.calls.map(([page]) => page)).toEqual([1, 2, 2]);
     expect(content()).toContain('2 of 2 Discogs pages loaded');
     expect(content()).toContain('3 records available');
     expect(addAlbum).not.toHaveBeenCalled();
+  });
+
+  it('puts the incomplete page coverage beside import and keeps the selection if the next page is canceled', async () => {
+    let nextPageSignal: AbortSignal | undefined;
+    importDiscogsCollection.mockResolvedValueOnce({ albums: albums.slice(0, 2), page: 1, totalPages: 3, nextPage: 2 })
+      .mockImplementationOnce((_page: number, signal: AbortSignal) => new Promise((_, reject) => {
+        nextPageSignal = signal;
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      }));
+    await loadCollection();
+    await act(async () => {
+      renderer.root.findByType('select').props.onChange({ target: { value: 'wishlist' } });
+      releaseChoice(1).props.onChange({ currentTarget: { checked: true } });
+    });
+    const coverage = renderer.root.findByProps({ id: 'discogs-page-coverage' });
+    expect(coverage.children.join('')).toBe('1 of 3 Discogs pages loaded');
+    const actions = coverage.parent?.parent?.findAllByType('button');
+    expect(actions?.some(node => node.children.join('') === 'Load next Discogs page')).toBe(true);
+    expect(actions?.some(node => node.children.join('') === 'Import 1 record to Wishlist')).toBe(true);
+    expect(findButton('Import 1 record to Wishlist').props['aria-describedby']).toBe('discogs-page-coverage discogs-partial-import');
+    expect(content()).toContain('Later pages may contain alternate pressings.');
+
+    await act(async () => findButton('Load next Discogs page').props.onClick());
+    expect(findButton('Loading Discogs page 2…').props['aria-busy']).toBe(true);
+    await act(async () => findButton('Cancel page load').props.onClick());
+    expect(nextPageSignal?.aborted).toBe(true);
+    expect(content()).toContain('Page load canceled. Your review is kept.');
+    expect(releaseChoice(1).props.checked).toBe(true);
+    expect(renderer.root.findByType('select').props.value).toBe('wishlist');
+    expect(addAlbum).not.toHaveBeenCalled();
+
+    await act(async () => findButton('Import 1 record to Wishlist').props.onClick());
+    expect(addAlbum.mock.calls.map(([album]) => [album.discogsId, album.status])).toEqual([[1, 'wishlist']]);
+    expect(findButton('Load next Discogs page')).toBeTruthy();
+    expect(JSON.parse(sessionStorage.getItem('side-a:discogs-import-review:v1')!)).toMatchObject({
+      choices: [], lastPage: 1, destination: 'wishlist',
+    });
   });
 
   it('keeps selections across pages and lets the user choose only one pressing of the same title', async () => {
@@ -210,12 +249,23 @@ describe('Discogs import', () => {
     const select = (label: string) => checkbox(label).props.onChange({ currentTarget: { checked: true } });
     await loadCollection();
     await act(async () => select('Select Dummy by Portishead'));
-    await act(async () => findButton('Load more Discogs records').props.onClick());
-    expect(checkbox('Select Dummy by Portishead · Discogs release 1').props.checked).toBe(true);
-    expect(renderer.root.findAllByProps({ 'aria-label': 'Select Third by Portishead' })).toHaveLength(1);
-    expect(content()).toContain('TEST 2014');
-    await act(async () => select('Select Dummy by Portishead · Discogs release 4'));
-    expect(checkbox('Select Dummy by Portishead · Discogs release 1').props.checked).toBe(false);
+    await act(async () => findButton('Load next Discogs page').props.onClick());
+    expect(releaseChoice(1).props.checked).toBe(true);
+    expect(releaseChoice(1).props.type).toBe('radio');
+    expect(releaseChoice(4).props.type).toBe('radio');
+    expect(releaseChoice(4).props.name).toBe(releaseChoice(1).props.name);
+    expect(releaseChoice(2).props.type).toBe('checkbox');
+    expect(renderer.root.findByType('legend').children.join('')).toBe('Choose a pressing for Dummy by Portishead');
+    expect(releaseChoice(4).props['aria-label']).toBe('TEST 2014 · 2014 · Discogs release 4 · Choose pressing');
+    await act(async () => releaseChoice(4).props.onChange({ currentTarget: { checked: true } }));
+    expect(releaseChoice(1).props.checked).toBe(false);
+    await act(async () => select('Select Third by Portishead'));
+    await act(async () => findButton('Clear pressing choice for Dummy by Portishead').props.onClick());
+    expect(releaseChoice(1).props.checked).toBe(false);
+    expect(releaseChoice(4).props.checked).toBe(false);
+    expect(releaseChoice(2).props.checked).toBe(true);
+    await act(async () => releaseChoice(2).props.onChange({ currentTarget: { checked: false } }));
+    await act(async () => releaseChoice(4).props.onChange({ currentTarget: { checked: true } }));
     await act(async () => findButton('Import 1 record to Collection').props.onClick());
     expect(addAlbum).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ discogsId: 4, status: 'collection', applyCatalogReference: true }),
@@ -237,7 +287,7 @@ describe('Discogs import', () => {
       renderer.root.findByType('select').props.onChange({ target: { value: 'wishlist' } });
       select('Dummy');
     });
-    await act(async () => findButton('Load more Discogs records').props.onClick());
+    await act(async () => findButton('Load next Discogs page').props.onClick());
     await act(async () => select('Roseland NYC Live'));
     expect(content()).toContain('2 selected for Wishlist');
 
@@ -297,18 +347,16 @@ describe('Discogs import', () => {
     importDiscogsCollection.mockResolvedValueOnce({ albums: albums.slice(0, 2), page: 1, totalPages: 2, nextPage: 2 })
       .mockResolvedValueOnce({ albums: [alternateDummy, alternateThird], page: 2, totalPages: 2 });
     await loadCollection();
-    const checkbox = (title: string, release?: number) => renderer.root.findByProps({
-      'aria-label': `Select ${title} by Portishead${release ? ` · Discogs release ${release}` : ''}`,
-    });
+    const checkbox = (title: string) => renderer.root.findByProps({ 'aria-label': `Select ${title} by Portishead` });
     await act(async () => checkbox('Third').props.onChange({ currentTarget: { checked: true } }));
     await act(async () => findButton('Select all loaded (2)').props.onClick());
     expect(checkbox('Dummy').props.checked).toBe(true);
-    await act(async () => findButton('Load more Discogs records').props.onClick());
+    await act(async () => findButton('Load next Discogs page').props.onClick());
 
-    expect(checkbox('Dummy', 1).props.checked).toBe(false);
-    expect(checkbox('Dummy', 4).props.checked).toBe(false);
-    expect(checkbox('Third', 2).props.checked).toBe(true);
-    expect(checkbox('Third', 5).props.checked).toBe(false);
+    expect(releaseChoice(1).props.checked).toBe(false);
+    expect(releaseChoice(4).props.checked).toBe(false);
+    expect(releaseChoice(2).props.checked).toBe(true);
+    expect(releaseChoice(5).props.checked).toBe(false);
     expect(content()).toContain('1 selection needs your attention.');
     expect(renderer.root.findByProps({ 'aria-label': 'Pressings of Dummy by Portishead' }).findAllByType('article')).toHaveLength(2);
     expect(addAlbum).not.toHaveBeenCalled();
@@ -330,7 +378,7 @@ describe('Discogs import', () => {
       return null;
     } });
     await act(async () => findButton('Select all loaded (3)').props.onClick());
-    await act(async () => findButton('Load more Discogs records').props.onClick());
+    await act(async () => findButton('Load next Discogs page').props.onClick());
 
     const reviewLink = renderer.root.findByProps({ 'aria-label': 'Review pressings for Dummy by Portishead' });
     expect(reviewLink.props.href).toBe('#discogs-import-pressings-1');
@@ -339,7 +387,7 @@ describe('Discogs import', () => {
     expect(pressingHeading.focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
     expect(panel.scrollTop).toBe(400);
 
-    await act(async () => renderer.root.findByProps({ 'aria-label': 'Select Dummy by Portishead · Discogs release 4' })
+    await act(async () => releaseChoice(4)
       .props.onChange({ currentTarget: { checked: true } }));
     const returnLink = renderer.root.findByProps({ href: '#discogs-import-choices' });
     await act(async () => returnLink.props.onClick({ preventDefault: vi.fn() }));
@@ -396,13 +444,13 @@ describe('Discogs import', () => {
     await act(async () => renderer.root.findByProps({ 'aria-label': 'Select Third by Portishead' })
       .props.onChange({ currentTarget: { checked: true } }));
     await act(async () => findButton('Select all loaded (2)').props.onClick());
-    await act(async () => findButton('Load more Discogs records').props.onClick());
+    await act(async () => findButton('Load next Discogs page').props.onClick());
     await act(async () => renderer.unmount());
     await act(async () => { renderer = create(createElement(DiscogsImporter, importerProps)); });
     await act(async () => findButton('Resume review').props.onClick());
 
-    expect(renderer.root.findByProps({ 'aria-label': 'Select Dummy by Portishead · Discogs release 1' }).props.checked).toBe(false);
-    expect(renderer.root.findByProps({ 'aria-label': 'Select Third by Portishead · Discogs release 2' }).props.checked).toBe(true);
+    expect(releaseChoice(1).props.checked).toBe(false);
+    expect(releaseChoice(2).props.checked).toBe(true);
     expect(content()).toContain('1 selection needs your attention.');
     expect(findButton('Import 1 record to Collection').props.disabled).toBe(false);
     expect(addAlbum).not.toHaveBeenCalled();
@@ -418,7 +466,7 @@ describe('Discogs import', () => {
       renderer.root.findByType('select').props.onChange({ target: { value: 'wishlist' } });
       findButton('Select all loaded (2)').props.onClick();
     });
-    await act(async () => findButton('Load more Discogs records').props.onClick());
+    await act(async () => findButton('Load next Discogs page').props.onClick());
     const originalDraft = JSON.parse(sessionStorage.getItem('side-a:discogs-import-review:v1')!);
     expect(originalDraft.choices.map(({ discogsId }: { discogsId: number }) => discogsId)).toEqual([2]);
     expect(originalDraft.notices).toEqual([{ choice: { discogsId: 1, artist: 'Portishead', album: 'Dummy', source: 'bulk' }, cause: 'competing' }]);
@@ -433,7 +481,7 @@ describe('Discogs import', () => {
       expect(reviewLink.props.href).toBe('#discogs-import-pressings-1');
       expect(renderer.root.findByProps({ id: 'discogs-import-pressings-1' }).props.tabIndex).toBe(-1);
       expect(content()).toContain('Another pressing appeared.');
-      expect(renderer.root.findByProps({ 'aria-label': 'Select Dummy by Portishead · Discogs release 1' }).props.checked).toBe(false);
+      expect(releaseChoice(1).props.checked).toBe(false);
       expect(renderer.root.findByProps({ 'aria-label': 'Select Third by Portishead' }).props.checked).toBe(true);
       expect(findButton('Import 1 record to Wishlist').props.disabled).toBe(false);
       expect(addAlbum).not.toHaveBeenCalled();
@@ -441,7 +489,7 @@ describe('Discogs import', () => {
 
     expect(importDiscogsCollection.mock.calls.map(([page]) => page)).toEqual([1, 2, 1, 2, 1, 2]);
     expect(getAlbums.mock.calls.map(([shelf]) => shelf)).toEqual(['collection', 'wishlist', 'collection', 'wishlist']);
-    await act(async () => renderer.root.findByProps({ 'aria-label': 'Select Dummy by Portishead · Discogs release 4' })
+    await act(async () => releaseChoice(4)
       .props.onChange({ currentTarget: { checked: true } }));
     expect(JSON.parse(sessionStorage.getItem('side-a:discogs-import-review:v1')!).notices).toEqual([]);
     expect(findButton('Import 2 records to Wishlist').props.disabled).toBe(false);
@@ -499,7 +547,7 @@ describe('Discogs import', () => {
       : { albums: [alternate], page: 2, totalPages: 2 });
     await loadCollection();
     await act(async () => findButton('Select all loaded (2)').props.onClick());
-    await act(async () => findButton('Load more Discogs records').props.onClick());
+    await act(async () => findButton('Load next Discogs page').props.onClick());
     await act(async () => findButton('Import 1 record to Collection').props.onClick());
     expect(addAlbum).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ discogsId: 2 }), expect.any(AbortSignal));
 
