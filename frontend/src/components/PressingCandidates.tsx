@@ -160,7 +160,11 @@ function exampleCue(example: PressingCandidate, reference?: PressingCandidate, s
   const difference = strongestDifference(reference, example, searchedNumber);
   if (difference) {
     const values = difference.values.map(value => concisePressingValue(value, 20)).join(' / ');
-    return { difference: `${difference.prefix ?? ''}${values}.`, guidance: difference.cue };
+    return {
+      difference: `${difference.prefix ?? ''}${values}.`,
+      guidance: difference.cue,
+      describeMarket: difference.label === pressingFieldLabels.country,
+    };
   }
   return { guidance: 'Look for etched or stamped marks just inside the last track.' };
 }
@@ -398,6 +402,23 @@ function missingRunoutMessage(choices: readonly PressingCandidate[], scope: stri
   return `Discogs lists no runout markings for ${scope}. ${next} ${uncertainAction}`;
 }
 
+function revealPressingEvidence(element: HTMLElement, align: 'start' | 'nearest') {
+  const evidence = element.closest<HTMLElement>('.rh-pressing-review__evidence');
+  if (!evidence) return;
+  const scrollContainer = getComputedStyle(evidence).overflowY === 'visible'
+    ? evidence.closest<HTMLElement>('.rh-pressing-review') : evidence;
+  if (!scrollContainer) return;
+
+  const style = getComputedStyle(scrollContainer);
+  const viewTop = scrollContainer.getBoundingClientRect().top + scrollContainer.clientTop;
+  const start = viewTop + (parseFloat(style.scrollPaddingBlockStart) || 0);
+  const end = viewTop + scrollContainer.clientHeight - (parseFloat(style.scrollPaddingBlockEnd) || 0);
+  const bounds = element.getBoundingClientRect();
+  const top = bounds.top - (parseFloat(getComputedStyle(element).scrollMarginBlockStart) || 0);
+  if (align === 'start' || top < start) scrollContainer.scrollTop += top - start;
+  else if (bounds.bottom > end) scrollContainer.scrollTop += bounds.bottom - end;
+}
+
 export function PressingCandidates({
   choices, selectedId, onSelect, searchedNumber, savedReleaseId, savedEvidence, savedEvidenceState, selectedEvidence, selectedEvidenceState,
   disabled, loadDetails, onReadEvidence,
@@ -410,6 +431,7 @@ export function PressingCandidates({
   const incompleteListId = useId();
   const candidatesId = useId();
   const comparisonId = useId();
+  const comparisonHeadingId = useId();
   const runoutToolsId = useId();
   const runoutStatusId = useId();
   const mediumId = useId();
@@ -419,11 +441,13 @@ export function PressingCandidates({
   const shortlistHeading = useRef<HTMLHeadingElement>(null);
   const shortlistJump = useRef<HTMLButtonElement>(null);
   const compareToggle = useRef<HTMLButtonElement>(null);
+  const comparisonHeading = useRef<HTMLHeadingElement>(null);
   const runoutHeading = useRef<HTMLHeadingElement>(null);
   const candidateList = useRef<HTMLUListElement>(null);
   const { checkingRunouts: showRunouts, comparing: showComparison, page: requestedPage, medium, pins: pinnedIds, update } = preparation;
   const [focusRequest, setFocusRequest] = useState<{ releaseId: number }>();
   const focusShortlist = useRef(false);
+  const focusComparison = useRef(false);
   const focusRunouts = useRef(false);
   const [loadLocally] = useState(createPressingDetailsLoader);
   const [evidence, setEvidence] = useState<Partial<Record<number, EvidenceResult>>>({});
@@ -477,10 +501,23 @@ export function PressingCandidates({
     : selection ? (target?.releaseId === savedReleaseId ? 'Saved pressing selected' : 'Selected pressing')
       : example ? 'Catalog example' : 'Saved pressing';
   const cue = example && exampleCue(example, reference, searchedNumber);
+  const needsChoiceJump = (morePressingsUrl || cue?.describeMarket) && visible.length > 0;
+
+  useLayoutEffect(() => {
+    if (!showComparison || !focusComparison.current) return;
+    focusComparison.current = false;
+    const heading = comparisonHeading.current;
+    if (!heading) return;
+    heading.focus({ preventScroll: true });
+    revealPressingEvidence(heading, 'start');
+  }, [showComparison]);
 
   useLayoutEffect(() => {
     if (!focusRequest) return;
-    candidateList.current?.querySelector<HTMLInputElement>(`input[value="${focusRequest.releaseId}"]`)?.focus();
+    const radio = candidateList.current?.querySelector<HTMLInputElement>(`input[value="${focusRequest.releaseId}"]`);
+    if (!radio) return;
+    radio.focus({ preventScroll: true });
+    revealPressingEvidence(radio.closest('label') ?? radio, 'nearest');
   }, [focusRequest]);
 
   useLayoutEffect(() => {
@@ -494,6 +531,11 @@ export function PressingCandidates({
     focusRunouts.current = false;
     runoutHeading.current?.focus();
   }, [showRunouts]);
+
+  const toggleComparison = () => {
+    focusComparison.current = !showComparison;
+    update({ comparing: !showComparison });
+  };
 
   const toggleRunouts = () => {
     focusRunouts.current = !showRunouts;
@@ -512,6 +554,11 @@ export function PressingCandidates({
     update({ page: next });
     const firstChoice = available[next * pageSize];
     if (firstChoice) setFocusRequest({ releaseId: firstChoice.releaseId });
+  };
+
+  const returnToChoices = () => {
+    const choice = visible.find(candidate => candidate.releaseId === selectedId) ?? visible[0];
+    if (choice) setFocusRequest({ releaseId: choice.releaseId });
   };
 
   const togglePin = (id: number) => {
@@ -554,16 +601,16 @@ export function PressingCandidates({
         loadDetails={loadDetails ?? loadLocally} onResult={recordEvidence} />)}
       <div>
         <div className="rh-pressing-chooser-heading">
-          <p id={headingId} className={morePressingsUrl && visible.length ? 'text-sm font-semibold max-[25rem]:sr-only' : 'text-sm font-semibold'}>
+          <p id={headingId} className={needsChoiceJump ? 'text-sm font-semibold max-[25rem]:sr-only' : 'text-sm font-semibold'}>
             Choose a pressing
           </p>
-          {morePressingsUrl && visible.length > 0 && <button type="button"
+          {needsChoiceJump && <button type="button"
             className="rh-lookup-link rh-pressing-compare rh-pressing-choice-jump"
-            aria-controls={candidatesId} onClick={() => goToPage(page)}>Go to pressings</button>}
+            aria-controls={candidatesId} onClick={returnToChoices}>Go to pressings</button>}
           <div className="rh-pressing-chooser-actions">
             <button type="button" ref={compareToggle} className="rh-lookup-link rh-pressing-compare"
               aria-expanded={showComparison} aria-controls={`${runoutToolsId} ${comparisonId} ${candidatesId}`}
-              onClick={() => update({ comparing: !showComparison })}>Compare listings</button>
+              onClick={toggleComparison}>Compare listings</button>
             {pinned.length > 0 && <button type="button" ref={shortlistJump} className="rh-lookup-link rh-pressing-compare"
               aria-label={`Go to ${pinned.length} pinned ${pinned.length === 1 ? 'pressing' : 'pressings'}`}
               onClick={jumpToShortlist}>{pinned.length} pinned <span aria-hidden="true">↓</span></button>}
@@ -579,7 +626,7 @@ export function PressingCandidates({
           </a>}
         </div>}
         <div className="rh-pressing-example">
-          <p className="text-xs text-gray-600">
+          <p className="rh-pressing-example__clue text-xs text-gray-600">
             {example && cue && unique.length > 1 ? <>
               <span className="block font-semibold text-gray-900">Example only · Discogs {example.releaseId}</span>
               {cue.difference && <><strong className="font-semibold text-gray-900">{cue.difference}</strong>{' '}</>}
@@ -590,6 +637,7 @@ export function PressingCandidates({
             aria-expanded={showRunouts} aria-controls={candidatesId} onClick={toggleRunouts}>
             {showRunouts ? 'Hide runout marks' : 'Check runout marks'}
           </button>
+          {cue?.describeMarket && <p className="rh-pressing-example__market text-xs text-gray-600">Market means where sold. Where made can differ.</p>}
         </div>
       </div>
       <div id={runoutToolsId} hidden={!showComparison}>
@@ -668,9 +716,15 @@ export function PressingCandidates({
           {page < lastPage && <button type="button" className="rh-lookup-link" onClick={() => goToPage(page + 1)}>More pressings</button>}
         </div>
       )}
-      <div id={comparisonId} hidden={!showComparison}>
+      <div id={comparisonId} role="region" aria-labelledby={showComparison ? comparisonHeadingId : undefined} hidden={!showComparison}>
         {showComparison && <div className="rh-pressing-evidence-tools grid gap-2">
-          {target && (unique.length > 1 || reference) && <PressingPreview searchedNumber={searchedNumber}
+          <div className="rh-pressing-chooser-heading">
+            <h3 id={comparisonHeadingId} ref={comparisonHeading} tabIndex={-1}
+              className="rh-pressing-listing-heading text-sm font-semibold">Listing evidence</h3>
+            <button type="button" className="rh-lookup-link" aria-controls={candidatesId}
+              onClick={returnToChoices}>Back to pressings</button>
+          </div>
+          {target && (unique.length > 1 || reference || !savedComparison) && <PressingPreview searchedNumber={searchedNumber}
             reference={reference && { choice: reference, label: saved ? 'Saved pressing' : 'Catalog reference', state: evidenceState(reference) }}
             target={{
               choice: target.releaseId === savedReleaseId && saved ? saved : withPressingEvidence(target, selectedEvidence, 'release'),

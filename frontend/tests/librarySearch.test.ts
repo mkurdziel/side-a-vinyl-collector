@@ -121,6 +121,8 @@ describe('library and catalog search', () => {
     expect(search).toHaveBeenCalledExactlyOnceWith('O', expect.any(AbortSignal), 'saved', undefined, 0, 'title');
     expect(button('Open O by Unknown Fixture Artist, Wishlist, saved record 20')).toBeDefined();
     expect(button('Search online catalogs')).toBeUndefined();
+    expect(renderer.root.findByProps({ className: 'rh-lookup-source' }).children.join('')).toBe('Both shelves · Exact name');
+    expect(renderer.root.findByProps({ id: 'search-scope' }).props.value).toBe('catalog');
     expect(readSearchSession()?.drafts.name).toMatchObject({ query: 'O', scope: 'catalog', exactName: true });
 
     await act(async () => renderer.unmount());
@@ -137,6 +139,16 @@ describe('library and catalog search', () => {
     await act(async () => renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }));
     expect(search).toHaveBeenLastCalledWith('É', expect.any(AbortSignal), 'saved', 'wishlist', 0, 'title');
     expect(JSON.stringify(renderer.toJSON())).toContain('No exact title or artist matches “É” in Wishlist.');
+  });
+
+  it('allows the phone field to widen for a longer catalog number and restores the browse layout when cleared', async () => {
+    await renderLibrary();
+    await act(async () => button('Catalog number').props.onClick());
+    await editSearch('AB-012345678');
+    expect(renderer.root.findByType('form').props['data-long-query']).toBe(true);
+    expect(renderer.root.findByProps({ id: 'album-search' }).props.value).toBe('AB-012345678');
+    await act(async () => button('Clear search').props.onClick());
+    expect(renderer.root.findByType('form').props['data-long-query']).toBe(false);
   });
 
   it('cancels a queued search when cleared and ignores an older response', async () => {

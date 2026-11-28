@@ -849,6 +849,8 @@ html:has(.rh-dialog[open]) { overflow: hidden; }
   justify-content: center;
 }
 
+.rh-dialog[aria-labelledby="discogs-import-title"] { overflow: clip; }
+
 .rh-dialog::backdrop { background: rgba(5, 7, 10, 0.78); }
 
 .rh-dialog-panel {
@@ -941,6 +943,9 @@ html:has(.rh-dialog[open]) .rh-page-toaster { display: none; }
     box-shadow: none;
   }
   .rh-search-form { gap: 4px; }
+  .rh-search-form[data-long-query="true"] .rh-query-controls { grid-area: 1 / 1 / 2 / -1; }
+  .rh-search-form[data-long-query="true"] .rh-add-trigger { grid-area: 2 / 2; align-self: start; }
+  .rh-search-form[data-long-query="true"] .rh-search-options { grid-area: 2 / 1; }
   .rh-search-submit { padding-inline: 7px; }
   .rh-search-options { gap: 4px 6px; }
   .rh-lookup-options-toggle {

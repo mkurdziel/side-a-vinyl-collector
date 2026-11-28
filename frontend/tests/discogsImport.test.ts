@@ -315,6 +315,97 @@ describe('Discogs import', () => {
     expect(sessionStorage.getItem('side-a:discogs-import-review:v1')).toBeNull();
   });
 
+  it('reconciles all reviewed pages before importing, retaining a moved release and flagging removed and saved titles', async () => {
+    const laterPressing = { ...albums[2], id: 4, discogsId: 4 };
+    const removedRelease = { id: 5, discogsId: 5, artist: 'Boards of Canada', album: 'Geogaddi' };
+    importDiscogsCollection.mockResolvedValueOnce({ albums, page: 1, totalPages: 2, nextPage: 2 })
+      .mockResolvedValueOnce({ albums: [laterPressing, removedRelease], page: 2, totalPages: 2 })
+      .mockResolvedValueOnce({ albums: [albums[1], albums[2], laterPressing], page: 1, totalPages: 2, nextPage: 2 })
+      .mockResolvedValueOnce({ albums: [albums[0]], page: 2, totalPages: 2 });
+    getAlbums.mockImplementation(async shelf => ({ albums: shelf === 'collection'
+      ? [{ discogs_id: 27, title: 'Third', artist_name: 'Portishead', status: 'collection' }] : [] }));
+    await loadCollection();
+    await act(async () => {
+      renderer.root.findByType('select').props.onChange({ target: { value: 'wishlist' } });
+      findButton('Select all loaded (3)').props.onClick();
+    });
+    await act(async () => findButton('Load next Discogs page').props.onClick());
+    await act(async () => releaseChoice(5).props.onChange({ currentTarget: { checked: true } }));
+    expect(findButton('Import 3 records to Wishlist').props.disabled).toBe(false);
+    const coverage = renderer.root.findByProps({ id: 'discogs-page-coverage' });
+    expect(coverage.parent?.parent?.findAllByType('button').map(node => node.children.join(''))).not.toContain('Refresh reviewed pages');
+    await act(async () => findButton('Refresh reviewed pages').props.onClick());
+
+    expect(importDiscogsCollection.mock.calls.map(([page]) => page)).toEqual([1, 2, 1, 2]);
+    expect(getAlbums.mock.calls.map(([shelf, , cache]) => [shelf, cache])).toEqual([['collection', 'no-store'], ['wishlist', 'no-store']]);
+    expect(releaseChoice(1).props.checked).toBe(true);
+    expect(renderer.root.findAllByProps({ id: 'discogs-import-release-2' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ id: 'discogs-import-release-5' })).toHaveLength(0);
+    expect(content()).toContain('Already in Collection.');
+    expect(content()).toContain('Unavailable on the refreshed pages.');
+    expect(renderer.root.findByProps({ 'aria-label': 'Review pressings for Roseland NYC Live by Portishead' })).toBeTruthy();
+    const saved = JSON.parse(sessionStorage.getItem('side-a:discogs-import-review:v1')!);
+    expect(saved.choices.map(({ discogsId }: { discogsId: number }) => discogsId)).toEqual([1]);
+    expect(saved.notices.map(({ choice, cause }: { choice: { discogsId: number }; cause: string }) => [choice.discogsId, cause]))
+      .toEqual([[3, 'competing'], [2, 'saved'], [5, 'unavailable']]);
+    expect(saved.destination).toBe('wishlist');
+    expect(addAlbum).not.toHaveBeenCalled();
+    await act(async () => findButton('Import 1 record to Wishlist').props.onClick());
+    expect(addAlbum.mock.calls.map(([album]) => [album.discogsId, album.status])).toEqual([[1, 'wishlist']]);
+  });
+
+  it('keeps a failed refresh recoverable and blocks importing unverified selections until retry succeeds', async () => {
+    const nextPage = { albums: [], page: 2, totalPages: 2 };
+    const originalPage = { albums: [albums[0]], page: 1, totalPages: 2, nextPage: 2 };
+    const changedPage = { ...originalPage, albums: [] };
+    importDiscogsCollection.mockResolvedValueOnce(originalPage).mockResolvedValueOnce(nextPage)
+      .mockResolvedValueOnce(changedPage).mockRejectedValueOnce(new ApiError('Unavailable', 503))
+      .mockResolvedValueOnce(changedPage).mockResolvedValueOnce({ ...nextPage, albums: [albums[0]] });
+    await loadCollection();
+    await act(async () => releaseChoice(1).props.onChange({ currentTarget: { checked: true } }));
+    await act(async () => findButton('Load next Discogs page').props.onClick());
+    await act(async () => findButton('Refresh reviewed pages').props.onClick());
+
+    expect(content()).toContain('Could not verify the selected records. Your choices are kept. Retry the review before importing.');
+    expect(releaseChoice(1).props.checked).toBe(true);
+    const commit = findButton('Import 1 record to Collection');
+    expect(commit.props.disabled).toBe(true);
+    await act(async () => commit.props.onClick());
+    expect(addAlbum).not.toHaveBeenCalled();
+
+    await act(async () => findButton('Retry review').props.onClick());
+    expect(releaseChoice(1).props.checked).toBe(true);
+    expect(findButton('Import 1 record to Collection').props.disabled).toBe(false);
+    expect(addAlbum).not.toHaveBeenCalled();
+  });
+
+  it('leaves direct selection in place and reveals the entire import button when its coverage will not fit', async () => {
+    const longReview = Array.from({ length: 30 }, (_, index) => ({ id: index + 1, discogsId: index + 1, artist: 'Fixture artist', album: `Album ${index + 1}` }));
+    importDiscogsCollection.mockResolvedValueOnce({ albums: longReview, page: 1, totalPages: 1 });
+    const button = { disabled: false, focus: vi.fn(), getBoundingClientRect: () => ({ top: -1490, bottom: -1446 }) };
+    const panel = {
+      scrollTop: 2000, clientTop: 1, clientHeight: 392, getBoundingClientRect: () => ({ top: 29 }),
+      querySelector: vi.fn(selector => selector === '#discogs-import-commit' ? button : null),
+    };
+    await loadCollection({ createNodeMock: element => {
+      if (element.props.className?.startsWith('rh-dialog-panel')) return panel;
+      if (element.props.className?.startsWith('rh-dialog-header')) return { getBoundingClientRect: () => ({ height: 71 }) };
+      if (element.props.id === 'discogs-page-coverage') return { getBoundingClientRect: () => ({ top: -1800 }) };
+      return null;
+    } });
+    await act(async () => releaseChoice(30).props.onChange({ currentTarget: { checked: true } }));
+    expect(button.focus).not.toHaveBeenCalled();
+    expect(panel.scrollTop).toBe(2000);
+    const article = renderer.root.findAllByType('article').at(-1);
+    const link = article?.findByProps({ href: '#discogs-import-choices' });
+    expect(link?.children.join('')).toBe('Review import choices');
+    await act(async () => link?.props.onClick({ preventDefault: vi.fn() }));
+    expect(button.focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    expect(panel.scrollTop).toBe(144);
+    expect(findButton('Import 1 record to Collection').props.disabled).toBe(false);
+    expect(addAlbum).not.toHaveBeenCalled();
+  });
+
   it('flags a title saved elsewhere and a missing release when resuming, then discards the review cleanly', async () => {
     importDiscogsCollection.mockResolvedValueOnce({ albums, page: 1, totalPages: 1 })
       .mockResolvedValueOnce({ albums: albums.slice(2), page: 1, totalPages: 1 });
@@ -366,15 +457,15 @@ describe('Discogs import', () => {
     const alternateDummy = { ...albums[0], id: 4, discogsId: 4, pressing: { catalogNumber: 'ALT 04' } };
     importDiscogsCollection.mockResolvedValueOnce({ albums, page: 1, totalPages: 2, nextPage: 2 })
       .mockResolvedValueOnce({ albums: [alternateDummy], page: 2, totalPages: 2 });
-    const pressingHeading = { focus: vi.fn(), getBoundingClientRect: () => ({ top: 483 }) };
-    const importChoices = { focus: vi.fn(), getBoundingClientRect: () => ({ top: 92 }) };
+    const pressingHeading = { focus: vi.fn(), getBoundingClientRect: () => ({ top: 483, bottom: 503 }) };
+    const importChoices = { focus: vi.fn(), getBoundingClientRect: () => ({ top: 92, bottom: 112 }) };
     const panel = {
-      scrollTop: 0,
+      scrollTop: 0, clientTop: 1, clientHeight: 393, getBoundingClientRect: () => ({ top: 0 }),
       querySelector: vi.fn(selector => selector === '#discogs-import-pressings-1' ? pressingHeading : importChoices),
     };
     await loadCollection({ createNodeMock: element => {
       if (element.props.className?.startsWith('rh-dialog-panel')) return panel;
-      if (element.props.className?.startsWith('rh-dialog-header')) return { getBoundingClientRect: () => ({ bottom: 71 }) };
+      if (element.props.className?.startsWith('rh-dialog-header')) return { getBoundingClientRect: () => ({ height: 70 }) };
       return null;
     } });
     await act(async () => findButton('Select all loaded (3)').props.onClick());
@@ -399,10 +490,12 @@ describe('Discogs import', () => {
   it('keeps an unconfirmed discard safe when canceled, closed or reloaded', async () => {
     const keepFocus = vi.fn();
     const discardFocus = vi.fn();
-    const inPanel = (focus: () => void) => ({ focus, getBoundingClientRect: () => ({ top: 130 }) });
+    const inPanel = (focus: () => void) => ({ focus, getBoundingClientRect: () => ({ top: 130, bottom: 174 }) });
     await loadCollection({ createNodeMock: element => {
-      if (element.props.className?.startsWith('rh-dialog-panel')) return { scrollTop: 0 };
-      if (element.props.className?.startsWith('rh-dialog-header')) return { getBoundingClientRect: () => ({ bottom: 71 }) };
+      if (element.props.className?.startsWith('rh-dialog-panel')) return {
+        scrollTop: 0, clientTop: 1, clientHeight: 393, getBoundingClientRect: () => ({ top: 0 }),
+      };
+      if (element.props.className?.startsWith('rh-dialog-header')) return { getBoundingClientRect: () => ({ height: 70 }) };
       if (element.props['aria-labelledby'] === 'discogs-discard-heading') return { getBoundingClientRect: () => ({ top: 100 }) };
       if (element.props.children === 'Keep review') return inPanel(keepFocus);
       if (element.props.children === 'Discard review') return inPanel(discardFocus);
