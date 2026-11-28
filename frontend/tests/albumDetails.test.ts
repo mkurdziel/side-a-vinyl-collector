@@ -19,6 +19,7 @@ import { AlbumDetailModal } from '../src/components/AlbumDetailModal';
 import { CatalogPressingPicker } from '../src/components/CatalogPressingPicker';
 import { PressingSelectionSummary } from '../src/components/PressingCandidates';
 import { PressingComparison } from '../src/components/PressingComparison';
+import { SaveDestinationActions } from '../src/components/SaveDestinationActions';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let renderer: ReturnType<typeof create> | undefined;
@@ -242,10 +243,11 @@ describe('pressing comparison evidence', () => {
     expect(reviewEvidence.findByType('table')).toBeDefined();
     expect(actions.findByType(PressingSelectionSummary).props).toMatchObject({ compact: true, choice: { releaseId: 430 } });
     expect(actions.findAllByType('button').map(textOf)).toContain('Keep current pressing');
+    expect(textOf(actions)).toContain('Confirmation records the exact Discogs release on your Collection entry.');
     await act(async () => button('Use this pressing').props.onClick());
     const confirmation = renderer!.root.findByProps({ role: 'group' });
     expect(textOf(confirmation)).toContain('Replace the pressing for Dummy in Collection?');
-    expect(textOf(confirmation)).toContain('Currently saved as Discogs release 420.');
+    expect(textOf(confirmation)).toContain('This replaces Discogs release 420 with the selected release.');
     expect(confirmation.findByType(PressingSelectionSummary).props).toMatchObject({
       compact: true, choice: { releaseId: 430, pressing: { catalogNumber: 'ALT-30', format: 'Vinyl · LP' }, year: 2017 },
     });
@@ -340,7 +342,7 @@ describe('pressing comparison evidence', () => {
     expect(textOf(renderer!.root)).toContain('The saved pressing changed. Check the updated evidence before confirming again.');
     expect(button('Retry saving pressing')).toBeUndefined();
     await act(async () => button('Use this pressing').props.onClick());
-    expect(textOf(renderer!.root.findByProps({ role: 'group' }))).toContain('Currently saved as Discogs release 440.');
+    expect(textOf(renderer!.root.findByProps({ role: 'group' }))).toContain('This replaces Discogs release 440 with the selected release.');
     expect(onSavePressing).toHaveBeenCalledTimes(1);
   });
 
@@ -469,10 +471,50 @@ describe('saving a new catalog pressing', () => {
     await act(async () => button('Compare runout markings').props.onClick());
     expect(textOf(renderer!.root)).toContain('Discogs lists no runout markings');
     const saveWithout = 'Save without pressing to Collection';
-    expect(renderer!.root.findByProps({ 'aria-label': 'Save album' }).findAllByType('button').map(textOf)).toContain(saveWithout);
+    const commit = renderer!.root.findByProps({ 'aria-label': 'Save album' });
+    expect(commit.findAllByType('button').map(textOf)).toContain(saveWithout);
+    expect(textOf(commit)).toContain('Save an exact Discogs release, or save the album to Collection and identify its pressing later.');
     await act(async () => button(saveWithout).props.onClick());
     expect(onSaveWithoutPressing).toHaveBeenCalledOnce();
     expect(onSave).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledOnce();
+  });
+});
+
+describe('pressing choices on save results', () => {
+  const catalogLabel = 'Dummy by Portishead, Discogs release 410';
+  const description = (label: string) => {
+    const action = renderer!.root.findByProps({ 'aria-label': label });
+    return String(action.props['aria-describedby']).split(' ')
+      .map(id => textOf(renderer!.root.findByProps({ id }))).join(' ');
+  };
+
+  it.each(['catalog', 'capture'] as const)('explains both new save outcomes and follows the selected shelf for %s results', async source => {
+    const onReview = vi.fn();
+    const onSelect = vi.fn();
+    await act(async () => {
+      renderer = create(createElement(SaveDestinationActions, {
+        albumTitle: album.title, preferred: 'collection', onSelect,
+        ...(source === 'catalog' ? { catalogLabel, onReviewPressings: onReview } : { onReviewNewPressings: onReview }),
+      }));
+    });
+    await act(async () => renderer!.root.findByType('select').props.onChange({ target: { value: 'wishlist' } }));
+    const action = `Save without pressing to Wishlist · ${source === 'catalog' ? catalogLabel : album.title}`;
+    expect(description(action)).toBe('Save the album to Wishlist and identify its pressing later. Review to confirm an exact Discogs release.');
+    await act(async () => renderer!.root.findByProps({ 'aria-label': action }).props.onClick());
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith('wishlist');
+    expect(onReview).not.toHaveBeenCalled();
+  });
+
+  it.each(['catalog', 'capture'] as const)('explains that confirming updates the existing shelf entry before reviewing a %s title match', async source => {
+    const label = source === 'catalog' ? catalogLabel : undefined;
+    await act(async () => {
+      renderer = create(createElement(SaveDestinationActions, {
+        albumTitle: album.title, catalogLabel: label, preferred: 'collection', existingStatus: 'wishlist',
+        existingMatch: 'title', existingAlbumId: album.id, onOpenSaved: vi.fn(), onSavePressing: vi.fn(), onSelect: vi.fn(),
+      }));
+    });
+    expect(description(`Review pressings for ${label ?? album.title}`))
+      .toContain('Side A saves one entry per artist and title. Confirming a pressing updates your Wishlist entry.');
   });
 });

@@ -284,6 +284,18 @@ summary:focus-visible,
 .rh-search-scope { grid-area: 2 / 2; align-self: center; justify-self: end; }
 .rh-query-controls { grid-area: 2 / 1; }
 .rh-add-trigger { grid-area: 2 / 3; align-self: end; justify-self: end; }
+.rh-online-continuation {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: var(--rh-info-wash);
+  color: var(--rh-ink-2);
+}
 .rh-result-heading { scroll-margin-block-start: 142px; }
 
 .rh-search input {
